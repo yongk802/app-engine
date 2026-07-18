@@ -10,6 +10,11 @@ from typing import Callable
 
 import httpx
 
+from .grounding import (
+    ANSWER_SCHEMA, KnowledgeBase, build_grounding_context, detect_misconceptions,
+    extract_visible_answer,
+)
+
 
 class InvalidSuiteError(ValueError):
     pass
@@ -131,22 +136,34 @@ def evaluate_response(case: BenchmarkCase, response: str, elapsed: float,
 
 
 async def run_case(client: httpx.AsyncClient, ollama_tag: str, case: BenchmarkCase,
-                   clock: Callable[[], float] = time.perf_counter) -> CaseResult:
+                   clock: Callable[[], float] = time.perf_counter,
+                   knowledge: KnowledgeBase | None = None) -> CaseResult:
     started = clock()
     first_token: float | None = None
     chunks: list[str] = []
     error: str | None = None
-    try:
-        async with client.stream("POST", "/api/chat", json={
-            "model": ollama_tag,
-            "messages": [
-                {"role": "system", "content": case.system_prompt + " Answer directly; do not show private chain-of-thought or planning."},
-                {"role": "user", "content": case.question},
-            ],
-            "stream": True,
-            "think": False,
-            "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 256},
-        }, timeout=httpx.Timeout(case.max_seconds)) as response:
+    references = knowledge.retrieve(case.app_id, case.question) if knowledge else ()
+    system_prompt = case.system_prompt + " Answer directly; do not show private chain-of-thought or planning."
+    grounding = build_grounding_context(references)
+    if grounding:
+        system_prompt += f"\n\n{grounding}"
+    payload = {
+        "model": ollama_tag,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": case.question},
+        ],
+        "stream": True,
+        "think": False,
+        "format": ANSWER_SCHEMA,
+        "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 384},
+    }
+
+    async def collect(request_payload: dict) -> list[str]:
+        nonlocal first_token
+        collected: list[str] = []
+        async with client.stream("POST", "/api/chat", json=request_payload,
+                                 timeout=httpx.Timeout(case.max_seconds)) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if not line.strip():
@@ -156,7 +173,19 @@ async def run_case(client: httpx.AsyncClient, ollama_tag: str, case: BenchmarkCa
                 if content:
                     if first_token is None:
                         first_token = clock() - started
-                    chunks.append(content)
+                    collected.append(content)
+        return collected
+    try:
+        chunks = extract_visible_answer(await collect(payload))
+        misconceptions = detect_misconceptions("".join(chunks), references)
+        if misconceptions:
+            corrections = "\n".join(f"- {item.correction}" for item in misconceptions)
+            retry_payload = dict(payload)
+            retry_payload["messages"] = [*payload["messages"],
+                {"role": "assistant", "content": "".join(chunks)},
+                {"role": "user", "content": f"Correct the answer using these reviewed facts. Return only the corrected answer:\n{corrections}"},
+            ]
+            chunks = extract_visible_answer(await collect(retry_payload))
     except httpx.TimeoutException:
         error = "timeout"
     except httpx.ConnectError:
@@ -170,10 +199,11 @@ async def run_case(client: httpx.AsyncClient, ollama_tag: str, case: BenchmarkCa
 
 
 async def run_candidate(client: httpx.AsyncClient, candidate: BenchmarkCandidate,
-                        cases: tuple[BenchmarkCase, ...]) -> BenchmarkResult:
+                        cases: tuple[BenchmarkCase, ...],
+                        knowledge: KnowledgeBase | None = None) -> BenchmarkResult:
     results = []
     for benchmark_case in cases:
-        results.append(await run_case(client, candidate.ollama_tag, benchmark_case))
+        results.append(await run_case(client, candidate.ollama_tag, benchmark_case, knowledge=knowledge))
     return BenchmarkResult(candidate, tuple(results))
 
 

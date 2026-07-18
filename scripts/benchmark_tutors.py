@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from app_engine.benchmark import (  # noqa: E402
     BenchmarkCandidate, compare_results, load_suite, render_markdown, run_candidate,
 )
+from app_engine.grounding import KnowledgeBase  # noqa: E402
 
 
 CANDIDATES = (
@@ -59,11 +60,12 @@ async def main() -> int:
 
     selected = tuple(c for c in CANDIDATES if not args.candidate or c.candidate_id in args.candidate)
     suite = load_suite(args.cases)
+    knowledge = KnowledgeBase.load(ROOT / "knowledge" / "tutors.json")
     results = []
     async with httpx.AsyncClient(base_url=args.endpoint) as client:
         for candidate in selected:
             print(f"Running {candidate.candidate_id} ({len(suite.cases)} cases)...", flush=True)
-            results.append(await run_candidate(client, candidate, suite.cases))
+            results.append(await run_candidate(client, candidate, suite.cases, knowledge=knowledge))
     comparison = compare_results(tuple(results))
     metadata = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),

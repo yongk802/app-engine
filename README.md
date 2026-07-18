@@ -46,6 +46,24 @@ already downloaded layers. Choose Compatibility if Quality is too slow or runs
 out of memory. **Check again** refreshes runtime and model detection without
 changing the system.
 
+### Grounded tutoring
+
+Tutor answers are grounded with the reviewed, app-specific facts in
+[`knowledge/tutors.json`](knowledge/tutors.json). App-engine performs simple
+local keyword retrieval—no embeddings, vector database, internet request, or
+cloud service—and gives Ollama only the relevant excerpts. Responses use a
+small structured-answer schema to prevent model planning text from appearing
+in the chat. If an answer matches a narrowly defined known misconception,
+app-engine retries once with the reviewed correction; it never loops.
+
+Knowledge entries contain a stable ID, app ID, topic keywords, a concise fact,
+a human-readable source note, and optional misconception patterns. Contributors
+should keep patterns narrow enough to match a false claim rather than merely
+the topic. CI requires at least two reviewed entries for every chat-enabled app.
+This improves consistency but is not a guarantee that every generated claim is
+correct; tutors are instructed to acknowledge when the local reference does not
+cover a question.
+
 ## The host↔app contract
 
 | Endpoint | Purpose |

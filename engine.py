@@ -43,6 +43,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from app_engine.chat import ChatRuntime
 from app_engine.config import ConfigStore
+from app_engine.grounding import KnowledgeBase
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.system_probe import SystemProbe
@@ -69,6 +70,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="app-engine", lifespan=lifespan)
 _registry = ModelRegistry.load(Path(__file__).parent / "model-registry.json")
+_knowledge = KnowledgeBase.load(Path(__file__).parent / "knowledge" / "tutors.json")
 _config = ConfigStore(STATE_DIR)
 _probe = SystemProbe()
 _os_name = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}.get(platform.system(), platform.system().lower())
@@ -204,9 +206,9 @@ async def app_chat(request: Request):
         profile = _registry.get_profile(config.selected_profile)
         ready = status.running and profile.model_id in status.installed_model_ids
         client = httpx.AsyncClient(base_url=config.ollama_endpoint, timeout=httpx.Timeout(180.0))
-        runtime = ChatRuntime(_registry, _config, client, readiness=lambda: ready)
+        runtime = ChatRuntime(_registry, _config, client, readiness=lambda: ready, knowledge=_knowledge)
         try:
-            async for event in runtime.stream(apps[app_id].chat_system_prompt or "You are a helpful tutor.", messages):
+            async for event in runtime.stream(app_id, apps[app_id].chat_system_prompt or "You are a helpful tutor.", messages):
                 # Preserve the original launcher contract while adding typed error codes.
                 if event["type"] == "complete":
                     event = {"type": "done"}

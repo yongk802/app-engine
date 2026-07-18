@@ -2,12 +2,14 @@ import json
 
 import httpx
 import pytest
+from pathlib import Path
 
 from app_engine.benchmark import (
     BenchmarkCandidate, BenchmarkCase, BenchmarkResult, CaseResult,
     InvalidSuiteError, compare_results, evaluate_response, load_suite,
     render_markdown, run_candidate, run_case,
 )
+from app_engine.grounding import KnowledgeBase
 
 
 def case(**overrides):
@@ -84,7 +86,7 @@ async def test_run_case_streams_ollama_response_and_records_first_token():
     def handler(request):
         payload = json.loads(request.content)
         assert payload["options"]["num_ctx"] == 4096
-        assert payload["options"]["num_predict"] == 256
+        assert payload["options"]["num_predict"] == 384
         return httpx.Response(200, content=body)
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler),
@@ -115,3 +117,19 @@ async def test_run_candidate_continues_after_transport_error():
     assert len(benchmark.cases) == 2
     assert benchmark.cases[0].transport_error == "timeout"
     assert benchmark.cases[1].factual_pass is True
+
+
+@pytest.mark.asyncio
+async def test_run_case_uses_grounding_and_corrective_retry():
+    payloads = []
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        answer = "ciw is not a standard command" if len(payloads) == 1 else "ciw means change inner word anywhere in the word"
+        return httpx.Response(200, content=(json.dumps({"message":{"content":answer},"done":True})+"\n").encode())
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://local")
+    knowledge = KnowledgeBase.load(Path("knowledge/tutors.json"))
+    measured = await run_case(client, "qwen3:4b", case(), knowledge=knowledge)
+    await client.aclose()
+    assert "REVIEWED LOCAL REFERENCE" in payloads[0]["messages"][0]["content"]
+    assert len(payloads) == 2
+    assert measured.factual_pass is True

@@ -1,8 +1,10 @@
 import json
 
 from app_engine.grounding import (
-    KnowledgeBase, build_grounding_context, detect_misconceptions,
+    InvalidKnowledgePackError, KnowledgeBase, build_grounding_context,
+    detect_misconceptions, load_declared_knowledge,
 )
+import pytest
 
 
 def write_pack(tmp_path):
@@ -48,3 +50,18 @@ def test_detects_only_configured_misconceptions(tmp_path):
     found = detect_misconceptions("ciw is not a standard command.", (entry,))
     assert [item.entry_id for item in found] == ["vim-ciw"]
     assert detect_misconceptions("ciw is a standard command.", (entry,)) == ()
+
+
+def test_loads_manifest_knowledge_within_app_collection(tmp_path):
+    collection = tmp_path / "apps"; app = collection / "vim"; shared = collection / "knowledge"
+    app.mkdir(parents=True); shared.mkdir()
+    path = write_pack(shared)
+    loaded = load_declared_knowledge(app, "../knowledge/knowledge.json")
+    assert loaded.retrieve("vim-dojo", "ciw")[0].id == "vim-ciw"
+
+
+def test_rejects_manifest_knowledge_outside_app_collection(tmp_path):
+    collection = tmp_path / "apps"; app = collection / "vim"; app.mkdir(parents=True)
+    outside = tmp_path / "secret.json"; outside.write_text('{}')
+    with pytest.raises(InvalidKnowledgePackError):
+        load_declared_knowledge(app, "../../secret.json")

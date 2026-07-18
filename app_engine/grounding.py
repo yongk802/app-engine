@@ -88,6 +88,21 @@ class KnowledgeBase:
         return tuple(item[2] for item in ranked[:max(0, limit)])
 
 
+def load_declared_knowledge(app_root: Path, declared_path: str) -> KnowledgeBase:
+    if not isinstance(declared_path, str) or not declared_path.strip():
+        raise InvalidKnowledgePackError("chat_knowledge must be a non-empty relative path")
+    relative = Path(declared_path)
+    if relative.is_absolute():
+        raise InvalidKnowledgePackError("chat_knowledge must be relative")
+    collection_root = Path(app_root).resolve().parent
+    candidate = (Path(app_root).resolve() / relative).resolve()
+    try:
+        candidate.relative_to(collection_root)
+    except ValueError as exc:
+        raise InvalidKnowledgePackError("chat_knowledge must stay within the app collection") from exc
+    return KnowledgeBase.load(candidate)
+
+
 def build_grounding_context(entries: tuple[KnowledgeEntry, ...]) -> str:
     if not entries:
         return ""

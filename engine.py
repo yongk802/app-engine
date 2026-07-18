@@ -43,7 +43,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from app_engine.chat import ChatRuntime
 from app_engine.config import ConfigStore
-from app_engine.grounding import KnowledgeBase
+from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_declared_knowledge
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.system_probe import SystemProbe
@@ -94,6 +94,7 @@ class App:
     sandbox: str
     chat_enabled: bool
     chat_system_prompt: str
+    chat_knowledge: str
     entry_point: str
     url: str
     root: str  # filesystem path (not sent to client)
@@ -130,6 +131,7 @@ def discover() -> dict[str, App]:
             sandbox=sandbox,
             chat_enabled=bool(m.get("chat_enabled", False)),
             chat_system_prompt=m.get("chat_system_prompt", ""),
+            chat_knowledge=m.get("chat_knowledge", ""),
             entry_point=entry_point,
             url=f"/apps/{app_id}/",
             root=str(d.resolve()),
@@ -206,7 +208,13 @@ async def app_chat(request: Request):
         profile = _registry.get_profile(config.selected_profile)
         ready = status.running and profile.model_id in status.installed_model_ids
         client = httpx.AsyncClient(base_url=config.ollama_endpoint, timeout=httpx.Timeout(180.0))
-        runtime = ChatRuntime(_registry, _config, client, readiness=lambda: ready, knowledge=_knowledge)
+        knowledge = _knowledge
+        if apps[app_id].chat_knowledge:
+            try:
+                knowledge = load_declared_knowledge(Path(apps[app_id].root), apps[app_id].chat_knowledge)
+            except InvalidKnowledgePackError:
+                pass
+        runtime = ChatRuntime(_registry, _config, client, readiness=lambda: ready, knowledge=knowledge)
         try:
             async for event in runtime.stream(app_id, apps[app_id].chat_system_prompt or "You are a helpful tutor.", messages):
                 # Preserve the original launcher contract while adding typed error codes.

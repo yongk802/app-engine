@@ -1,0 +1,912 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-07-18T22:25:18.618844+00:00",
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "architecture": "arm64",
+    "ram_bytes": 68719476736,
+    "ollama_version": "ollama version is 0.31.1",
+    "endpoint": "http://127.0.0.1:11434",
+    "suite_version": 1
+  },
+  "comparison": {
+    "rows": [
+      {
+        "candidate_id": "qwen3-1.7b",
+        "eligible": false,
+        "factual_rate": 0.65,
+        "critical_failures": 3,
+        "transport_failure_rate": 0.0,
+        "median_seconds": 0.5618093754746951,
+        "median_output_characters": 370.0,
+        "download_bytes": 1400000000
+      },
+      {
+        "candidate_id": "qwen3-4b",
+        "eligible": false,
+        "factual_rate": 0.8,
+        "critical_failures": 3,
+        "transport_failure_rate": 0.0,
+        "median_seconds": 2.476036874926649,
+        "median_output_characters": 1146.5,
+        "download_bytes": 2500000000
+      },
+      {
+        "candidate_id": "phi4-mini",
+        "eligible": false,
+        "factual_rate": 0.55,
+        "critical_failures": 4,
+        "transport_failure_rate": 0.0,
+        "median_seconds": 1.777700895559974,
+        "median_output_characters": 833.5,
+        "download_bytes": 2500000000
+      }
+    ],
+    "winner": null,
+    "results": [
+      {
+        "candidate": {
+          "candidate_id": "qwen3-1.7b",
+          "ollama_tag": "qwen3:1.7b",
+          "download_bytes": 1400000000,
+          "license": "Apache-2.0",
+          "license_url": "https://huggingface.co/Qwen/Qwen3-1.7B/blob/main/LICENSE"
+        },
+        "cases": [
+          {
+            "case_id": "algo-binary-search",
+            "app_id": "algo-drill",
+            "critical": true,
+            "response": "**Prerequisite:** The array must be sorted in ascending or descending order.  \n\n**Time Complexity:** O(log n) (for a sorted array).",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.9083064999431372,
+            "first_token_seconds": 0.7543885000050068,
+            "output_characters": 131,
+            "transport_error": null
+          },
+          {
+            "case_id": "algo-two-sum-hint",
+            "app_id": "algo-drill",
+            "critical": false,
+            "response": "Hint: Use a hash map to store the complement (target - current number) and its index. As you iterate through the array, check if the complement exists in the hash map. If it does, you have found the two indices.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.34705183294136077,
+            "first_token_seconds": 0.12127904198132455,
+            "output_characters": 211,
+            "transport_error": null
+          },
+          {
+            "case_id": "coding-mutable-default",
+            "app_id": "coding-challenges",
+            "critical": true,
+            "response": "A mutable default list in Python is dangerous because it is created once, and if not properly handled, it can lead to unexpected behavior. When a default value is provided (like an empty list), it is initialized once and remains unchanged throughout the program's execution. This can cause issues if the function is called multiple times, as the default list will not be reset each time.\n\nInstead, you should use `None` as the default value and let the function handle the initialization of the list. This ensures that the list is created each time the function is called, avoiding the pitfalls of a mutable default list.\n\nExample:\n```python\ndef my_function(param=None):\n    if param is None:\n        param = []\n    # Use param here\n```\n\nThis approach ensures that the list is created every time the function is called, avoiding the issues with a mutable default list.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "defined once | created only once | evaluated once",
+              "shared | reused | same list"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.9431038330076262,
+            "first_token_seconds": 0.11870787502266467,
+            "output_characters": 868,
+            "transport_error": null
+          },
+          {
+            "case_id": "coding-missing-await",
+            "app_id": "coding-challenges",
+            "critical": false,
+            "response": "When an async function call is missing `await`, the coroutine continues execution without waiting for the result. This means the code will proceed to the next line of code immediately, even if the coroutine is still running. If the coroutine is not awaited, the result of the coroutine is not available, which can lead to errors or unexpected behavior. The `await` keyword is necessary to ensure the coroutine's result is properly handled and the program continues execution after the coroutine completes.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "not executed | doesn't run | does not run"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.5480783339589834,
+            "first_token_seconds": 0.11025404196698219,
+            "output_characters": 505,
+            "transport_error": null
+          },
+          {
+            "case_id": "ctf-base64",
+            "app_id": "ctf-arena",
+            "critical": true,
+            "response": "Base64 is a type of **encoding**, not encryption. It is **reversible** and is commonly used to encode binary data into ASCII text for transmission or storage.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.2772014170186594,
+            "first_token_seconds": 0.11047904205042869,
+            "output_characters": 158,
+            "transport_error": null
+          },
+          {
+            "case_id": "ctf-sql-injection",
+            "app_id": "ctf-arena",
+            "critical": false,
+            "response": "The primary defense against SQL injection is **parameterized queries**. These queries separate data from code, preventing malicious input from altering the intended SQL command.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.25133200001437217,
+            "first_token_seconds": 0.10938654211349785,
+            "output_characters": 177,
+            "transport_error": null
+          },
+          {
+            "case_id": "ffmpeg-stream-copy",
+            "app_id": "ffmpeg-lab",
+            "critical": true,
+            "response": "- `-c copy` is fast because it avoids decoding and re-encoding any video or audio streams. It directly copies the bitstream from the input file to the output file, preserving the original quality and format.\n\n- It also remuxes streams, meaning it combines multiple streams (video, audio, subtitles, etc.) from the input into a single output stream, which is then encoded and outputted.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "no decode | does not decode | without decoding | no decoding",
+              "no re-encode | does not re-encode | without re-encoding | no re-encoding | zero re-encoding"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.5024706249823794,
+            "first_token_seconds": 0.11799950001295656,
+            "output_characters": 385,
+            "transport_error": null
+          },
+          {
+            "case_id": "ffmpeg-seek-placement",
+            "app_id": "ffmpeg-lab",
+            "critical": false,
+            "response": "To contrast placing `-ss` before versus after `-i` in FFmpeg, here's the difference:\n\n### 1. **`-ss` before `-i`**  \nThis means FFmpeg will **seek to the specified time** (`-ss`) **before** starting to read the input file.  \nExample:  \n```bash\nffmpeg -ss 00:01:00 -i input.mp4 output.mp4\n```\n- FFmpeg will seek to 1 minute into the file **before** starting to read the input.\n- This is useful for **fast input seek** (seeking to a specific time without reading the entire file).\n\n### 2. **`-ss` after `-i`**  \nThis means FFmpeg will **seek to the specified time** **after** reading the entire input file.  \nExample:  \n```bash\nffmpeg -i input.mp4 -ss 00:01:00 output.mp4\n```\n- FFmpeg will seek to 1 minute into the file **after** reading the entire input file.\n- This is useful for **accurate output seek** (seeking to a specific time after the file has been fully read).\n\n### Summary:\n- **`-",
+            "factual_pass": false,
+            "missing_requirements": [
+              "before -i",
+              "after -i"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.3023298749467358,
+            "first_token_seconds": 0.11126237502321601,
+            "output_characters": 891,
+            "transport_error": null
+          },
+          {
+            "case_id": "film-dolly-zoom",
+            "app_id": "film-school",
+            "critical": true,
+            "response": "A dolly move involves physical camera movement along a track, typically changing the camera's position to alter the composition or focus. It does not change the focal length. In contrast, a zoom involves changing the focal length of the camera while keeping the camera's position relatively static, thereby altering the field of view.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.4016479999991134,
+            "first_token_seconds": 0.11127945897169411,
+            "output_characters": 334,
+            "transport_error": null
+          },
+          {
+            "case_id": "film-180-rule",
+            "app_id": "film-school",
+            "critical": false,
+            "response": "The 180-degree rule preserves the **axis** and **screen direction**. It ensures that the camera moves in a straight line, maintaining a consistent direction (left to right or right to left) throughout the shot, preventing the viewer from experiencing a sudden reversal of direction.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "spatial | orientation"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.37983966700267047,
+            "first_token_seconds": 0.11048112506978214,
+            "output_characters": 282,
+            "transport_error": null
+          },
+          {
+            "case_id": "linux-chmod-755",
+            "app_id": "linux-ops-academy",
+            "critical": true,
+            "response": "The command `chmod 755` sets the permissions for a file or directory as follows:\n\n- **Owner (user):** `rwx` (read, write, execute)\n- **Group (group):** `r-x` (read, execute)\n- **Others (others):** `r-x` (read, execute)\n\nThis means the owner can read, write, and execute the file, the group can read and execute it, and others can only read and execute it.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.5851084170863032,
+            "first_token_seconds": 0.11056508403271437,
+            "output_characters": 355,
+            "transport_error": null
+          },
+          {
+            "case_id": "linux-signals",
+            "app_id": "linux-ops-academy",
+            "critical": false,
+            "response": "**SIGTERM** (Signal Term) is a graceful termination signal. It allows the process to perform cleanup operations before being terminated.  \n**SIGKILL** is an immediate termination signal that forces the process to terminate without any cleanup.  \n**SIGSTOP** is a graceful signal that pauses the process, but it is not commonly used.  \n\n**Summary:**  \n- **SIGTERM** \u2192 Graceful termination (cleanup).  \n- **SIGKILL** \u2192 Immediate termination (no cleanup).  \n- **SIGSTOP** \u2192 Graceful pause (not commonly used).",
+            "factual_pass": false,
+            "missing_requirements": [
+              "catch | caught | handle"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.6431726251030341,
+            "first_token_seconds": 0.11051241704262793,
+            "output_characters": 506,
+            "transport_error": null
+          },
+          {
+            "case_id": "llm-kv-cache",
+            "app_id": "llm-stack",
+            "critical": true,
+            "response": "The KV cache stores **key-value pairs** (KV) of previous tokens in the conversation history. It avoids recomputing by storing the **keys** and **values** of these tokens, which are used to reconstruct the context in the next step of the inference process.\n\n- **Keys**: Represent the tokens (words or subwords) that were previously generated.\n- **Values**: Contain the actual content of those tokens.\n- **Previous tokens**: These are the tokens that were generated in the previous steps of the inference process.\n\nThe KV cache helps in **reconstructing the context** efficiently by allowing the model to refer back to earlier tokens without reprocessing the entire history, thus improving inference speed and reducing computational cost.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.7997868750244379,
+            "first_token_seconds": 0.11790745903272182,
+            "output_characters": 736,
+            "transport_error": null
+          },
+          {
+            "case_id": "llm-quantization",
+            "app_id": "llm-stack",
+            "critical": false,
+            "response": "Model quantization is the process of reducing the precision of the weights and activations in a neural network model, typically from 32-bit floating-point (FP32) to lower precision formats like 16-bit floating-point (FP16) or 8-bit integer (INT8). This reduces the model's memory footprint and speeds up inference, but it can also reduce model accuracy.\n\n**Tradeoffs:**\n\n- **Lower Precision:** Quantization reduces the number of bits used to represent weights and activations, which can lead to a significant reduction in memory usage and inference speed.\n- **Less Memory:** By using lower precision formats, the model requires less memory to store its weights and activations.\n- **Quality:** The reduction in precision can lead to a decrease in model accuracy, as the lower precision may not capture the full range of values that the original model uses.\n\nIn summary, model quantization offers benefits in terms of efficiency and performance, but it comes at the cost of reduced model quality.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.0561166249681264,
+            "first_token_seconds": 0.11364670807961375,
+            "output_characters": 994,
+            "transport_error": null
+          },
+          {
+            "case_id": "math-dot-product",
+            "app_id": "math-for-ai",
+            "critical": true,
+            "response": "2\u00d71 + 3\u00d74 = 2 + 12 = 14",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.2094701660098508,
+            "first_token_seconds": 0.11894941597711295,
+            "output_characters": 23,
+            "transport_error": null
+          },
+          {
+            "case_id": "math-softmax",
+            "app_id": "math-for-ai",
+            "critical": false,
+            "response": "Softmax produces **probabilities** from logits. These probabilities sum to 1 and represent the likelihood of each class being the correct class. The next token is typically the class with the highest probability.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.2992910420289263,
+            "first_token_seconds": 0.11019187502097338,
+            "output_characters": 212,
+            "transport_error": null
+          },
+          {
+            "case_id": "vim-ciw",
+            "app_id": "vim-dojo",
+            "critical": true,
+            "response": "In Vim, `ciw` is a command that **changes the inner/current word**. It **does not** change the entire word, but instead **changes the current word** (the word under the cursor) to a new text.\n\n### Explanation:\n- `c` = **change**\n- `i` = **insert**\n- `w` = **word**\n\nSo `ciw` means:\n- **Change** the **current word**\n- **Insert** text into the **current word**\n\n### How it works:\n- The cursor is placed **anywhere within the word** (not necessarily at the end).\n- `ciw` **inserts text** into the **current word** at the **cursor position**.\n- The **cursor remains** in the same place after the insertion.\n\n### Example:\nIf the text is:\n```\nHello world\n```\nAnd the cursor is on the `w` in `world`, typing `ciw` would insert text at that position, like:\n```\nHello world\n```\nAfter `ciw`, the text becomes:\n```\nHello world\n```\nAnd the cursor remains on the `w`.\n\n### Summary:\n- `ciw` changes the current word.\n- The cursor can be",
+            "factual_pass": false,
+            "missing_requirements": [
+              "change inner word | change the inner word | changes the inner word | change inside whole word | changes the entire current"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.318490416975692,
+            "first_token_seconds": 0.11854254198260605,
+            "output_characters": 923,
+            "transport_error": null
+          },
+          {
+            "case_id": "vim-dd",
+            "app_id": "vim-dojo",
+            "critical": false,
+            "response": "`dd` in normal mode deletes the current line. It also deletes the line containing the cursor.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.20882341696415097,
+            "first_token_seconds": 0.11390633299015462,
+            "output_characters": 93,
+            "transport_error": null
+          },
+          {
+            "case_id": "vllm-paged-attention",
+            "app_id": "vllm-stack",
+            "critical": true,
+            "response": "PagedAttention uses blocks to manage memory more efficiently, especially in scenarios with non-contiguous KV (key-value) caches and memory fragmentation. Here's why:\n\n1. **Non-contiguous KV Cache**: \n   - In many cases, the KV cache is not stored in contiguous memory. This is common when the model is large and the cache is managed by the model itself (e.g., in transformer models).\n   - PagedAttention uses blocks to handle this by allocating memory in chunks (blocks) that can be managed independently, avoiding the need for contiguous memory.\n\n2. **Memory Fragmentation**:\n   - Memory fragmentation occurs when memory is allocated in small, non-contiguous blocks. This can lead to inefficient use of memory, as the system may not be able to allocate a block large enough for the required size.\n   - PagedAttention addresses this by using blocks, allowing the system to manage and reuse memory more effectively, even in fragmented memory.\n\n3. **Efficient Memory Management**:\n   - Blocks allow for better control over memory allocation and deallocation, reducing the impact of fragmentation and improving overall memory utilization.\n\nIn summary, PagedAttention uses blocks to handle non-contiguous KV caches and to manage memory fragmentation, leading to more efficient memory usage and better",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.3025006250245497,
+            "first_token_seconds": 0.11046695802360773,
+            "output_characters": 1296,
+            "transport_error": null
+          },
+          {
+            "case_id": "vllm-continuous-batching",
+            "app_id": "vllm-stack",
+            "critical": false,
+            "response": "Continuous batching is a scheduling technique used in GPU inference to optimize resource utilization. It involves:\n\n1. **Adding requests**: New inference requests are added to a batch queue.  \n2. **Removing finished requests**: Requests that have completed their execution are removed from the batch.  \n3. **GPU utilization**: The technique ensures that the GPU is utilized efficiently by batching requests and managing the workload to avoid idle time.  \n\nThis approach balances the load on the GPU and improves throughput by minimizing idle periods.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.5755404169904068,
+            "first_token_seconds": 0.11203541699796915,
+            "output_characters": 550,
+            "transport_error": null
+          }
+        ]
+      },
+      {
+        "candidate": {
+          "candidate_id": "qwen3-4b",
+          "ollama_tag": "qwen3:4b",
+          "download_bytes": 2500000000,
+          "license": "Apache-2.0",
+          "license_url": "https://huggingface.co/Qwen/Qwen3-4B/blob/main/LICENSE"
+        },
+        "cases": [
+          {
+            "case_id": "algo-binary-search",
+            "app_id": "algo-drill",
+            "critical": true,
+            "response": "We are to state the prerequisite and time complexity of binary search, and we must include the exact phrases 'sorted' and 'O(log n)'.\n\nPrerequisite: The array must be sorted (in ascending or descending order, but typically ascending).\nTime complexity: O(log n)\n\nSo the answer should be concise and include the exact phrases.\n\nLet me write:\nThe prerequisite is that the array must be sorted. The time complexity is O(log n).\n\nBut note: the problem says \"include the exact phrases 'sorted' and 'O(log n)'\". So we have to make sure we use those exact strings.\n\nWe can write: \n\"Prerequisite: sorted. Time complexity: O(log n).\"\n\nHowever, to be more precise and clear, we can say:\n\n\"Binary search requires the input array to be sorted and has a time complexity of O(log n).\"\n\nBut the problem says \"state the prerequisite and time complexity\". So we can do:\n\nPrerequisite: sorted\nTime complexity: O(log n)\n\nBut the problem says \"include the exact phrases\", so we have to have the words \"sorted\" and \"O(log n)\".\n\nLet me check: the problem says \"exact phrases 'sorted' and 'O(log' (wait, it says '",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.8680375840049237,
+            "first_token_seconds": 0.7186386670218781,
+            "output_characters": 1089,
+            "transport_error": null
+          },
+          {
+            "case_id": "algo-two-sum-hint",
+            "app_id": "algo-drill",
+            "critical": false,
+            "response": "We are to give one hint for the \"Two Sum\" problem without providing code.\n The hint should mention a hash map and the complement.\n\n The classic Two Sum problem: Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.\n\n Hint idea: \n   We can traverse the array and for each number, check if the complement (target - current number) has been seen before in a hash map. \n   If it has, then we have found the two numbers.\n\n However, the problem says: \"Mention a hash map and complement\".\n\n So, we can write:\n\n   \"As you iterate through the array, store each number and its index in a hash map. For the current number, compute the complement (target - current number) and check if this complement exists in the hash map. If it does, return the indices.\"\n\n But note: the problem says \"Give one hint\", so we have to be concise.\n\n Let me phrase it as:\n\n   \"Use a hash map to store numbers we've seen so far. For each number, calculate the complement (target - current number) and check if it exists in the map.\"\n\n However, the problem says: \"Mention a hash map and complement",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4705912499921396,
+            "first_token_seconds": 0.1546816669870168,
+            "output_characters": 1133,
+            "transport_error": null
+          },
+          {
+            "case_id": "coding-mutable-default",
+            "app_id": "coding-challenges",
+            "critical": true,
+            "response": "We are discussing the danger of using a mutable default argument (like a list) in Python functions.\n The problem: If you define a function with a mutable default argument (e.g., `def func(arg=[]):`), then the same list is reused for every call to the function. This can lead to unexpected behavior because the list is shared across multiple calls.\n\n Why it's dangerous?\n - When the function is called the first time, the default list is created (if it's None, then it's created once). But if the function is called again, the same list is used (because the default argument is evaluated only once at the time of function definition, not at each call).\n - If the function modifies the list (e.g., appends to it), then the next time the function is called, the list will have the previous modifications.\n\n Example:\n   def add_item(item, my_list=[]):\n        my_list.append(item)\n        return my_list\n\n   call1: add_item('a') -> ['a']\n   call2: add_item('b') -> ['a','b']   (because the same list is used)\n\n But if we want the list to be fresh for each call, we don't want to share the same list.\n\n How",
+            "factual_pass": false,
+            "missing_requirements": [
+              "defined once | created only once | evaluated once"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.41031970793847,
+            "first_token_seconds": 0.15302904101554304,
+            "output_characters": 1101,
+            "transport_error": null
+          },
+          {
+            "case_id": "coding-missing-await",
+            "app_id": "coding-challenges",
+            "critical": false,
+            "response": "We are given a specific instruction: Explain what happens when an async function call is missing `await`. We must include the words \"coroutine\" and \"await\".\n\nKey points:\n- In async/await, an async function returns a coroutine object when called without `await`.\n- If you don't use `await` on the result of an async function call, the coroutine is not executed immediately. Instead, the function call returns the coroutine and the control flow continues without waiting for the coroutine to complete.\n\nExplanation without unnecessary code:\n\nWhen an async function is called without `await`, it returns a coroutine object. This coroutine is a special kind of object that represents a function that can be suspended and resumed. The key point is that without `await`, the coroutine is not executed immediately; the control flow continues to the next statement in the current function. The coroutine will be executed later when the `await` keyword is used (or when the coroutine is explicitly resumed by other means). \n\nTherefore, if you forget to use `await` on an async function call, the code will not wait for the asynchronous operation to complete, and the coroutine will be left in a suspended state until it is resumed by an `await` expression.\n\nWe must include the words \"coroutine\" and",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4443230000324547,
+            "first_token_seconds": 0.15178495808504522,
+            "output_characters": 1290,
+            "transport_error": null
+          },
+          {
+            "case_id": "ctf-base64",
+            "app_id": "ctf-arena",
+            "critical": true,
+            "response": "We are given a query: \"Is Base64 encryption? Include the exact words encoding, not encryption, and reversible.\"\n\nWe must answer directly and accurately as a cybersecurity tutor.\n\nKey points:\n1. Base64 is not encryption; it is a form of **encoding**.\n2. We must use the exact words: \"encoding\", not \"encryption\".\n3. Base6.4 is reversible.\n\nTherefore, the answer should be:\n\nBase64 is not encryption; it is a **encoding** scheme that is reversible.\n\nBut note: the query says \"Include the exact words encoding, not encryption, and reversible\". So we have to make sure we use the word \"encoding\" (with a lowercase 'e' as per standard) and avoid the word \"encryption\". Also, we must mention it is reversible.\n\nLet's craft the response:\n\n\"Base64 is a **encoding** scheme, not encryption, and it is reversible.\"\n\nHowever, the query says \"Include the exact words encoding, not encryption, and reversible\". So we have to be precise.\n\nWe can write:\n\n\"Base64 is a reversible **encoding** scheme, not encryption.\"\n\nBut note: the query says \"reversible\" (as an adjective) and we must include the word",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.397500582970679,
+            "first_token_seconds": 0.14975404099095613,
+            "output_characters": 1087,
+            "transport_error": null
+          },
+          {
+            "case_id": "ctf-sql-injection",
+            "app_id": "ctf-arena",
+            "critical": false,
+            "response": "We are asked for the primary defense against SQL injection. The answer must include parameterized queries and separate data from code.\n\nSQL injection is a technique where malicious users can execute arbitrary SQL statements by injecting malicious input into a query. The primary defense is to use parameterized queries (also known as prepared statements) which separate the data from the code.\n\nIn parameterized queries, the SQL statement is written with placeholders (parameters) for data, and the data is then passed separately. This ensures that the input data is treated as data and not as part of the SQL command.\n\nAdditionally, separating data from code means that the application code does not directly embed user input into the SQL query string. Instead, the input is handled as a separate entity (like a parameter) so that it cannot alter the structure of the SQL command.\n\nTherefore, the primary defense is:\n\n**Parameterized queries (prepared statements)**\n\nThis method inherently separates data from code by using placeholders for input and binding the input data to the query parameters.\n\nWe do not need to mention other defenses (like input validation, output encoding, etc.) because the question specifically asks for the primary defense and to include parameterized queries and separate data from code.\n\nSo the answer is:\n\nParameterized queries\n</think>\n\nParameterized queries (",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.3707422909792513,
+            "first_token_seconds": 0.15024670807179064,
+            "output_characters": 1393,
+            "transport_error": null
+          },
+          {
+            "case_id": "ffmpeg-stream-copy",
+            "app_id": "ffmpeg-lab",
+            "critical": true,
+            "response": "We are given a specific instruction: Explain why -c copy is fast. State that it avoids decoding and re-encoding and that it remuxes streams.\n\nAs an FFmpeg tutor, I must give exact flags and precise pipeline explanations. The answer should be direct and not show private chain-of-thought.\n\nKey points to cover:\n1. `-c copy` is a flag used in FFmpeg for stream copying.\n2. It is fast because it avoids the decoding and re-encoding steps that would be done by a typical encoder (like `-c video_codec`).\n3. Instead, it remuxes the streams (i.e., it copies the packets from the input to the output without processing the media data).\n\nExact explanation:\n\nThe `-c copy` flag in FFmpeg instructs the encoder to copy the video, audio, and other streams directly from the input to the output without decoding and re-encoding. This process is called \"stream copying\" or \"remuxing\". By avoiding the entire decoding and re-encoding pipeline (which is computationally expensive), the operation becomes very fast. The only step performed is remuxing the streams (i`-c copy` is typically used for concatenation, conversion, or processing of streams without changing the media",
+            "factual_pass": false,
+            "missing_requirements": [
+              "no re-encode | does not re-encode | without re-encoding | no re-encoding | zero re-encoding"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4482844170415774,
+            "first_token_seconds": 0.1705236251000315,
+            "output_characters": 1160,
+            "transport_error": null
+          },
+          {
+            "case_id": "ffmpeg-seek-placement",
+            "app_id": "ffmpeg-lab",
+            "critical": false,
+            "response": "We are discussing the placement of the `-ss` (start time) option relative to the `-i` (input) option in FFmpeg.\n\nIn FFmpeg, the order of options matters for the meaning of the `-ss` option.\n\n1. **When `-ss` is placed before `-i`**:\n   - This is incorrect syntax. The `-ss` option must be placed after the input file or after the `-i` option for the input file. \n   - However, note that in FFmpeg, the `-ss` option is typically used with the input file. The correct way is to have the input file (or the input stream) specified first, then the `-ss` option.\n\n   But let's clarify: the `-i` option is used to specify the input file. The `-ss` option is used to set the start time for the input stream.\n\n   The standard way is:\n      `ffmpeg -i input.mp4 -ss 00:01:23 output.mp4`\n\n   Here, `-i` is followed by the input file, and then `-ss` is placed after the input file (so after `-i`).\n\n2. **When `-ss` is placed after `-i`**:\n   -",
+            "factual_pass": false,
+            "missing_requirements": [
+              "before -i",
+              "after -i",
+              "fast | faster",
+              "accurate | accuracy"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4456434590974823,
+            "first_token_seconds": 0.15207537508103997,
+            "output_characters": 931,
+            "transport_error": null
+          },
+          {
+            "case_id": "film-dolly-zoom",
+            "app_id": "film-school",
+            "critical": true,
+            "response": "Okay, the user wants me to contrast a dolly with a zoom, specifically focusing on physical camera movement and focal length. They're clearly looking for precise cinematography terminology - probably a student or practitioner who needs this for practical application. \n\nHmm, I should emphasize the mechanical differences first since they asked for \"physical camera movement.\" Dolly is about the entire camera rig moving (translation), while zoom is purely optical (lens adjustment). Must clarify that dolly doesn't change focal length - that's a common confusion point. \n\nWait, they mentioned \"focal length\" specifically... better highlight how zoom alters focal length (changing magnification) versus dolly keeping focal length constant. Should mention that dolly movement creates depth perception through camera displacement, while zoom manipulates perspective without moving the camera. \n\n*checks mental notes* \nFor dolly: \n- Physical movement: Camera mount slides along rails (translational)\n- Focal length: Fixed (no change)\nFor zoom: \n- Physical movement: Lens mechanism rotates (no camera displacement)\n- Focal length: Changes (from wide to tele)\n\nUser said \"answer directly\" so I'll skip examples. But they might appreciate knowing why this matters - like how dolly creates smooth motion shots while zoom",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.416069000028074,
+            "first_token_seconds": 0.1536859159823507,
+            "output_characters": 1311,
+            "transport_error": null
+          },
+          {
+            "case_id": "film-180-rule",
+            "app_id": "film-school",
+            "critical": false,
+            "response": "Okay, the user is asking about the 180-degree rule in film grammar. They specifically want to know what it preserves, and they mentioned including axis and screen direction. \n\nHmm, this seems like a film student or someone learning screenwriting basics. They're being precise by asking for \"axis\" and \"screen direction\" - good sign they have some foundational knowledge. Probably preparing for an exam or practical application. \n\nLet me mentally scan the key points: The 180-degree rule is all about maintaining spatial continuity. The critical thing is that the camera and subject must stay on the same side of an imaginary plane (the axis) to avoid confusing the audience about left/right relationships. \n\n*checks mental notes* Right - the rule preserves the audience's spatial understanding. If you cross the axis, the screen direction flips (like when you turn the camera around), which would make left and right swap in the viewer's mind. That's why we say \"preserves the audience's spatial orientation\" rather than just \"left/right\". \n\nImportant to emphasize the axis is the imaginary line through the camera that divides the screen. And screen direction refers to how the camera positions relative to that axis - like whether it's \"same side\" or \"opposite side",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4875799160217866,
+            "first_token_seconds": 0.15261670807376504,
+            "output_characters": 1267,
+            "transport_error": null
+          },
+          {
+            "case_id": "linux-chmod-755",
+            "app_id": "linux-ops-academy",
+            "critical": true,
+            "response": "We are decoding the chmod 755 permission string.\n In Linux, chmod permissions are represented as a 3-digit number (or a string of 9 characters) where each digit (or 3 characters) represents the permissions for user (owner), group, and others.\n\n The number 755 breaks down as:\n   - The first digit (7) is for the owner (user)\n   - The second digit (5) is for the group\n   - The third digit (5) is for others\n\n Each digit is a sum of the following permissions (in octal):\n   - Read (r) = 4\n   - Write (w) = : 2\n   - Execute (x) = 1\n\n So, we break down each digit:\n\n For the owner (7):\n   7 = 4 (read) + 2 (write) + 1 (execute) -> rwx\n\n For the group (5):\n   5 = 4 (read) + 1 (execute) -> r-x   (because 4+1=5, and note: no write (so 0 for write))\n\n For others (5):\n   5 = 4 (read) + 1 (execute",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4933275829534978,
+            "first_token_seconds": 0.15622829203493893,
+            "output_characters": 791,
+            "transport_error": null
+          },
+          {
+            "case_id": "linux-signals",
+            "app_id": "linux-ops-academy",
+            "critical": false,
+            "response": "We are contrasting SIGTERM and SIGKILL in Linux, focusing on graceful handling, catchability, and immediacy.\n\nKey points:\n\n1. **SIGTERM**:\n   - **Meaning**: Signal for \"terminate\" (soft signal).\n   - **Graceful**: Yes. The process has a chance to clean up and exit gracefully. The process can be caught by a signal handler (if defined) and perform cleanup (e.g., closing files, releasing resources).\n   - **Catch**: Yes. The process can catch SIGTERM (via a signal handler) and handle it appropriately (e.g., by cleaning up and then exiting).\n   - **Immediate**: No. The signal is delivered to the process and the process can take time to exit (after cleanup). The process does not terminate immediately.\n\n2. **SIGKILL**:\n   - **Meaning**: Signal for \"kill\" (hard signal).\n   - **Graceful**: No. The process cannot clean up. The process is terminated without any chance to perform cleanup.\n   - **Catch**: No. The process cannot catch SIGK. It is a \"kill\" signal that the kernel will handle immediately without allowing the process to do anything (the process will be terminated without a handler).\n   -",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.5507274590199813,
+            "first_token_seconds": 0.15762354200705886,
+            "output_characters": 1103,
+            "transport_error": null
+          },
+          {
+            "case_id": "llm-kv-cache",
+            "app_id": "llm-stack",
+            "critical": true,
+            "response": "Okay, the user is asking about what the KV cache stores and why, with specific requirements to include keys, values, previous tokens, and avoid recomputing. They want a direct explanation without any private chain-of-thought. \n\nFirst, I need to recall that KV cache is a critical component in transformer models during inference. The user seems to have some technical background since they're using terms like \"previous tokens\" and \"recomputing\" - probably a developer or ML engineer working with LLMs. \n\nHmm, they specifically want me to avoid mentioning recomputing in the explanation? Wait no, they said \"include keys, values, previous tokens, and avoid recomputing\" - that's a bit confusing. Let me parse this carefully. The phrase \"avoid recomputing\" is likely their instruction about the explanation style, not something to include in the cache content. I should clarify that in the response.\n\nThe core of this is: KV cache stores key-value pairs from the model's attention mechanism. During inference, we don't want to recompute attention over the entire sequence every time - that would be super slow. Instead, we keep the keys and values from previous tokens so we can compute attention for the current token without recalculating everything.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4759728749049827,
+            "first_token_seconds": 0.1569475419819355,
+            "output_characters": 1251,
+            "transport_error": null
+          },
+          {
+            "case_id": "llm-quantization",
+            "app_id": "llm-stack",
+            "critical": false,
+            "response": "Okay, the user is asking about model quantization with specific focus on lower precision, memory savings, and quality tradeoffs. They want a precise explanation without any fluff or chain-of-thought. \n\nHmm, they're clearly technical - probably a developer or ML engineer working on deployment constraints. The phrasing \"do not show private chain-of-thought\" suggests they've had bad experiences with verbose AI responses before. Better keep it surgical.\n\nFirst I need to define quantization cleanly: it's reducing numerical precision of model weights. Should emphasize it's not about the model architecture but the representation of weights. \n\nFor the tradeoffs part: \nLower precision means converting floats to integers (like 8-bit vs 32-bit). Must explicitly state how this reduces memory footprint - each weight takes fewer bits. The quality tradeoff is critical here: less precision = more rounding errors = potential accuracy drop. Should mention that this is usually acceptable for tasks where exactness isn't critical (like image recognition vs medical diagnosis).\n\nWait, they specifically asked for \"include\" those three points. Better structure it as: \n1. Definition (with precision example) \n2. Memory benefit (bit reduction \u2192 storage) \n3. Quality tradeoff (accuracy impact) \n\nMust avoid",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.5032239169813693,
+            "first_token_seconds": 0.15517320903018117,
+            "output_characters": 1297,
+            "transport_error": null
+          },
+          {
+            "case_id": "math-dot-product",
+            "app_id": "math-for-ai",
+            "critical": true,
+            "response": "Okay, let's see. I need to compute the dot product of the vectors (2,3) and (1,4). Hmm, dot product is when you multiply the corresponding components and then add them up, right? So for two vectors (a,b) and (c,d), the dot product is a*c + b*d.\n\nFirst, I should find 2\u00d71. That's 2 multiplied by 1, which is 2. Then 3\u00d74 is 3 times 4, which is 12. Then add those two results together. So 2 + 12 equals 14. Wait, the problem says to include 2\u00d71, 3\u00d74, and 14. Let me check again.\n\nThe vectors are (2,3) and (1,4). So first component of first vector is 2, second is 3. Second vector is 1 and 4. So dot product is (2*1) + (3*4) = 2 + 12 = 14. Yep, that's right. So the answer is 14. The problem wants me to show 2\u00d71, 3\u00d74, and 14",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.5278475830564275,
+            "first_token_seconds": 0.1852464999537915,
+            "output_characters": 722,
+            "transport_error": null
+          },
+          {
+            "case_id": "math-softmax",
+            "app_id": "math-for-ai",
+            "critical": false,
+            "response": "Okay, the user is asking about what softmax produces from logits. They specifically want to know about probabilities, whether they sum to 1, and the next token. \n\nHmm, this seems like a pretty standard question in machine learning, especially for language models. The user is probably studying NLP or working with LLMs. They might be confused about the softmax function's output versus the actual token prediction. \n\nLet me break this down carefully. First, softmax takes logits (which are raw scores from a model) and converts them into probabilities. The key point is that softmax outputs a probability distribution where all values are between 0 and 1, and they sum to exactly 1. That's crucial - the user specifically asked about the sum-to-1 property. \n\nWait, they also mentioned \"next token\". That's interesting because softmax itself doesn't produce the next token - it just gives probabilities for all possible tokens. The actual token selection happens later through sampling or argmax. I should clarify that distinction to avoid confusion. \n\nThe user seems technical enough to use terms like \"logits\" so I can be precise. But I should avoid going too deep into the math unless needed. They want a direct answer with the three elements: probabilities, sum-to-",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4840683749644086,
+            "first_token_seconds": 0.15719741699285805,
+            "output_characters": 1268,
+            "transport_error": null
+          },
+          {
+            "case_id": "vim-ciw",
+            "app_id": "vim-dojo",
+            "critical": true,
+            "response": "We are to explain the command `ciw` in Vim.\n The user specifies: it changes the inner/current word and the cursor may be anywhere in the word.\n\n Standard explanation for `ciw`:\n   - `ciw` stands for \"change inside word\".\n   - It deletes the word that the cursor is currently in (the word that contains the cursor) and then inserts the current text (or the text you type after the command) in its place.\n\n Important: The cursor can be anywhere in the word. For example, if the cursor is at the beginning of the word, the entire word is deleted. If the cursor is in the middle, then the part from the cursor to the end of the word is deleted? Actually, no: the word is defined by the word boundaries (as per the current word definition in Vim).\n\n However, note: In Vim, the word is defined by the current word (the word that the cursor is in). The command `ciw` will delete the entire word (from the start of the word to the end of the word) and then you will be in insert mode to type a new word.\n\n But the user says: \"the cursor may be anywhere in the word\". So we have to be precise.\n\n How",
+            "factual_pass": false,
+            "missing_requirements": [
+              "change inner word | change the inner word | changes the inner word | change inside whole word | changes the entire current"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.6186544169904664,
+            "first_token_seconds": 0.18024862499441952,
+            "output_characters": 1090,
+            "transport_error": null
+          },
+          {
+            "case_id": "vim-dd",
+            "app_id": "vim-dojo",
+            "critical": false,
+            "response": "We are in normal mode. The question asks about what `dd` does, including delete and current line.\n\nIn Vim, the command `dd` (delete line) deletes the current line and moves the cursor to the beginning of the next line.\n\nSo, the answer is: \n- `dd` deletes the current line and moves the cursor to the next line.\n\nBut note: the question says \"include delete and current line\". So we are to describe the action of `dd` in normal mode.\n\nExact keystrokes: just `dd`\n\nHowever, the question says: \"What does dd do in normal mode? Include delete and current line.\"\n\nSo the answer is: \n  `dd` deletes the current line and moves the cursor to the beginning of the next line.\n\nBut the instruction says: \"Give exact keystrokes.\" and \"Answer directly\".\n\nWait, the question is: \"What does dd do in normal mode?\" So we are to describe the action? But the instruction says: \"Give exact keystrokes.\" \n\nLet me re-read: \"Give exact keystrokes.\" meaning that we are to provide the keystrokes that do that? But the question is asking for what `dd` does.\n\nThe user says: \"What does dd do in normal mode",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.6265315409982577,
+            "first_token_seconds": 0.15796829108148813,
+            "output_characters": 1080,
+            "transport_error": null
+          },
+          {
+            "case_id": "vllm-paged-attention",
+            "app_id": "vllm-stack",
+            "critical": true,
+            "response": "Okay, the user is asking about why PagedAttention uses blocks, specifically mentioning non-contiguous memory, KV cache, and fragmentation. They want a direct explanation without any private chain-of-thought. \n\nFirst, I need to recall what PagedAttention is. It's a memory management technique used in vLLM for efficient inference, especially for large language models. The key here is that it handles the KV cache (key-value cache) which is crucial for transformer models during generation.\n\nThe user mentioned three points: non-contiguous memory, KV cache, and fragmentation. So I should address each of these in the context of why blocks are used. \n\nStarting with non-contiguous memory: In traditional systems, memory is contiguous, but in vLLM, the KV cache can be very large and sparse. If you try to store the entire KV cache in one big block, it might not fit in RAM, especially when multiple requests are running. PagedAttention uses blocks to allow the memory to be non-contiguous\u2014meaning the actual data isn't stored in a single, solid chunk but in multiple pieces. This helps avoid memory fragmentation and allows for efficient allocation.\n\nNext, KV cache: The KV cache stores the keys and values from previous tokens in the sequence. During",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.470921333064325,
+            "first_token_seconds": 0.1609897919697687,
+            "output_characters": 1251,
+            "transport_error": null
+          },
+          {
+            "case_id": "vllm-continuous-batching",
+            "app_id": "vllm-stack",
+            "critical": false,
+            "response": "Okay, the user is asking about continuous batching in vLLM, specifically requesting explanations of add requests, remove finished requests, and GPU utilization. They want a direct answer without any private chain-of-thought. \n\nHmm, this seems like someone with intermediate ML infrastructure knowledge - probably a developer or engineer working with LLM serving. They're focused on the operational mechanics rather than high-level concepts. Smart of them to specify the three components they want covered. \n\nLet me mentally walk through vLLM's implementation... Continuous batching is that clever technique where vLLM doesn't wait for full batches to process requests. Instead it dynamically manages a sliding window of requests on GPU. \n\nFor add requests: Need to emphasize it's not just appending but maintaining a priority queue where new requests get inserted. Should mention the \"sliding window\" aspect since that's core to continuous batching. \n\nRemove finished requests: Crucial to explain the checkpointing mechanism - how vLL. M tracks completion status and removes requests from GPU when they finish. Must clarify it's not immediate but happens during the next batch processing cycle. \n\nGPU utilization: This is where it gets interesting. The magic happens in how vLLM balances the GPU load - by keeping the GPU busy with partial batches while avoiding",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.4761008749483153,
+            "first_token_seconds": 0.15517799998633564,
+            "output_characters": 1362,
+            "transport_error": null
+          }
+        ]
+      },
+      {
+        "candidate": {
+          "candidate_id": "phi4-mini",
+          "ollama_tag": "phi4-mini",
+          "download_bytes": 2500000000,
+          "license": "MIT",
+          "license_url": "https://huggingface.co/microsoft/Phi-4-mini-instruct/blob/main/LICENSE"
+        },
+        "cases": [
+          {
+            "case_id": "algo-binary-search",
+            "app_id": "algo-drill",
+            "critical": true,
+            "response": "Prerequisite: The list must be sorted.\n\nTime Complexity: O(log n).",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.8752883340930566,
+            "first_token_seconds": 0.7407195420237258,
+            "output_characters": 66,
+            "transport_error": null
+          },
+          {
+            "case_id": "algo-two-sum-hint",
+            "app_id": "algo-drill",
+            "critical": false,
+            "response": "Hint: Consider using a dictionary (hash map) to store the elements you've seen so far as keys, along with their corresponding indices in your array. For each element you encounter while iterating through the list once, check if its complementary value exists already within this 'seen' collection by looking it up quickly thanks to hashing capabilities of dictionaries; that would be a potential solution pair for our Two Sum problem. Remember: complement is what you'd need from another number in your array so their sum equals zero (or whatever target you're aiming at).",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.0695912089431658,
+            "first_token_seconds": 0.16659425001125783,
+            "output_characters": 572,
+            "transport_error": null
+          },
+          {
+            "case_id": "coding-mutable-default",
+            "app_id": "coding-challenges",
+            "critical": true,
+            "response": "A mutable default argument like `list()` can lead to unexpected behavior because the function retains state across calls if you pass an empty list as expected (e.g., calling your function without arguments). Instead of using a mutable object such as a list, it's safer practice in Python 3+ to set it explicitly to None and then create a new instance inside the method. This ensures that each call gets its own fresh default value.\n\nHere's how you can change this:\n\n```python\ndef my_function(arg=None):\n    if arg is None:\n        arg = [] # Create an empty list here for every function call.\n    \n    # ... rest of your code using 'arg' ...\n```\n\nBy doing so, `my_function` will not retain any state from previous calls unless you explicitly pass a different argument.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "defined once | created only once | evaluated once",
+              "shared | reused | same list"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.6228339170338586,
+            "first_token_seconds": 0.17094395798631012,
+            "output_characters": 768,
+            "transport_error": null
+          },
+          {
+            "case_id": "coding-missing-await",
+            "app_id": "coding-challenges",
+            "critical": false,
+            "response": "When you omit `await` in front of an asynchronous operation within an async function, it results in a bug where your program doesn't wait for that particular task to complete before moving on.\n\nIn JavaScript's event loop model with coroutines (async functions), each promise returned by an async call is treated as if it's running concurrently. However, without `await`, the next line of code after the asynchronous operation will execute immediately and not pause until the awaited coroutine completes its execution cycle in a separate thread managed by Node.js or browser's event loop.\n\nThis can lead to unexpected behavior because your program might attempt to use values that haven't been resolved yet from those coroutines, leading to errors like trying to access properties of undefined objects. Essentially, you end up with code that's not synchronized correctly and may cause runtime exceptions due to accessing uninitialized variables (also known as \"undefined property\" or similar).",
+            "factual_pass": false,
+            "missing_requirements": [
+              "not executed | doesn't run | does not run"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.823193958029151,
+            "first_token_seconds": 0.17592425004113466,
+            "output_characters": 992,
+            "transport_error": null
+          },
+          {
+            "case_id": "ctf-base64",
+            "app_id": "ctf-arena",
+            "critical": true,
+            "response": "No, Base64 is an encoding method that converts binary data into ASCII characters to ensure safe transmission over media designed for text only\u2014it can be reversed back to its original form because it uses a set of 64 different ASCII characters (hence \"Base64\"). It does this by grouping the input bytes in sets of three and converting them using six bits per character. However, Base64 is not encryption; it's merely encoding that doesn't provide any security or confidentiality on its own since reversing the process can easily decode it back to plain text.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "reversible"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.1537137910490856,
+            "first_token_seconds": 0.17855895799584687,
+            "output_characters": 557,
+            "transport_error": null
+          },
+          {
+            "case_id": "ctf-sql-injection",
+            "app_id": "ctf-arena",
+            "critical": false,
+            "response": "The primary defenses against SQL Injection attacks include:\n\n1. Using Parameterized Queries: This involves using placeholders for input parameters in your database query, which are then bound to actual values at execution time.\n\n2. Separating Data from Code (also known as the use of stored procedures): By keeping business logic and data access separate within an application\u2019s codebase or through a dedicated service layer that handles all interactions with databases can help prevent SQL injection attacks.\n\n\nThese practices ensure user input is treated strictly as parameters, not executable parts of any database command.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.1453530420549214,
+            "first_token_seconds": 0.17980308400001377,
+            "output_characters": 626,
+            "transport_error": null
+          },
+          {
+            "case_id": "ffmpeg-stream-copy",
+            "app_id": "ffmpeg-lab",
+            "critical": true,
+            "response": "The `-c copy` flag in the ffmpeg command line tool instructs FFmpeg to simply pass through all input media without any processing, such as transcoding (decoding) or encoding.\n\nHere are a few reasons why using this option is fast:\n\n1. **Avoiding Decoding and Re-Encoding**: When you use `-c copy`, there\u2019s no need for decoding the original video stream into raw frames followed by re-encoding those decoded streams back to another format, which can be computationally intensive.\n\n2. **Direct Stream Remuxing (Muxing)**: Instead of processing each frame individually and then encoding them again as a new output file type or container, `-c copy` allows FFmpeg to directly remux the original media stream into its own container without altering any frames' content\u2014this is much faster because it avoids unnecessary intermediate steps.\n\nIn summary:\n```bash\nffmpeg -i input.mp4 -c:v libx264 -c:a aac output.mkv\n```\nIf you want just copying, replace `-c:v libx264` and `-c:a aac` with the appropriate codec flags for your source format (e.g., if it's already in MKV or another container), then use:\n```",
+            "factual_pass": false,
+            "missing_requirements": [
+              "no decode | does not decode | without decoding | no decoding",
+              "no re-encode | does not re-encode | without re-encoding | no re-encoding | zero re-encoding"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.588005750090815,
+            "first_token_seconds": 0.17347500007599592,
+            "output_characters": 1096,
+            "transport_error": null
+          },
+          {
+            "case_id": "ffmpeg-seek-placement",
+            "app_id": "ffmpeg-lab",
+            "critical": false,
+            "response": "When using `ffmpeg`, the options for specifying start times of inputs (`-ss`) can be placed either at the beginning (-) position, which is commonly used to specify an exact starting point within a media file (input), or just before any other option that specifies seeking behavior.\n\nFor fast input seek and accurate output seek:\n\n1. Placing `-ss` after `-i`: This approach allows you to first identify your source (`-i`) followed by the start time of interest for this particular stream (-). It is useful when dealing with multiple streams or if you're interested in a specific segment within an overall file.\n\nExample:\n```\nffmpeg -i input.mp4 -ss 00:01:30.000 -f null -\n```\n\n2. Placing `-ss` before `-i`: This approach specifies the start time for seeking directly at the beginning of your command, which can be useful when you want to seek within a single stream or if you're working with an input that doesn't have multiple streams.\n\nExample:\n```\nffmpeg -ss 00:01:30.000 -f null -\n```\n\nIn both cases above (`-i` and `-ss`) are used for seeking purposes, not as part of the standard video",
+            "factual_pass": false,
+            "missing_requirements": [
+              "before -i",
+              "after -i"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.5515903749037534,
+            "first_token_seconds": 0.17809800000395626,
+            "output_characters": 1090,
+            "transport_error": null
+          },
+          {
+            "case_id": "film-dolly-zoom",
+            "app_id": "film-school",
+            "critical": true,
+            "response": "A dolly involves physically moving the entire camera along tracks to change its position relative to the subject, creating smooth motion shots like tracking movements from side-to-side (a pan) or up-and-down (a tilt). A zoom uses internal lens adjustments that alter the field of view without changing your physical location; it changes focal length while maintaining a stationary shot.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.8152825830038637,
+            "first_token_seconds": 0.1730254169087857,
+            "output_characters": 386,
+            "transport_error": null
+          },
+          {
+            "case_id": "film-180-rule",
+            "app_id": "film-school",
+            "critical": false,
+            "response": "The 180-degree rule preserves spatial consistency on-screen by maintaining consistent left-to-right (or right-to-left) camera movement within a scene, ensuring that characters' eyes match their movements across cuts to avoid disorienting viewers with conflicting directions of motion or eye orientation. This helps maintain the illusion of continuous space and time in film editing.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "axis",
+              "screen direction"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.7920126669341698,
+            "first_token_seconds": 0.17392145900521427,
+            "output_characters": 382,
+            "transport_error": null
+          },
+          {
+            "case_id": "linux-chmod-755",
+            "app_id": "linux-ops-academy",
+            "critical": true,
+            "response": "The `chmod` command is used to change the permissions of files in Unix-like operating systems.\n\nWhen you see a permission string like `755`, it represents different levels for three categories: \n\n- The first digit (7) sets the owner's permissions.\n- The second digit (5) applies to both group and others' access rights. \n\nBreaking down these numbers into their respective read (`r`), write (`w`), execute (`x`) values:\n\n1. Owner's permission:\n   - 4 for `read`\n   - 2 for `write`\n   - 1 for `execute`\n\nAdding them up (7 = 4+2+1) means the owner has full permissions: read, write and execute.\n\n2. Group/others' combined permission (`5`):\n   - The first digit is a combination of group rights.\n     So it breaks down to:\n       - Read (r): `4`\n       - Execute (x): `1`\n\nAdding them up gives us 5 for the group's permissions: read and execute.\n\nSo, when you decode `chmod 755`, you're setting:\n\n- Owner (`u`) with full access `(read + write + execute)`.\n- Group (`g`), others (`o`) both have permission to only",
+            "factual_pass": false,
+            "missing_requirements": [
+              "rwx | read write execute"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.5546491249697283,
+            "first_token_seconds": 0.17569674993865192,
+            "output_characters": 1008,
+            "transport_error": null
+          },
+          {
+            "case_id": "linux-signals",
+            "app_id": "linux-ops-academy",
+            "critical": false,
+            "response": "SIGTERM is the standard termination signal sent to gracefully shut down processes in Unix-like systems like Linux.\n\nWhen you send a process a SIGTERM:\n\n- Graceful: The operating system allows your program time to clean up resources (like closing files or network connections) before exiting.\n  \n  Example command:\n  ```bash\n  kill -SIGTERM <PID>\n  ```\n\n- Catchable by the application, allowing it an opportunity for cleanup.\n\nIn contrast,\n\nSIGKILL is a forceful termination signal that cannot be caught:\n\n- Immediate: It instructs your process to terminate immediately without any chance of catching or cleaning up.\n  \n  Example command:\n  ```bash\n  kill -9 <PID>\n  ```\n\nUse SIGTERM when you want the application to shut down gracefully. Use SIGKILL only as a last resort, for example if an unresponsive program needs immediate termination (like in cases where it is consuming all system resources).",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.9288075419608504,
+            "first_token_seconds": 0.17236816696822643,
+            "output_characters": 899,
+            "transport_error": null
+          },
+          {
+            "case_id": "llm-kv-cache",
+            "app_id": "llm-stack",
+            "critical": true,
+            "response": "The Key-Value (KV) cache stores pairs of data consisting of a key that uniquely identifies an item in memory along with its corresponding value which is typically some form of processed output or intermediate result from computations performed by the model.\n\nIn language models like GPT-like architectures:\n\n1. Keys: These are usually identifiers for specific tokens, segments within input sequences (like words), positions during training/evaluation phases.\n2. Values: The values stored in KV cache can be embeddings representing token meanings after being processed through layers of a neural network; they may also include intermediate activations or outputs from certain model components that have been computed previously.\n\nThe purpose is to avoid recomputing these elements for subsequent inputs, which saves computational resources and time:\n\n1. Previous tokens: The sequence context up until the last input token can be stored as part of keys in KV cache.\n2. Avoid recomputation: By storing previous computations (like embeddings or activations), when new data comes through during inference/inference-time parallelism; it allows for quick retrieval instead of reprocessing, thus speeding things significantly.\n\nIn summary:\n\n- Keys are identifiers that could represent tokens and their positions within sequences,\n- Values store processed outputs like token representations after neural network transformations.\n- Previous tokens context is stored to maintain sequence",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.5584466659929603,
+            "first_token_seconds": 0.1808255830546841,
+            "output_characters": 1476,
+            "transport_error": null
+          },
+          {
+            "case_id": "llm-quantization",
+            "app_id": "llm-stack",
+            "critical": false,
+            "response": "Model quantization involves reducing the numerical precision of a machine learning model's parameters (weights) from floating-point representations to fixed-point formats like integers with fewer bits per weight value.\n\n**Lower Precision:** Quantized models use integer values instead of full-precision floats which reduces storage requirements because each parameter takes up less space. For example, moving weights represented as 32-bit float numbers down to 8-bit or even lower precision can significantly reduce the model size and memory footprint during both training (if applicable) and inference.\n\n**Less Memory:** Due to reduced numerical representation sizes from quantization, models consume much fewer resources in terms of storage on disk. This is particularly beneficial for deployment scenarios where limited hardware capacity exists such as mobile devices or embedded systems with constrained RAM/flash space available compared to full-precision floating-point numbers (32-bit floats).\n\n**Quality Tradeoff:** The primary trade-off when applying quantization comes down to the potential loss in model accuracy and performance due to reduced numerical precision. Lowering bit-width can lead to a degradation of predictions because some information is lost during this process, which might not be recoverable even with fine-tuning or retraining on full-precision data.\n\nIn summary:\n1. **Lower Precision:** Reduces storage requirements by using fewer bits per",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.735138207906857,
+            "first_token_seconds": 0.18780366599094123,
+            "output_characters": 1470,
+            "transport_error": null
+          },
+          {
+            "case_id": "math-dot-product",
+            "app_id": "math-for-ai",
+            "critical": true,
+            "response": "The calculation for each term is as follows:\n\n- \\(2 \\times 1 = 2\\)\n- \\(3 \\times 4 = 12\\)\n\nNow add these results together with the constant given value (which seems to be a mistake in your instruction since it doesn't fit into dot product calculations):\n\n\\(2 + 12 + 14 = 28\\) \n\nHowever, if we are strictly computing the dot product of vectors \\( \\mathbf{a} = (2,3) \\) and \\( \\mathbf{b} = (1,4) \\), then:\n\nDot Product: \n\\[ 2 \\times 1 + 3 \\times 4 = 2 + 12 = 14\\]\n\nSo the correct dot product is **14**.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 1.732207833090797,
+            "first_token_seconds": 0.18443645804654807,
+            "output_characters": 499,
+            "transport_error": null
+          },
+          {
+            "case_id": "math-softmax",
+            "app_id": "math-for-ai",
+            "critical": false,
+            "response": "Softmax converts logits into normalized probability distributions over predicted classes for multi-class classification problems by applying the exponential function followed by normalization across all possible outputs (classes). Each output's value is transformed such that it represents a confidence score between zero and one summing up to exactly one when considering them together as probabilities.\n\nFor example, given an array of logits `[2.0, 1.0, 0.1]`, softmax would transform this into the probability distribution:\n\n```\nP(class_1) = exp(2.0) / (exp(2.0) + exp(1.0) + exp(0.1))\nP(class_2) = exp(1.0) / (exp(2.0) + exp(1.0) + exp(0.1))\nP(class_3) = exp(0.1) / (exp(2.0) + exp(1.0) + exp(0.1))\n\n```\n\nThe resulting probabilities would sum up to 1, and the next token prediction can be derived by selecting the class with the highest probability after applying softmax transformation on logits for each possible output in a sequence generation context like language modeling or text classification tasks.",
+            "factual_pass": false,
+            "missing_requirements": [
+              "sum to 1 | sum is 1 | sum equals 1"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 3.1819522089790553,
+            "first_token_seconds": 0.3755927919410169,
+            "output_characters": 1011,
+            "transport_error": null
+          },
+          {
+            "case_id": "vim-ciw",
+            "app_id": "vim-dojo",
+            "critical": true,
+            "response": "In Vim, `ciw` stands for \"change inside whole word.\" It deletes (removes) but also immediately enters insert mode to allow you to type a replacement character or characters at any position within what was previously considered as one single 'word'. This means that if your cursor is anywhere in the middle of this inner portion when executing `ciw`, it will still change just inside and around where you're currently positioned.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.9828480409923941,
+            "first_token_seconds": 0.18317879107780755,
+            "output_characters": 428,
+            "transport_error": null
+          },
+          {
+            "case_id": "vim-dd",
+            "app_id": "vim-dojo",
+            "critical": false,
+            "response": "dD",
+            "factual_pass": false,
+            "missing_requirements": [
+              "delete",
+              "current line"
+            ],
+            "forbidden_matches": [],
+            "elapsed_seconds": 0.20033724990207702,
+            "first_token_seconds": 0.18162199994549155,
+            "output_characters": 2,
+            "transport_error": null
+          },
+          {
+            "case_id": "vllm-paged-attention",
+            "app_id": "vllm-stack",
+            "critical": true,
+            "response": "PagedAttention uses block structures to manage the attention mechanism efficiently in large-scale models like Transformers by addressing several key challenges:\n\n1. **Non-Contiguous Memory Access**: In deep learning systems with limited memory capacity (like GPUs), it's often necessary for data blocks that are not stored contiguously due to fragmentation or other reasons, such as when using virtual memory on CPUs.\n\n2. **Key/Value Cache Optimization**: PagedAttention divides the attention mechanism into smaller chunks called \"blocks.\" This allows it to cache only a subset of keys and values at any given time (the KV cache), reducing overall memory usage since not all data needs to be loaded simultaneously for processing large sequences or batches.\n\n3. **Fragmentation Handling**: Memory fragmentation can occur when different parts of the dataset are stored in non-contiguous blocks, making it difficult to access them efficiently without loading unnecessary portions into RAM/capacity constraints on hardware like GPUs and CPUs with limited memory bandwidth.\n\n\nBy using block structures within PagedAttention:\n\n- It minimizes latency by only accessing relevant data chunks (blocks) for computation.\n- Reduces peak working set size since not all keys/values need immediate storage in the main memory at once, thus optimizing cache usage.\n\nOverall, this approach allows large-scale models to",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.596416541025974,
+            "first_token_seconds": 0.16839162504766136,
+            "output_characters": 1399,
+            "transport_error": null
+          },
+          {
+            "case_id": "vllm-continuous-batching",
+            "app_id": "vllm-stack",
+            "critical": false,
+            "response": "Continuous Batching in the context of machine learning refers to an approach where training jobs (additions) are continuously fed into a system while others complete their execution cycle.\n\nWhen new data arrives for processing:\n\n1. Add Requests: New tasks or batches containing additional datasets can be added seamlessly without waiting for previous ones to finish.\n2. Remove Finished Requests: Completed requests, once processed and the model updated accordingly, get removed from active queues ensuring efficient resource utilization by freeing up space on GPUs that were used during their execution.\n\nGPU Utilization:\n\nContinuous Batching optimizes GPU usage as it allows multiple batches (additions) of data processing to occur simultaneously across different jobs. This means while one batch is being processed and utilizing the computational power, another can be queued for immediate start once resources become available again after a previous job completes its run on GPUs.\n\nThis approach maximizes throughput by keeping all GPU units busy as much as possible without idle time waiting between tasks or batches of data to process.",
+            "factual_pass": true,
+            "missing_requirements": [],
+            "forbidden_matches": [],
+            "elapsed_seconds": 2.0203459579497576,
+            "first_token_seconds": 0.17790529190097004,
+            "output_characters": 1140,
+            "transport_error": null
+          }
+        ]
+      }
+    ]
+  }
+}

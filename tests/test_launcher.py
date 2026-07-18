@@ -45,3 +45,13 @@ def test_mobile_layout_uses_drawer_and_collapsible_chat():
 def test_icon_only_controls_have_accessible_labels():
     assert "aria-label=\"Local AI settings\"" in HTML
     assert "aria-label=\"Show or hide tutor chat\"" in HTML
+
+
+def test_mounted_chats_refresh_after_local_ai_state_changes():
+    assert "local-ai-status-changed" in HTML
+    for reason in ("profile_changed", "runtime_started", "model_verified", "model_removed", "manual_refresh"):
+        assert reason in HTML
+    assert "notifyAIStatusChanged" in HTML
+    assert "addEventListener('local-ai-status-changed'" in HTML
+    assert "chatBusy" in HTML
+    assert "statusHost.replaceChildren" in HTML

@@ -96,6 +96,20 @@ python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
+To compare permissively licensed local tutor models against every chat-enabled
+app, install the candidate Ollama models and run:
+
+```bash
+ollama pull qwen3:4b
+ollama pull phi4-mini
+python scripts/benchmark_tutors.py
+```
+
+The runner uses only the loopback Ollama API and writes auditable JSON and
+Markdown reports under `benchmarks/results/`. See `benchmarks/tutor-cases.json`
+for the factual criteria. A model is eligible only when every critical case
+passes and transport failures stay at or below 5%.
+
 ## Relation to Atrium
 
 Atrium serves the same contract internally (`atrium/apps_routes.py`,

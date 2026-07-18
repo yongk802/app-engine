@@ -21,9 +21,6 @@ Config via env:
                         (each with app.json + index.html, or an entry_point)
   APP_ENGINE_STATE_DIR  where per-app state JSON is stored
                         (default: ~/.config/app-engine/app-state)
-  APP_ENGINE_LLM_BASE   OpenAI-compatible base URL for chat
-                        (default: http://localhost:11434  — Ollama)
-  APP_ENGINE_LLM_MODEL  chat model name (default: gemma3:4b)
   APP_ENGINE_HOST/PORT  bind address (default 127.0.0.1:8770)
 """
 from __future__ import annotations
@@ -31,7 +28,11 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import platform
 import re
+import shutil
+import subprocess
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -40,19 +41,38 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from app_engine.chat import ChatRuntime
+from app_engine.config import ConfigStore
+from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
+from app_engine.registry import InvalidRegistryError, ModelRegistry
+from app_engine.system_probe import SystemProbe
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 APPS_DIR = Path(os.environ.get("APP_ENGINE_APPS_DIR", "./apps")).expanduser().resolve()
 STATE_DIR = Path(
     os.environ.get("APP_ENGINE_STATE_DIR", "~/.config/app-engine/app-state")
 ).expanduser()
-LLM_BASE = os.environ.get("APP_ENGINE_LLM_BASE", "http://localhost:11434").rstrip("/")
-LLM_MODEL = os.environ.get("APP_ENGINE_LLM_MODEL", "gemma3:4b")
 MAX_STATE_BYTES = 100 * 1024  # 100 KB, matches Atrium
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
-app = FastAPI(title="app-engine")
 _proxy: httpx.AsyncClient | None = None
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    if _proxy and not _proxy.is_closed:
+        await _proxy.aclose()
+    await _ollama_manager.close()
+
+
+app = FastAPI(title="app-engine", lifespan=lifespan)
+_registry = ModelRegistry.load(Path(__file__).parent / "model-registry.json")
+_config = ConfigStore(STATE_DIR)
+_probe = SystemProbe()
+_os_name = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}.get(platform.system(), platform.system().lower())
+_ollama_manager = OllamaManager(_registry, _config, os_name=_os_name)
 
 
 def _client() -> httpx.AsyncClient:
@@ -178,41 +198,158 @@ async def app_chat(request: Request):
     if not isinstance(messages, list) or not messages:
         return JSONResponse({"error": "messages required"}, status_code=400)
 
-    system = apps[app_id].chat_system_prompt or "You are a helpful tutor."
-    payload = {
-        "model": LLM_MODEL,
-        "messages": [{"role": "system", "content": system}, *messages],
-        "stream": True,
-    }
-
     async def gen():
+        status = await _ollama_manager.status()
+        config = _config.load()
+        profile = _registry.get_profile(config.selected_profile)
+        ready = status.running and profile.model_id in status.installed_model_ids
+        client = httpx.AsyncClient(base_url=config.ollama_endpoint, timeout=httpx.Timeout(180.0))
+        runtime = ChatRuntime(_registry, _config, client, readiness=lambda: ready)
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as c:
-                async with c.stream(
-                    "POST", f"{LLM_BASE}/v1/chat/completions", json=payload
-                ) as resp:
-                    if resp.status_code != 200:
-                        err = (await resp.aread()).decode()[:200]
-                        yield f"data: {json.dumps({'type': 'error', 'error': f'LLM {resp.status_code}: {err}'})}\n\n"
-                        return
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        chunk = line[6:].strip()
-                        if chunk == "[DONE]":
-                            break
-                        try:
-                            delta = json.loads(chunk)["choices"][0]["delta"]
-                            text = delta.get("content", "")
-                            if text:
-                                yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            continue
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        except httpx.ConnectError:
-            yield f"data: {json.dumps({'type': 'error', 'error': f'LLM not reachable at {LLM_BASE}'})}\n\n"
+            async for event in runtime.stream(apps[app_id].chat_system_prompt or "You are a helpful tutor.", messages):
+                # Preserve the original launcher contract while adding typed error codes.
+                if event["type"] == "complete":
+                    event = {"type": "done"}
+                elif event["type"] == "error":
+                    event["error"] = event.get("message", "Local AI failed")
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            await runtime.close()
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ── Local AI setup and model management ──────────────────────────────────────
+
+@app.get("/api/local-ai/status")
+async def local_ai_status() -> JSONResponse:
+    config = _config.load()
+    capabilities = _probe.inspect(STATE_DIR, config.ollama_endpoint)
+    recommendation = _registry.recommend(capabilities)
+    status = await _ollama_manager.status()
+    selected = _registry.get_profile(config.selected_profile)
+    ready = status.running and selected.model_id in status.installed_model_ids
+    return JSONResponse({
+        "state": "ready" if ready else "setup_required",
+        "selected_profile": config.selected_profile,
+        "selected_model_id": selected.model_id,
+        "recommendation": {
+            "profile_id": recommendation.profile.profile_id,
+            "model_id": recommendation.profile.model_id,
+            "display_name": recommendation.profile.display_name,
+            "reason": recommendation.reason,
+            "warnings": recommendation.warnings,
+            "download_bytes": recommendation.profile.expected_download_bytes,
+        },
+        "system": asdict(capabilities),
+        "ollama": asdict(status),
+        "managed_model_ids": config.managed_model_ids,
+        "profiles": [asdict(profile) for profile in _registry.profiles],
+        "privacy": "Everything stays on this computer.",
+    })
+
+
+@app.put("/api/local-ai/profile")
+async def set_local_ai_profile(request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        profile = _registry.get_profile(str(body.get("profile_id", "")))
+    except InvalidRegistryError as exc:
+        raise HTTPException(400, str(exc))
+    _config.set_profile(profile.profile_id)
+    return JSONResponse({"ok": True, "profile_id": profile.profile_id, "model_id": profile.model_id})
+
+
+@app.get("/api/local-ai/install-plan")
+async def local_ai_install_plan() -> JSONResponse:
+    try:
+        return JSONResponse(asdict(_ollama_manager.installation_plan()))
+    except OllamaOperationError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/local-ai/authorize")
+async def authorize_local_ai_install(request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        token = _ollama_manager.authorize(str(body.get("plan_id", "")))
+    except ConfirmationError as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse({"token": token})
+
+
+@app.post("/api/local-ai/install")
+async def install_local_ai(request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        _ollama_manager.install(str(body.get("plan_id", "")), str(body.get("token", "")))
+    except (ConfirmationError, OllamaOperationError) as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse({"ok": True, "message": "Complete the official Ollama installer, then return here."})
+
+
+@app.post("/api/local-ai/start")
+async def start_local_ai() -> JSONResponse:
+    executable = shutil.which("ollama")
+    if not executable:
+        raise HTTPException(400, "Ollama is not installed")
+    subprocess.Popen((executable, "serve"), close_fds=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/local-ai/pull/{model_id}")
+async def pull_local_ai_model(model_id: str) -> StreamingResponse:
+    try:
+        _registry.get_model(model_id)
+    except InvalidRegistryError as exc:
+        raise HTTPException(404, str(exc))
+
+    async def events():
+        try:
+            async for progress in _ollama_manager.pull(model_id):
+                yield f"data: {json.dumps(asdict(progress))}\n\n"
+            yield f"data: {json.dumps({'status': 'complete', 'percent': 100})}\n\n"
+        except (OllamaOperationError, httpx.HTTPError) as exc:
+            yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.delete("/api/local-ai/models/{model_id}")
+async def remove_local_ai_model(model_id: str) -> JSONResponse:
+    try:
+        await _ollama_manager.remove_managed_model(model_id)
+    except (UnmanagedModelError, InvalidRegistryError) as exc:
+        raise HTTPException(400, str(exc))
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Ollama could not remove the model: {exc}")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/local-ai/verify/{model_id}")
+async def verify_local_ai_model(model_id: str) -> JSONResponse:
+    try:
+        return JSONResponse(asdict(await _ollama_manager.verify(model_id)))
+    except InvalidRegistryError as exc:
+        raise HTTPException(404, str(exc))
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Local model verification failed: {exc}")
+
+
+@app.get("/api/local-ai/diagnostics")
+async def local_ai_diagnostics() -> JSONResponse:
+    config = _config.load()
+    status = await _ollama_manager.status()
+    return JSONResponse({
+        "app_engine": "local-ai-v1",
+        "platform": _os_name,
+        "architecture": platform.machine(),
+        "selected_profile": config.selected_profile,
+        "endpoint": config.ollama_endpoint,
+        "ollama_running": status.running,
+        "ollama_version": status.version,
+        "managed_model_ids": config.managed_model_ids,
+    })
 
 
 # ── Static / entry_point serving ──────────────────────────────────────────────
@@ -311,16 +448,10 @@ async def launcher() -> HTMLResponse:
     return HTMLResponse((Path(__file__).parent / "launcher.html").read_text())
 
 
-@app.on_event("shutdown")
-async def _shutdown():
-    if _proxy and not _proxy.is_closed:
-        await _proxy.aclose()
-
-
 if __name__ == "__main__":
     print(f"app-engine → apps from {APPS_DIR}")
     print(f"            state in {STATE_DIR}")
-    print(f"            LLM at   {LLM_BASE} ({LLM_MODEL})")
+    print(f"            Local AI at {_config.load().ollama_endpoint} ({_config.load().selected_profile})")
     uvicorn.run(
         app,
         host=os.environ.get("APP_ENGINE_HOST", "127.0.0.1"),

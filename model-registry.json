@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "profile_id": "quality",
+      "model_id": "qwen3-8b",
+      "ollama_tag": "qwen3:8b",
+      "display_name": "Quality tutor",
+      "expected_download_bytes": 5200000000,
+      "minimum_ram_bytes": 12884901888,
+      "recommended_ram_bytes": 17179869184,
+      "minimum_free_disk_bytes": 7000000000,
+      "context_limit": 8192,
+      "architectures": ["arm64", "x86_64"]
+    },
+    {
+      "profile_id": "compatibility",
+      "model_id": "qwen3-1.7b",
+      "ollama_tag": "qwen3:1.7b",
+      "display_name": "Compatibility tutor",
+      "expected_download_bytes": 1400000000,
+      "minimum_ram_bytes": 6442450944,
+      "recommended_ram_bytes": 8589934592,
+      "minimum_free_disk_bytes": 2200000000,
+      "context_limit": 4096,
+      "architectures": ["arm64", "x86_64"]
+    }
+  ]
+}

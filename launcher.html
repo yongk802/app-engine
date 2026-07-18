@@ -5,153 +5,214 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>app-engine</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --bg:#0f1115; --panel:#15181f; --line:#29303b; --muted:#9aa4b2; --blue:#2563eb; }
   * { box-sizing: border-box; }
-  body { margin: 0; height: 100vh; display: flex; font-family: system-ui, sans-serif;
-         background: #0f1115; color: #e6e6e6; }
-  #sidebar { width: 220px; flex: 0 0 220px; background: #15181f; border-right: 1px solid #262b36;
-             overflow-y: auto; padding: 12px 0; }
-  #sidebar h1 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
-                color: #6b7280; margin: 4px 16px 12px; }
-  .app-btn { display: flex; align-items: center; gap: 10px; width: 100%; border: 0;
-             background: transparent; color: #cbd2dc; padding: 9px 16px; font-size: 14px;
-             cursor: pointer; text-align: left; }
-  .app-btn:hover { background: #1d2230; }
-  .app-btn.active { background: #263041; color: #fff; }
-  .app-btn .ico { font-size: 18px; width: 22px; text-align: center; }
-  .app-btn .chat-dot { margin-left: auto; font-size: 11px; opacity: .5; }
-  #main { flex: 1; position: relative; }
-  .instance { position: absolute; inset: 0; display: none; }
-  .instance.active { display: flex; }
-  .instance iframe { flex: 1; border: 0; background: #fff; height: 100%; }
-  #empty { position: absolute; inset: 0; display: flex; align-items: center;
-           justify-content: center; color: #4b5563; font-size: 15px; }
-  /* chat panel */
-  .chat { width: 340px; flex: 0 0 340px; background: #12151c; border-left: 1px solid #262b36;
-          display: flex; flex-direction: column; }
-  .chat-head { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #262b36; color: #9aa4b2; }
-  .chat-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-  .msg { padding: 8px 11px; border-radius: 10px; font-size: 13px; line-height: 1.45; max-width: 90%;
-         white-space: pre-wrap; }
-  .msg.user { align-self: flex-end; background: #2563eb; color: #fff; }
-  .msg.assistant { align-self: flex-start; background: #1e2430; }
-  .msg.error { background: #3b1d1d; color: #fca5a5; }
-  .chat-in { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #262b36; }
-  .chat-in textarea { flex: 1; resize: none; background: #0d1016; color: #e6e6e6;
-                      border: 1px solid #2b323f; border-radius: 8px; padding: 8px; font: inherit; }
-  .chat-in button { background: #2563eb; color: #fff; border: 0; border-radius: 8px;
-                    padding: 0 14px; cursor: pointer; }
-  .chat-in button:disabled { opacity: .4; }
+  body { margin:0; height:100vh; overflow:hidden; display:flex; font-family:system-ui,sans-serif; background:var(--bg); color:#e6e6e6; }
+  button,textarea,select { font:inherit; }
+  button { cursor:pointer; }
+  #sidebar { width:220px; flex:0 0 220px; background:var(--panel); border-right:1px solid var(--line); overflow-y:auto; z-index:10; }
+  .side-head { display:flex; align-items:center; padding:12px 10px 7px 16px; position:sticky; top:0; background:var(--panel); z-index:1; }
+  .side-head h1 { flex:1; font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:#7f8998; margin:0; }
+  .icon-btn { border:0; background:transparent; color:#cbd2dc; border-radius:7px; padding:7px 9px; }
+  .icon-btn:hover,.icon-btn:focus-visible { background:#242a36; }
+  .app-btn { display:flex; align-items:center; gap:10px; width:100%; border:0; background:transparent; color:#cbd2dc; padding:9px 16px; font-size:14px; text-align:left; }
+  .app-btn:hover { background:#1d2230; } .app-btn.active { background:#263041; color:#fff; }
+  .app-btn .ico { font-size:18px; width:22px; text-align:center; } .app-btn .label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .chat-dot { margin-left:auto; opacity:.55; }
+  #main { flex:1; min-width:0; position:relative; }
+  .instance { position:absolute; inset:0; display:none; min-width:0; }
+  .instance.active { display:flex; } .instance iframe { min-width:0; flex:1; border:0; background:#fff; height:100%; }
+  #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#667085; }
+  #mobile-apps,#mobile-chat { display:none; position:fixed; z-index:8; top:8px; border:1px solid var(--line); background:#1d2230; color:white; border-radius:8px; padding:8px 10px; }
+  #mobile-apps { left:8px; } #mobile-chat { right:8px; }
+  .chat { width:340px; flex:0 0 340px; min-width:0; background:#12151c; border-left:1px solid var(--line); display:flex; flex-direction:column; }
+  .chat-head { padding:11px 14px; font-size:13px; border-bottom:1px solid var(--line); color:var(--muted); }
+  .chat-msgs { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .msg { padding:8px 11px; border-radius:10px; font-size:13px; line-height:1.45; max-width:92%; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:var(--blue); color:#fff; } .msg.assistant { align-self:flex-start; background:#1e2430; }
+  .msg.error { background:#3b1d1d; color:#fca5a5; }
+  .setup-card { margin:auto 0; border:1px solid #354052; border-radius:12px; padding:16px; background:#181d27; }
+  .setup-card h2 { margin:0 0 8px; font-size:17px; } .setup-card p { color:#aeb7c4; font-size:13px; line-height:1.45; }
+  .primary { border:0; border-radius:8px; background:var(--blue); color:#fff; padding:9px 12px; }
+  .secondary { border:1px solid #3a4454; border-radius:8px; background:#222936; color:#fff; padding:9px 12px; }
+  .chat-in { display:flex; gap:6px; padding:10px; border-top:1px solid var(--line); }
+  .chat-in textarea { flex:1; min-width:0; resize:none; background:#0d1016; color:#e6e6e6; border:1px solid #2b323f; border-radius:8px; padding:8px; }
+  .chat-in button { background:var(--blue); color:#fff; border:0; border-radius:8px; padding:0 14px; } button:disabled,textarea:disabled { opacity:.45; cursor:not-allowed; }
+  dialog { width:min(620px,calc(100vw - 24px)); border:1px solid #354052; border-radius:14px; padding:0; background:#151a23; color:#eef2f7; }
+  dialog::backdrop { background:rgba(0,0,0,.7); } .modal-head { display:flex; align-items:center; border-bottom:1px solid var(--line); padding:14px 18px; }
+  .modal-head h2 { flex:1; margin:0; font-size:19px; } .modal-body { padding:18px; max-height:75vh; overflow:auto; }
+  .privacy { padding:10px 12px; background:#12291e; color:#a7f3d0; border-radius:8px; font-size:13px; }
+  .profiles { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:14px 0; }
+  .profile { border:1px solid #354052; background:#1b212c; border-radius:10px; padding:12px; color:inherit; text-align:left; }
+  .profile.selected { border-color:#60a5fa; } .profile small { display:block; color:var(--muted); margin-top:5px; }
+  .status-line { color:var(--muted); font-size:13px; margin:12px 0; white-space:pre-wrap; } progress { width:100%; }
+  @media (max-width: 700px) {
+    #sidebar { position:fixed; inset:0 auto 0 0; width:min(86vw,300px); transform:translateX(-101%); transition:transform .2s; box-shadow:8px 0 24px #0008; }
+    #sidebar.open { transform:translateX(0); }
+    #main { width:100vw; flex:0 0 100vw; }
+    #mobile-apps,#mobile-chat { display:block; }
+    .instance iframe { width:100%; flex:0 0 100%; }
+    .chat { position:absolute; inset:0; width:100%; z-index:6; padding-top:48px; }
+    .chat.mobile-hidden { display:none; }
+    .profiles { grid-template-columns:1fr; }
+  }
 </style>
 </head>
 <body>
-  <nav id="sidebar"><h1>Apps</h1><div id="applist"></div></nav>
-  <div id="main"><div id="empty">Select an app →</div></div>
+  <nav id="sidebar" aria-label="Applications">
+    <div class="side-head"><h1>Apps</h1><button id="ai-settings" class="icon-btn" aria-label="Local AI settings">⚙</button></div>
+    <div id="applist"></div>
+  </nav>
+  <button id="mobile-apps" aria-label="Open apps">☰ Apps</button>
+  <button id="mobile-chat" aria-label="Show or hide tutor chat" hidden>💬 Tutor</button>
+  <main id="main"><div id="empty">Select an app →</div></main>
+
+  <dialog id="ai-dialog" aria-labelledby="ai-title">
+    <div class="modal-head"><h2 id="ai-title">Local AI setup</h2><button class="icon-btn" id="close-ai" aria-label="Close settings">✕</button></div>
+    <div class="modal-body">
+      <div class="privacy">🔒 Everything stays on this computer.</div>
+      <p id="ai-summary" class="status-line">Checking this computer…</p>
+      <div class="profiles">
+        <button class="profile" data-profile="quality"><strong>Quality</strong><small>Better tutoring · recommended for 16 GB+ RAM</small></button>
+        <button class="profile" data-profile="compatibility"><strong>Compatibility</strong><small>Smaller and faster · for less capable hardware</small></button>
+      </div>
+      <progress id="ai-progress" max="100" value="0" hidden></progress>
+      <p id="ai-operation" class="status-line"></p>
+      <div id="managed-models"></div>
+      <div id="ai-actions">
+        <button id="install-ai" class="primary">Install Ollama</button>
+        <button id="start-ai" class="secondary">Start Ollama</button>
+        <button id="download-ai" class="primary">Download selected model</button>
+        <button id="cancel-ai" class="secondary" hidden>Cancel download</button>
+        <button id="retry-ai" class="secondary">Check again</button>
+        <button id="diagnostics-ai" class="secondary">Copy diagnostics</button>
+      </div>
+    </div>
+  </dialog>
 
 <script>
-const state = { apps: [], instances: {}, active: null };
+const state = { apps:[], instances:{}, active:null, ai:null };
+let pullController = null;
+const $ = selector => document.querySelector(selector);
 
 async function boot() {
-  state.apps = await (await fetch('/api/apps')).json();
-  const list = document.getElementById('applist');
-  for (const app of state.apps) {
-    const btn = document.createElement('button');
-    btn.className = 'app-btn';
-    btn.innerHTML = `<span class="ico">${app.icon}</span><span>${app.label}</span>` +
-                    (app.chat_enabled ? `<span class="chat-dot">💬</span>` : '');
-    btn.onclick = () => open(app, btn);
-    list.appendChild(btn);
-  }
+  try {
+    const response = await fetch('/api/apps');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    state.apps = await response.json();
+    for (const app of state.apps) {
+      const btn = document.createElement('button'); btn.className = 'app-btn';
+      const icon = document.createElement('span'); icon.className = 'ico'; icon.textContent = app.icon;
+      const label = document.createElement('span'); label.className = 'label'; label.textContent = app.label;
+      btn.append(icon,label);
+      if (app.chat_enabled) { const dot=document.createElement('span'); dot.className='chat-dot'; dot.textContent='💬'; btn.append(dot); }
+      btn.onclick = () => openApp(app,btn);
+      $('#applist').append(btn);
+    }
+    if (!state.apps.length) $('#empty').textContent='No apps found. Point APP_ENGINE_APPS_DIR at your apps folder.';
+  } catch (error) { $('#empty').textContent=`Could not load apps: ${error.message}`; }
 }
 
-function open(app, btn) {
-  document.querySelectorAll('.app-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById('empty').style.display = 'none';
-  document.querySelectorAll('.instance').forEach(i => i.classList.remove('active'));
-
-  if (state.instances[app.id]) {
-    state.instances[app.id].classList.add('active');
-    return;
-  }
-  const inst = document.createElement('div');
-  inst.className = 'instance active';
-  const iframe = document.createElement('iframe');
-  if (app.sandbox) iframe.sandbox = app.sandbox;
-  iframe.src = app.url;
-  inst.appendChild(iframe);
-  if (app.chat_enabled) inst.appendChild(buildChat(app));
-  document.getElementById('main').appendChild(inst);
-  state.instances[app.id] = inst;
+function openApp(app,btn) {
+  document.querySelectorAll('.app-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active');
+  $('#empty').hidden=true; document.querySelectorAll('.instance').forEach(i=>i.classList.remove('active'));
+  state.active=app.id; $('#sidebar').classList.remove('open');
+  if (state.instances[app.id]) { state.instances[app.id].classList.add('active'); return; }
+  const inst=document.createElement('section'); inst.className='instance active';
+  const iframe=document.createElement('iframe'); iframe.title=app.label; if(app.sandbox) iframe.sandbox=app.sandbox; iframe.src=app.url; inst.append(iframe);
+  if(app.chat_enabled) { inst.append(buildChat(app)); $('#mobile-chat').hidden=false; } else $('#mobile-chat').hidden=true;
+  $('#main').append(inst); state.instances[app.id]=inst;
 }
+
+function element(tag,className,text) { const node=document.createElement(tag); if(className) node.className=className; if(text!==undefined) node.textContent=text; return node; }
 
 function buildChat(app) {
-  const messages = [];
-  const panel = document.createElement('div');
-  panel.className = 'chat';
-  panel.innerHTML = `
-    <div class="chat-head">💬 Q&A — ${app.label}</div>
-    <div class="chat-msgs"></div>
-    <div class="chat-in"><textarea rows="1" placeholder="Ask a question…"></textarea>
-      <button>↑</button></div>`;
-  const msgs = panel.querySelector('.chat-msgs');
-  const ta = panel.querySelector('textarea');
-  const send = panel.querySelector('button');
+  const messages=[]; const panel=element('aside','chat mobile-hidden');
+  const head=element('div','chat-head'); head.textContent='💬 Q&A — '; head.append(document.createTextNode(app.label));
+  const msgs=element('div','chat-msgs'); const input=element('div','chat-in');
+  const ta=document.createElement('textarea'); ta.rows=1; ta.placeholder='Ask a question…'; ta.disabled=true;
+  const send=element('button','', '↑'); send.disabled=true; send.setAttribute('aria-label','Send question');
+  input.append(ta,send); panel.append(head,msgs,input);
+  const add=(role,text)=>{ const node=element('div','msg '+role,text); msgs.append(node); msgs.scrollTop=msgs.scrollHeight; return node; };
 
-  const add = (role, text) => {
-    const d = document.createElement('div');
-    d.className = 'msg ' + role;
-    d.textContent = text;
-    msgs.appendChild(d);
-    msgs.scrollTop = msgs.scrollHeight;
-    return d;
-  };
+  async function refreshChatReadiness() {
+    msgs.replaceChildren(element('div','msg assistant','Checking local AI…'));
+    try {
+      const status=await fetchAIStatus();
+      if(status.state==='ready') { msgs.replaceChildren(element('div','msg assistant','Local tutor ready. Ask about anything in this app.')); ta.disabled=send.disabled=false; }
+      else {
+        ta.disabled=send.disabled=true; const card=element('div','setup-card'); card.append(element('h2','', 'Set up local AI'),element('p','', 'Download a private tutor model that runs entirely on this computer.'));
+        const setup=element('button','primary','Set up local AI'); setup.onclick=()=>openAISettings(); card.append(setup); msgs.replaceChildren(card);
+      }
+    } catch(error) { const err=element('div','msg error','Could not check local AI. Open settings to retry.'); msgs.replaceChildren(err); }
+  }
 
   async function ask() {
-    const text = ta.value.trim();
-    if (!text) return;
-    ta.value = '';
-    messages.push({ role: 'user', content: text });
-    add('user', text);
-    const ai = add('assistant', '');
-    send.disabled = ta.disabled = true;
+    const text=ta.value.trim(); if(!text)return; ta.value=''; messages.push({role:'user',content:text}); add('user',text);
+    const ai=add('assistant','Loading the local model…'); send.disabled=ta.disabled=true;
     try {
-      const resp = await fetch('/api/app-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ app_id: app.id, messages }),
-      });
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let full = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        for (const line of dec.decode(value).split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const d = JSON.parse(line.slice(6));
-            if (d.type === 'token') { full += d.text; ai.textContent = full; msgs.scrollTop = msgs.scrollHeight; }
-            else if (d.type === 'error') { ai.textContent = '⚠️ ' + d.error; ai.classList.add('error'); }
-          } catch (e) {}
-        }
-      }
-      if (full) messages.push({ role: 'assistant', content: full });
-    } catch (e) {
-      ai.textContent = '⚠️ connection failed';
-      ai.classList.add('error');
-    } finally {
-      send.disabled = ta.disabled = false;
-      ta.focus();
-    }
+      const resp=await fetch('/api/app-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({app_id:app.id,messages})});
+      if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const reader=resp.body.getReader(), dec=new TextDecoder(); let full='', streamBuffer='';
+      for(;;){ const {done,value}=await reader.read(); streamBuffer += dec.decode(value||new Uint8Array(),{stream:!done});
+        const lines=streamBuffer.split('\n'); streamBuffer=done?'':lines.pop();
+        for(const line of lines){ if(!line.startsWith('data: '))continue; const event=JSON.parse(line.slice(6));
+          if(event.type==='token'){ full+=event.text; ai.textContent=full; }
+          else if(event.type==='setup_required'){ ai.textContent='Local AI setup is required.'; ai.classList.add('error'); }
+          else if(event.type==='error'){ ai.textContent='⚠️ '+(event.error||event.message); ai.classList.add('error'); }
+        } if(done)break; }
+      if(full) messages.push({role:'assistant',content:full});
+    } catch(error){ ai.textContent='⚠️ connection failed: '+error.message; ai.classList.add('error'); }
+    finally { send.disabled=ta.disabled=false; ta.focus(); }
   }
-  send.onclick = ask;
-  ta.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
-  });
-  return panel;
+  send.onclick=ask; ta.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}};
+  refreshChatReadiness(); return panel;
 }
 
+async function fetchAIStatus(){ const response=await fetch('/api/local-ai/status'); if(!response.ok)throw new Error(`HTTP ${response.status}`); state.ai=await response.json(); return state.ai; }
+
+async function openAISettings(){ $('#ai-dialog').showModal(); await renderAISettings(); }
+async function renderAISettings(){
+  $('#ai-summary').textContent='Checking this computer…';
+  try { const data=await fetchAIStatus();
+    document.querySelectorAll('.profile').forEach(b=>b.classList.toggle('selected',b.dataset.profile===data.selected_profile));
+    const ram=(data.system.ram_bytes/1024**3).toFixed(0), model=data.profiles.find(p=>p.profile_id===data.selected_profile);
+    $('#ai-summary').textContent=data.state==='ready'?`Ready · ${model.display_name}`:`${data.recommendation.reason}\nThis computer has ${ram} GB RAM. Selected download: ${(model.expected_download_bytes/1e9).toFixed(1)} GB.`;
+    $('#install-ai').hidden=data.system.ollama_service_state!=='missing'; $('#start-ai').hidden=data.system.ollama_service_state!=='stopped';
+    $('#download-ai').hidden=!data.ollama.running||data.ollama.installed_model_ids.includes(model.model_id);
+    const managed=$('#managed-models'); managed.replaceChildren();
+    for(const modelId of data.managed_model_ids){ const row=element('p','status-line',`Managed model: ${modelId} `); const remove=element('button','secondary','Remove');
+      remove.onclick=async()=>{ if(!confirm(`Remove ${modelId}? Ollama may reclaim its downloaded files.`))return; await fetch('/api/local-ai/models/'+encodeURIComponent(modelId),{method:'DELETE'}); await renderAISettings(); }; row.append(remove); managed.append(row); }
+  } catch(error){ $('#ai-summary').textContent='Could not inspect local AI: '+error.message; }
+}
+
+document.querySelectorAll('.profile').forEach(button=>button.onclick=async()=>{ await fetch('/api/local-ai/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:button.dataset.profile})}); await renderAISettings(); });
+$('#install-ai').onclick=async()=>{ const plan=await (await fetch('/api/local-ai/install-plan')).json();
+  if(!confirm(`Open the official Ollama installer?\n\nSource: ${plan.official_source}\nEffect: ${plan.effect}`))return;
+  const token=await (await fetch('/api/local-ai/authorize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.plan_id})})).json();
+  await fetch('/api/local-ai/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.plan_id,token:token.token})});
+  $('#ai-operation').textContent='Complete the official installer, then choose Check again.';
+};
+$('#start-ai').onclick=async()=>{ await fetch('/api/local-ai/start',{method:'POST'}); $('#ai-operation').textContent='Starting Ollama…'; setTimeout(renderAISettings,1500); };
+$('#download-ai').onclick=async()=>{ const data=state.ai||await fetchAIStatus(), model=data.profiles.find(p=>p.profile_id===data.selected_profile);
+  if(!confirm(`Download ${model.display_name}?\n\nUses about ${(model.expected_download_bytes/1e9).toFixed(1)} GB of disk space.`))return;
+  const progress=$('#ai-progress'); progress.hidden=false; $('#ai-operation').textContent='Preparing download…'; $('#cancel-ai').hidden=false;
+  pullController=new AbortController();
+  let pullCompleted=false;
+  try {
+    const response=await fetch('/api/local-ai/pull/'+encodeURIComponent(model.model_id),{method:'POST',signal:pullController.signal}), reader=response.body.getReader(), dec=new TextDecoder(); let streamBuffer='';
+    for(;;){const {done,value}=await reader.read(); streamBuffer+=dec.decode(value||new Uint8Array(),{stream:!done}); const lines=streamBuffer.split('\n'); streamBuffer=done?'':lines.pop();
+      for(const line of lines){if(!line.startsWith('data: '))continue; const event=JSON.parse(line.slice(6)); progress.value=event.percent||0; pullCompleted=event.status==='complete'||pullCompleted; $('#ai-operation').textContent=event.status==='error'?event.message:`${event.status} · ${event.percent||0}%`;}
+      if(done)break;}
+    if(pullCompleted){ $('#ai-operation').textContent='Verifying the local tutor…'; const result=await (await fetch('/api/local-ai/verify/'+encodeURIComponent(model.model_id),{method:'POST'})).json(); $('#ai-operation').textContent=result.ok?'Local tutor verified: '+result.sample:'Verification failed. Try the smaller model.'; }
+  } catch(error) { $('#ai-operation').textContent=error.name==='AbortError'?'Download cancelled. You can resume later.':'Download failed: '+error.message; }
+  finally { pullController=null; $('#cancel-ai').hidden=true; await renderAISettings(); }
+};
+$('#cancel-ai').onclick=()=>{ if(pullController) pullController.abort(); };
+$('#diagnostics-ai').onclick=async()=>{ const data=await (await fetch('/api/local-ai/diagnostics')).json(), text=JSON.stringify(data,null,2); try{await navigator.clipboard.writeText(text); $('#ai-operation').textContent='Diagnostics copied.';}catch(_){$('#ai-operation').textContent=text;} };
+$('#retry-ai').onclick=renderAISettings; $('#ai-settings').onclick=openAISettings; $('#close-ai').onclick=()=>$('#ai-dialog').close();
+$('#mobile-apps').onclick=()=>$('#sidebar').classList.toggle('open');
+$('#mobile-chat').onclick=()=>{ const chat=document.querySelector('.instance.active .chat'); if(chat)chat.classList.toggle('mobile-hidden'); };
 boot();
 </script>
 </body>

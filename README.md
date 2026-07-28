@@ -3,11 +3,31 @@
 A minimal, standalone host runtime for **Atrium-style apps** — extracted so the
 apps (and this engine) can be open-sourced without open-sourcing Atrium.
 
+Free and open source ([MIT](LICENSE)), it runs entirely on your own computer,
+including its optional local AI.
+
 An "app" is a directory with an `app.json` manifest and an `index.html` (or an
 `entry_point` backend). The engine discovers apps, serves them in sandboxed
 iframes, and provides the small host contract they rely on.
 
+## New here? Start with the getting-started guide
+
+**[docs/getting-started.md](docs/getting-started.md)** walks you from nothing
+installed — through installing **git**, cloning the repo, running the engine,
+and setting up a **free local AI (Qwen via Ollama)** — with no prior git
+experience assumed. The quick version is below.
+
 ## Run
+
+Already have git and Python? Clone and run (see the
+[getting-started guide](docs/getting-started.md) if you don't):
+
+```bash
+git clone https://github.com/YOUR-USERNAME/app-engine.git
+cd app-engine
+```
+
+Then:
 
 ```bash
 python -m venv .venv
@@ -20,6 +40,21 @@ APP_ENGINE_APPS_DIR=/path/to/apps python engine.py
 
 On Windows PowerShell, set the apps directory with
 `$env:APP_ENGINE_APPS_DIR = "C:\path\to\apps"` before starting the engine.
+
+### Getting apps to run
+
+`APP_ENGINE_APPS_DIR` can point at any directory whose subfolders are apps (see
+[app.json](#appjson)). The reference companion collection these docs assume is
+**personal-apps** — games, tools, and local-AI tutors written for exactly this
+host contract (it also provides the shared `app-state-bridge.js`). Clone it
+somewhere and point the engine at it:
+
+```bash
+APP_ENGINE_APPS_DIR=/path/to/personal-apps python engine.py
+```
+
+You can equally write your own apps — the only requirement is an `app.json`
+manifest (and usually an `index.html`).
 
 ## Local tutor setup
 
@@ -133,5 +168,18 @@ passes and transport failures stay at or below 5%.
 Atrium serves the same contract internally (`atrium/apps_routes.py`,
 `atrium/apps_server.py`, `atrium/app_chat.py`). This engine is the decoupled,
 dependency-free subset: no auth stack, no settings merge, no workspace tools —
-just what an app touches at runtime. Apps written for one run unmodified on the
-other.
+just what an app touches at runtime. Apps that stay within the documented
+host↔app contract above (`/api/app-state`, `/api/app-chat`, `/state`, and
+static assets) run unmodified on either host. Apps that call Atrium-specific
+backends beyond that contract (custom `/apps/{id}/api/…` endpoints, shared
+Atrium static files, `/chat/brains`, `/config/…`) will load in app-engine but
+those particular features won't function here.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+setup, git workflow, and guidelines.
+
+## License
+
+Released under the [MIT License](LICENSE). Free to use, modify, and distribute.

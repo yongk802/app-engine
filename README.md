@@ -103,7 +103,9 @@ cover a question.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/apps` | discovered app list (launcher metadata) |
+| `GET /api/apps` | discovered app list (launcher metadata, incl. version/description/categories/screenshots/compatible) |
+| `GET /api/engine` | `{name, version}` — engine identity, for `min_engine_version` gating |
+| `GET /api/apps/rejected` | folders that failed manifest validation, with the reason (dev aid) |
 | `GET /state` | `{csrf_token, session}` — single-user stub |
 | `GET/PUT /api/app-state/{id}` | per-app JSON blob (a `localStorage` replacement, 100 KB) |
 | `POST /api/app-chat` | typed SSE stream to the selected local Ollama model |
@@ -112,23 +114,66 @@ cover a question.
 | `GET /apps/{id}/…` | app static files, **or** reverse-proxy to the app's `entry_point` |
 | `GET /apps/{file.js}` | shared root files (e.g. `app-state-bridge.js`) |
 
+The host also **posts lifecycle events** to each app's iframe via `postMessage`
+as the user switches apps or the tab's visibility changes:
+
+```js
+// inside your app:
+window.addEventListener('message', (e) => {
+  if (e.data?.type === 'appengine:lifecycle') {
+    // e.data.event is 'visible' or 'hidden'
+  }
+});
+```
+
 ## app.json
+
+The manifest is a shared contract honored by both app-engine and Atrium. Only
+`label`, `icon`, and an entry point (an `index.html` **or** an `entry_point`
+backend) are required; everything else is optional and older manifests keep
+working.
 
 ```json
 {
   "id": "my-app",
   "label": "My App",
   "icon": "✨",
-  "sandbox": "allow-scripts allow-same-origin",
+  "version": "1.0.0",
+  "description": "One line shown in the catalog.",
+  "categories": ["tools"],
+  "author": "Your Name",
+  "screenshots": ["media/home.png"],
+  "min_engine_version": "1.0.0",
+  "sandbox": "allow-scripts",
   "chat_enabled": false,
   "chat_system_prompt": "",
   "entry_point": ""
 }
 ```
 
+| Field | Purpose |
+|---|---|
+| `id` | Stable unique id (defaults to the folder name). `[a-z0-9][a-z0-9-]*`. |
+| `label`, `icon` | **Required.** Display name + emoji shown in the launcher. |
+| `version` | Semver; the `major.minor.patch` triple defines update ordering. |
+| `description`, `categories`, `author`, `screenshots` | Listing metadata (catalog card, search, category grouping, info dialog). Screenshots are relative paths inside the app. |
+| `min_engine_version` | Minimum engine required; older engines show the app as incompatible instead of serving it broken. |
+| `sandbox` | iframe `sandbox` attribute (default `allow-scripts`). |
+| `entry_point` | Backend URL to reverse-proxy `/apps/{id}/…` to (omit for static apps). |
+| `chat_enabled`, `chat_system_prompt`, `chat_knowledge` | Opt into the grounded local-AI tutor panel. |
+
 - **Pure-frontend app** — omit `entry_point`; persist via `AppState` (`app-state-bridge.js`) → `/api/app-state`.
 - **App with its own backend** — set `entry_point` (e.g. `http://localhost:8550`); the engine reverse-proxies `/apps/{id}/…` to it and injects `<base href>`.
 - **Tutor chat** — set `chat_enabled: true` + a `chat_system_prompt`; the launcher renders a chat panel wired to `/api/app-chat`.
+
+Validate a manifest before shipping (schema in [`app.schema.json`](app.schema.json)):
+
+```bash
+python -m app_engine.manifest path/to/my-app
+```
+
+A malformed manifest is surfaced in the launcher (and `GET /api/apps/rejected`)
+with the specific error, rather than the app silently vanishing.
 
 ## Config (env)
 

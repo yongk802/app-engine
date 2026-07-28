@@ -35,7 +35,9 @@ def test_manifest_html_is_data_not_launcher_markup(tmp_path, monkeypatch):
         assert client.get("/api/apps").json()[0]["label"].startswith("<img")
         launcher = client.get("/").text
     assert "btn.innerHTML" not in launcher
-    assert "label.textContent = app.label" in launcher
+    # label is inserted via element('span','label', app.label) → node.textContent=text
+    assert "element('span','label', app.label)" in launcher
+    assert "node.textContent=text" in launcher
 
 
 def test_local_ai_config_rejects_lan_and_public_endpoints(tmp_path):

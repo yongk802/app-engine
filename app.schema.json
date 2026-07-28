@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://app-engine/app.schema.json",
+  "title": "app-engine app.json",
+  "description": "Manifest for an app-engine / Atrium app. Place this file at the root of an app directory alongside index.html (or declare an entry_point backend). The authoritative validator is app_engine/manifest.py; this schema mirrors it for editor tooling.",
+  "type": "object",
+  "required": ["label", "icon"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Stable unique app id, independent of display name or path. Defaults to the folder name."
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable display name shown in the launcher."
+    },
+    "icon": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Emoji or single character shown beside the label."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+(\\.\\d+){0,2}([-+][0-9A-Za-z.-]+)?$",
+      "description": "Semantic version (e.g. \"1.2.0\"). The major.minor.patch triple defines update ordering."
+    },
+    "description": {
+      "type": "string",
+      "description": "One- or two-line summary shown in the catalog."
+    },
+    "categories": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Taxonomy tags for grouping and search (e.g. [\"games\"], [\"tools\", \"ai\"])."
+    },
+    "author": {
+      "type": "string",
+      "description": "Author or publisher name."
+    },
+    "screenshots": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Relative paths (inside the app dir) to preview images. No leading '/' or '..'."
+    },
+    "min_engine_version": {
+      "type": "string",
+      "pattern": "^\\d+(\\.\\d+){0,2}([-+][0-9A-Za-z.-]+)?$",
+      "description": "Minimum host engine version required. Apps requiring a newer engine are shown as incompatible rather than served broken."
+    },
+    "sandbox": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "boolean", "enum": [false] }
+      ],
+      "default": "allow-scripts",
+      "description": "iframe sandbox attribute. false disables the sandbox entirely (discouraged). Avoid combining allow-scripts with allow-same-origin on the single-origin engine."
+    },
+    "entry_point": {
+      "type": "string",
+      "description": "Backend URL to reverse-proxy /apps/{id}/... to. Omit for a pure static (index.html) app."
+    },
+    "chat_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show the grounded local-AI tutor panel for this app."
+    },
+    "chat_system_prompt": {
+      "type": "string",
+      "description": "System prompt for the tutor when chat_enabled is true."
+    },
+    "chat_knowledge": {
+      "type": "string",
+      "description": "Relative path to a reviewed knowledge pack used to ground tutor answers."
+    }
+  }
+}

@@ -58,16 +58,45 @@
     .chat.mobile-hidden { display:none; }
     .profiles { grid-template-columns:1fr; }
   }
+  .search-wrap { padding:4px 10px 8px; position:sticky; top:41px; background:var(--panel); z-index:1; }
+  #app-search { width:100%; background:#0d1016; color:#e6e6e6; border:1px solid #2b323f; border-radius:8px; padding:7px 10px; font-size:13px; }
+  .cat-head { padding:10px 16px 3px; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:#6b7482; }
+  .app-btn { align-items:flex-start; }
+  .app-btn .body { min-width:0; flex:1; display:flex; flex-direction:column; }
+  .app-btn .label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .app-btn .meta { font-size:11px; color:#6b7482; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .app-btn.incompatible { opacity:.5; cursor:not-allowed; }
+  .app-btn .badge { margin-left:auto; font-size:10px; background:#3b2d12; color:#f7c777; border-radius:5px; padding:1px 5px; align-self:center; }
+  .app-btn .info { margin-left:auto; opacity:.45; background:transparent; border:0; color:#cbd2dc; padding:2px 5px; border-radius:6px; }
+  .app-btn .info:hover { opacity:1; background:#2b3240; }
+  .no-match { padding:14px 16px; color:#667085; font-size:13px; }
+  .rejected-note { margin:8px 12px; padding:8px 10px; background:#2a1d12; color:#f0b47a; border-radius:8px; font-size:12px; line-height:1.4; }
+  .rejected-note code { color:#ffd9a8; }
+  .app-info h2 { display:flex; align-items:center; gap:9px; }
+  .app-info .ver { font-size:12px; color:var(--muted); font-weight:normal; }
+  .app-info .desc { color:#c3cbd6; font-size:14px; line-height:1.5; margin:6px 0 2px; }
+  .app-info .tags { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+  .app-info .tag { font-size:12px; background:#20283a; color:#9db4e0; border-radius:6px; padding:2px 9px; }
+  .app-info .by { color:#6b7482; font-size:12px; }
+  .shots { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+  .shots img { width:100%; border:1px solid var(--line); border-radius:9px; background:#0d1016; }
 </style>
 </head>
 <body>
   <nav id="sidebar" aria-label="Applications">
     <div class="side-head"><h1>Apps</h1><button id="ai-settings" class="icon-btn" aria-label="Local AI settings">⚙</button></div>
+    <div class="search-wrap"><input id="app-search" type="search" placeholder="Search apps…" aria-label="Search apps" autocomplete="off"></div>
+    <div id="rejected-note"></div>
     <div id="applist"></div>
   </nav>
   <button id="mobile-apps" aria-label="Open apps">☰ Apps</button>
   <button id="mobile-chat" aria-label="Show or hide tutor chat" hidden>💬 Tutor</button>
   <main id="main"><div id="empty">Select an app →</div></main>
+
+  <dialog id="info-dialog" class="app-info" aria-labelledby="info-title">
+    <div class="modal-head"><h2 id="info-title"></h2><button class="icon-btn" id="close-info" aria-label="Close">✕</button></div>
+    <div class="modal-body" id="info-body"></div>
+  </dialog>
 
   <dialog id="ai-dialog" aria-labelledby="ai-title">
     <div class="modal-head"><h2 id="ai-title">Local AI setup</h2><button class="icon-btn" id="close-ai" aria-label="Close settings">✕</button></div>
@@ -93,7 +122,7 @@
   </dialog>
 
 <script>
-const state = { apps:[], instances:{}, active:null, ai:null };
+const state = { apps:[], instances:{}, active:null, ai:null, engine:null, rejected:[], query:'' };
 let pullController = null;
 const $ = selector => document.querySelector(selector);
 const AI_CHANGE_REASONS = ['profile_changed','runtime_started','model_verified','model_removed','manual_refresh'];
@@ -104,32 +133,110 @@ function notifyAIStatusChanged(reason){
 
 async function boot() {
   try {
-    const response = await fetch('/api/apps');
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    state.apps = await response.json();
-    for (const app of state.apps) {
-      const btn = document.createElement('button'); btn.className = 'app-btn';
-      const icon = document.createElement('span'); icon.className = 'ico'; icon.textContent = app.icon;
-      const label = document.createElement('span'); label.className = 'label'; label.textContent = app.label;
-      btn.append(icon,label);
-      if (app.chat_enabled) { const dot=document.createElement('span'); dot.className='chat-dot'; dot.textContent='💬'; btn.append(dot); }
-      btn.onclick = () => openApp(app,btn);
-      $('#applist').append(btn);
-    }
-    if (!state.apps.length) $('#empty').textContent='No apps found. Point APP_ENGINE_APPS_DIR at your apps folder.';
+    const [appsRes, engineRes, rejRes] = await Promise.all([
+      fetch('/api/apps'), fetch('/api/engine').catch(()=>null), fetch('/api/apps/rejected').catch(()=>null),
+    ]);
+    if (!appsRes.ok) throw new Error(`HTTP ${appsRes.status}`);
+    state.apps = await appsRes.json();
+    if (engineRes && engineRes.ok) state.engine = await engineRes.json();
+    if (rejRes && rejRes.ok) state.rejected = await rejRes.json();
+    renderRejected();
+    renderList();
+    if (!state.apps.length && !state.rejected.length) $('#empty').textContent='No apps found. Point APP_ENGINE_APPS_DIR at your apps folder.';
   } catch (error) { $('#empty').textContent=`Could not load apps: ${error.message}`; }
 }
 
+function renderRejected() {
+  const host=$('#rejected-note'); host.replaceChildren();
+  if(!state.rejected || !state.rejected.length) return;
+  const note=element('div','rejected-note');
+  note.append(element('strong','', `${state.rejected.length} app${state.rejected.length>1?'s':''} skipped (manifest error):`));
+  for(const r of state.rejected){ const line=element('div'); const code=element('code','', r.dir); line.append(code, document.createTextNode(' — '+r.reason)); note.append(line); }
+  host.append(note);
+}
+
+function appMatches(app,q) {
+  if(!q) return true;
+  const hay=[app.label,app.description,app.id,(app.categories||[]).join(' '),app.author].join(' ').toLowerCase();
+  return hay.includes(q);
+}
+
+function renderList() {
+  const host=$('#applist'); host.replaceChildren();
+  const q=state.query.trim().toLowerCase();
+  const matched=state.apps.filter(a=>appMatches(a,q));
+  if(!matched.length){ host.append(element('div','no-match', state.apps.length?'No apps match your search.':'')); return; }
+  // Group by first category; uncategorized last under "Apps".
+  const groups=new Map();
+  for(const app of matched){ const cat=(app.categories&&app.categories[0])||'￿Apps'; if(!groups.has(cat)) groups.set(cat,[]); groups.get(cat).push(app); }
+  const cats=[...groups.keys()].sort((a,b)=>a.localeCompare(b));
+  const showHeads=cats.length>1;
+  for(const cat of cats){
+    if(showHeads){ const label=cat==='￿Apps'?'Other':cat; host.append(element('div','cat-head', label)); }
+    for(const app of groups.get(cat)) host.append(buildAppButton(app));
+  }
+}
+
+function buildAppButton(app) {
+  const btn=element('button','app-btn'); btn.dataset.appId=app.id;
+  if(state.active===app.id) btn.classList.add('active');
+  const icon=element('span','ico', app.icon);
+  const body=element('div','body'); body.append(element('span','label', app.label));
+  const bits=[]; if(app.version && app.version!=='0.0.0') bits.push('v'+app.version);
+  if(app.description) bits.push(app.description);
+  if(bits.length) { const meta=element('span','meta', bits.join(' · ')); meta.title=app.description||''; body.append(meta); }
+  btn.append(icon,body);
+  if(app.compatible===false){
+    btn.classList.add('incompatible');
+    const badge=element('span','badge','needs engine ≥ '+app.min_engine_version); btn.append(badge);
+    btn.title=`This app needs engine ${app.min_engine_version}; this engine is ${state.engine?state.engine.version:'older'}.`;
+    btn.onclick=()=>showInfo(app);
+  } else {
+    if(app.chat_enabled){ const dot=element('span','chat-dot','💬'); btn.append(dot); }
+    if(app.description||app.author||(app.screenshots&&app.screenshots.length)||(app.categories&&app.categories.length)){
+      const info=element('button','info','ⓘ'); info.setAttribute('aria-label','About '+app.label);
+      info.onclick=e=>{ e.stopPropagation(); showInfo(app); }; btn.append(info);
+    }
+    btn.onclick=()=>openApp(app,btn);
+  }
+  return btn;
+}
+
+function showInfo(app) {
+  $('#info-title').replaceChildren(document.createTextNode(app.icon+' '+app.label));
+  if(app.version && app.version!=='0.0.0') $('#info-title').append(element('span','ver','v'+app.version));
+  const body=$('#info-body'); body.replaceChildren();
+  if(app.description) body.append(element('p','desc', app.description));
+  if(app.categories&&app.categories.length){ const tags=element('div','tags'); for(const c of app.categories) tags.append(element('span','tag', c)); body.append(tags); }
+  if(app.author) body.append(element('div','by','by '+app.author));
+  if(app.compatible===false) body.append(element('p','desc','⚠️ Requires engine ≥ '+app.min_engine_version+' ('+(state.engine?state.engine.version:'unknown')+' installed).'));
+  if(app.screenshots&&app.screenshots.length){ const shots=element('div','shots'); for(const s of app.screenshots){ const img=document.createElement('img'); img.loading='lazy'; img.alt=app.label+' screenshot'; img.src=app.url+s; shots.append(img); } body.append(shots); }
+  $('#info-dialog').showModal();
+}
+
+function signalLifecycle(appId,event){
+  const inst=state.instances[appId]; if(!inst) return;
+  const frame=inst.querySelector('iframe');
+  try { frame && frame.contentWindow && frame.contentWindow.postMessage({type:'appengine:lifecycle',event,app:appId},'*'); } catch(_){}
+}
+
 function openApp(app,btn) {
-  document.querySelectorAll('.app-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active');
+  if(app.compatible===false){ showInfo(app); return; }
+  const previous=state.active;
+  document.querySelectorAll('.app-btn').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active');
   $('#empty').hidden=true; document.querySelectorAll('.instance').forEach(i=>i.classList.remove('active'));
+  if(previous && previous!==app.id) signalLifecycle(previous,'hidden');
   state.active=app.id; $('#sidebar').classList.remove('open');
-  if (state.instances[app.id]) { state.instances[app.id].classList.add('active'); return; }
+  if (state.instances[app.id]) { state.instances[app.id].classList.add('active'); signalLifecycle(app.id,'visible'); return; }
   const inst=document.createElement('section'); inst.className='instance active';
-  const iframe=document.createElement('iframe'); iframe.title=app.label; if(app.sandbox) iframe.sandbox=app.sandbox; iframe.src=app.url; inst.append(iframe);
+  const iframe=document.createElement('iframe'); iframe.title=app.label; if(app.sandbox) iframe.sandbox=app.sandbox; iframe.src=app.url;
+  iframe.addEventListener('load',()=>{ if(state.active===app.id) signalLifecycle(app.id,'visible'); });
+  inst.append(iframe);
   if(app.chat_enabled) { inst.append(buildChat(app)); $('#mobile-chat').hidden=false; } else $('#mobile-chat').hidden=true;
   $('#main').append(inst); state.instances[app.id]=inst;
 }
+
+document.addEventListener('visibilitychange',()=>{ if(state.active) signalLifecycle(state.active, document.hidden?'hidden':'visible'); });
 
 function element(tag,className,text) { const node=document.createElement(tag); if(className) node.className=className; if(text!==undefined) node.textContent=text; return node; }
 
@@ -221,6 +328,8 @@ $('#diagnostics-ai').onclick=async()=>{ const data=await (await fetch('/api/loca
 $('#retry-ai').onclick=async()=>{await renderAISettings(); notifyAIStatusChanged('manual_refresh');}; $('#ai-settings').onclick=openAISettings; $('#close-ai').onclick=()=>$('#ai-dialog').close();
 $('#mobile-apps').onclick=()=>$('#sidebar').classList.toggle('open');
 $('#mobile-chat').onclick=()=>{ const chat=document.querySelector('.instance.active .chat'); if(chat)chat.classList.toggle('mobile-hidden'); };
+$('#app-search').oninput=e=>{ state.query=e.target.value; renderList(); };
+$('#close-info').onclick=()=>$('#info-dialog').close();
 boot();
 </script>
 </body>

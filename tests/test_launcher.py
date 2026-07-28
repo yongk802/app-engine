@@ -7,7 +7,10 @@ HTML = Path("launcher.html").read_text()
 def test_manifest_values_are_not_inserted_with_inner_html():
     assert "btn.innerHTML" not in HTML
     assert "${app.label}" not in HTML
-    assert ".textContent = app.label" in HTML
+    # app.label reaches the DOM only through the element() helper, which sets
+    # textContent (never innerHTML) — so untrusted manifest text is inert.
+    assert "element('span','label', app.label)" in HTML
+    assert "node.textContent=text" in HTML
 
 
 def test_local_ai_setup_has_privacy_profiles_and_confirmation():

@@ -44,6 +44,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from app_engine.chat import ChatRuntime
 from app_engine.config import ConfigStore
 from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_declared_knowledge
+from app_engine import manifest as _manifest
+from app_engine.manifest import ENGINE_VERSION
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.system_probe import SystemProbe
@@ -97,14 +99,29 @@ class App:
     chat_knowledge: str
     entry_point: str
     url: str
+    # listing metadata (shared manifest v2)
+    version: str
+    description: str
+    categories: list
+    author: str
+    screenshots: list
+    min_engine_version: str
+    compatible: bool
+    warnings: list
     root: str  # filesystem path (not sent to client)
 
 
-def discover() -> dict[str, App]:
-    """Scan APPS_DIR's immediate children for valid apps (app.json)."""
+def inspect_apps() -> tuple[dict[str, App], list[dict]]:
+    """Scan APPS_DIR's immediate children.
+
+    Returns (apps_by_id, rejected). `rejected` lists folders that look like an
+    app but failed validation — surfaced so a malformed manifest is visible
+    instead of silently vanishing.
+    """
     out: dict[str, App] = {}
+    rejected: list[dict] = []
     if not APPS_DIR.is_dir():
-        return out
+        return out, rejected
     for d in sorted(APPS_DIR.iterdir()):
         if d.name.startswith(".") or not d.is_dir():
             continue
@@ -113,30 +130,42 @@ def discover() -> dict[str, App]:
             continue
         try:
             m = json.loads(manifest.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            rejected.append({"dir": d.name, "reason": f"invalid app.json: {exc}"})
             continue
-        entry_point = m.get("entry_point", "")
-        if not (d / "index.html").is_file() and not entry_point:
+        has_index = (d / "index.html").is_file()
+        errors, warnings = _manifest.validate_manifest(m, has_index=has_index, dir_name=d.name)
+        if errors:
+            rejected.append({"dir": d.name, "reason": "; ".join(errors)})
             continue
-        app_id = m.get("id", d.name)
-        if not _APP_ID_RE.match(app_id) or not m.get("label") or not m.get("icon"):
-            continue
-        sandbox = m.get("sandbox", "allow-scripts")
-        if sandbox is False:
-            sandbox = ""
+        n = _manifest.normalize(m, d.name)
+        app_id = n["id"]
         out[app_id] = App(
             id=app_id,
-            label=m["label"],
-            icon=m["icon"],
-            sandbox=sandbox,
-            chat_enabled=bool(m.get("chat_enabled", False)),
-            chat_system_prompt=m.get("chat_system_prompt", ""),
-            chat_knowledge=m.get("chat_knowledge", ""),
-            entry_point=entry_point,
+            label=n["label"],
+            icon=n["icon"],
+            sandbox=n["sandbox"],
+            chat_enabled=n["chat_enabled"],
+            chat_system_prompt=n["chat_system_prompt"],
+            chat_knowledge=n["chat_knowledge"],
+            entry_point=n["entry_point"],
             url=f"/apps/{app_id}/",
+            version=n["version"],
+            description=n["description"],
+            categories=n["categories"],
+            author=n["author"],
+            screenshots=n["screenshots"],
+            min_engine_version=n["min_engine_version"],
+            compatible=_manifest.is_compatible(n["min_engine_version"], ENGINE_VERSION),
+            warnings=warnings,
             root=str(d.resolve()),
         )
-    return out
+    return out, rejected
+
+
+def discover() -> dict[str, App]:
+    """Scan APPS_DIR's immediate children for valid apps (app.json)."""
+    return inspect_apps()[0]
 
 
 # ── App-state persistence (localStorage replacement) ──────────────────────────
@@ -451,6 +480,22 @@ async def api_apps() -> JSONResponse:
     for a in apps:
         a.pop("root", None)
     return JSONResponse(apps)
+
+
+@app.get("/api/engine")
+async def api_engine() -> JSONResponse:
+    """Engine identity + version, so apps and the launcher can gate on it."""
+    return JSONResponse({"name": "app-engine", "version": ENGINE_VERSION})
+
+
+@app.get("/api/apps/rejected")
+async def api_apps_rejected() -> JSONResponse:
+    """Folders that look like an app but failed manifest validation.
+
+    Surfaces malformed manifests for developers instead of silently dropping
+    them. Empty in normal operation.
+    """
+    return JSONResponse(inspect_apps()[1])
 
 
 @app.get("/", response_class=HTMLResponse)

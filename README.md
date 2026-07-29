@@ -182,10 +182,32 @@ with the specific error, rather than the app silently vanishing.
 | `APP_ENGINE_APPS_DIR` | `./apps` | directory whose children are apps |
 | `APP_ENGINE_STATE_DIR` | `~/.config/app-engine/app-state` | per-app state storage |
 | `APP_ENGINE_HOST` / `APP_ENGINE_PORT` | `127.0.0.1` / `8770` | bind address |
+| `APP_ENGINE_APP_STATE_ISOLATION` | `referer` | per-app state isolation: `referer` \| `strict` \| `off` |
 
 The Ollama endpoint is stored in `local-ai.json` under the state directory and
 must resolve to loopback (`127.0.0.1`, `localhost`, or `::1`). Remote and cloud
 inference endpoints are deliberately rejected.
+
+### Per-app state isolation
+
+Every app is served from one origin, so without a guard an app could
+`fetch('/api/app-state/<other-app>')` and read or overwrite another app's data.
+The engine gates `/api/app-state/{id}` by the request's **`Referer`** — the one
+attribute a browser app's `fetch()` cannot forge (it is a forbidden header), so
+a same-origin app iframe's requests reliably carry `/apps/<id>/…`:
+
+- **`referer`** (default) — an identified **cross-app** request is denied (403);
+  non-app callers (the top-level launcher, `curl`, tests) are unaffected. This
+  blocks the real attack without breaking anything.
+- **`strict`** — every request must carry a same-origin `/apps/<id>/` Referer
+  matching the target id. Strongest, but only browser-loaded apps work (no `curl`).
+- **`off`** — no check (the pre-1.0 behavior).
+
+This is proportionate to app-engine's single-user, loopback scope: it stops a
+buggy or casually-malicious app from touching another's state. Full isolation
+against an app that suppresses its own Referer requires per-app **origins** —
+which is exactly what Atrium does (separate app-server origin + a scoped
+app-state token). app-engine stays single-origin by design.
 
 ## Test
 

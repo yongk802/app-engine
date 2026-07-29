@@ -35,6 +35,7 @@ import subprocess
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import uvicorn
@@ -58,6 +59,19 @@ STATE_DIR = Path(
 ).expanduser()
 MAX_STATE_BYTES = 100 * 1024  # 100 KB, matches Atrium
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+# Per-app state isolation. app-engine serves every app from one origin, so an
+# app's fetch() could ask for another app's /api/app-state/{id}. The one request
+# attribute a browser app CANNOT forge is the Referer (a forbidden header for
+# fetch): for a same-origin app iframe it reliably names the calling app. Modes:
+#   off     — no check (any caller may read/write any app's state; pre-1.0 behavior)
+#   referer — deny an identified cross-app request; non-app callers (curl, tests,
+#             the top-level launcher) are still allowed  [default]
+#   strict  — require a same-origin /apps/<id>/ Referer matching the target id
+_APP_STATE_ISOLATION = os.environ.get("APP_ENGINE_APP_STATE_ISOLATION", "referer").strip().lower()
+if _APP_STATE_ISOLATION not in {"off", "referer", "strict"}:
+    _APP_STATE_ISOLATION = "referer"
+_APPS_REFERER_RE = re.compile(r"/apps/([a-z0-9][a-z0-9-]*)")
 
 _proxy: httpx.AsyncClient | None = None
 
@@ -176,8 +190,47 @@ def _state_file(app_id: str) -> Path:
     return STATE_DIR / f"{app_id}.json"
 
 
+def _referer_app_id(request: Request) -> str | None:
+    """The app id a same-origin Referer identifies, or None.
+
+    The browser sets Referer to the requesting frame's URL and fetch() cannot
+    override it, so a same-origin app iframe's requests reliably carry
+    ``/apps/<id>/…``. Foreign/cross-origin referers are ignored.
+    """
+    ref = request.headers.get("referer") or request.headers.get("referrer")
+    if not ref:
+        return None
+    try:
+        parsed = urlparse(ref)
+    except ValueError:
+        return None
+    host = request.headers.get("host", "")
+    if parsed.netloc and host and parsed.netloc != host:
+        return None  # a different origin — not one of our app iframes
+    m = _APPS_REFERER_RE.search(parsed.path or "")
+    return m.group(1) if m else None
+
+
+def _enforce_app_state_access(request: Request, app_id: str) -> None:
+    """Gate /api/app-state/{app_id} so one app can't read/clobber another's.
+
+    See ``_APP_STATE_ISOLATION`` for the modes. Raises 403 on a denied call.
+    """
+    if _APP_STATE_ISOLATION == "off":
+        return
+    caller = _referer_app_id(request)
+    if _APP_STATE_ISOLATION == "strict":
+        if caller != app_id:
+            raise HTTPException(403, "app-state access denied (isolation: strict)")
+        return
+    # referer mode: block only an identified cross-app caller
+    if caller is not None and caller != app_id:
+        raise HTTPException(403, "cross-app app-state access denied")
+
+
 @app.get("/api/app-state/{app_id}")
-async def get_app_state(app_id: str) -> JSONResponse:
+async def get_app_state(app_id: str, request: Request) -> JSONResponse:
+    _enforce_app_state_access(request, app_id)
     f = _state_file(app_id)
     if not f.is_file():
         return JSONResponse({})
@@ -189,6 +242,7 @@ async def get_app_state(app_id: str) -> JSONResponse:
 
 @app.put("/api/app-state/{app_id}")
 async def put_app_state(app_id: str, request: Request) -> JSONResponse:
+    _enforce_app_state_access(request, app_id)
     raw = await request.body()
     if len(raw) > MAX_STATE_BYTES:
         raise HTTPException(413, "state too large")

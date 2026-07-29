@@ -23,7 +23,7 @@ Already have git and Python? Clone and run (see the
 [getting-started guide](docs/getting-started.md) if you don't):
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/app-engine.git
+git clone https://github.com/yongk802/app-engine.git
 cd app-engine
 ```
 

@@ -35,12 +35,11 @@ git --version
 
 ### Clone the repository
 
-"Cloning" downloads a full copy of the project into a new folder. Replace
-`YOUR-USERNAME` with the account that hosts the repo (or use the URL shown on
-the project's GitHub page under the green **Code** button):
+"Cloning" downloads a full copy of the project into a new folder (you can also
+copy the URL from the project's GitHub page under the green **Code** button):
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/app-engine.git
+git clone https://github.com/yongk802/app-engine.git
 cd app-engine
 ```
 

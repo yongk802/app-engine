@@ -9,7 +9,7 @@ to get it running first.
 ## Development setup
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/app-engine.git
+git clone https://github.com/yongk802/app-engine.git
 cd app-engine
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\Activate.ps1
@@ -26,7 +26,7 @@ If you're new to contributing on GitHub, the flow is:
 1. **Fork** the repository on GitHub (creates your own copy).
 2. **Clone your fork** and create a branch for your change:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/app-engine.git
+   git clone https://github.com/yongk802/app-engine.git
    cd app-engine
    git checkout -b my-change
    ```

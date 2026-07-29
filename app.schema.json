@@ -50,6 +50,14 @@
       "pattern": "^\\d+(\\.\\d+){0,2}([-+][0-9A-Za-z.-]+)?$",
       "description": "Minimum host engine version required. Apps requiring a newer engine are shown as incompatible rather than served broken."
     },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["microphone", "camera", "display-capture", "geolocation", "midi", "clipboard-read", "clipboard-write", "fullscreen", "autoplay"]
+      },
+      "description": "Browser capabilities the app requests. Delegated to the iframe's allow (Permissions-Policy); the browser prompts for consent at point of use. Requires the sandbox to include allow-same-origin."
+    },
     "sandbox": {
       "oneOf": [
         { "type": "string" },

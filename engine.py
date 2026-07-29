@@ -120,6 +120,8 @@ class App:
     author: str
     screenshots: list
     min_engine_version: str
+    permissions: list        # requested browser capabilities (mic, camera, …)
+    allow: str               # iframe Permissions-Policy string derived from them
     compatible: bool
     warnings: list
     root: str  # filesystem path (not sent to client)
@@ -170,6 +172,8 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
             author=n["author"],
             screenshots=n["screenshots"],
             min_engine_version=n["min_engine_version"],
+            permissions=n["permissions"],
+            allow=n["allow"],
             compatible=_manifest.is_compatible(n["min_engine_version"], ENGINE_VERSION),
             warnings=warnings,
             root=str(d.resolve()),
@@ -226,6 +230,18 @@ def _enforce_app_state_access(request: Request, app_id: str) -> None:
     # referer mode: block only an identified cross-app caller
     if caller is not None and caller != app_id:
         raise HTTPException(403, "cross-app app-state access denied")
+
+
+def _deny_app_iframe(request: Request) -> None:
+    """Reject a request that originates from an app iframe.
+
+    Local-AI model/runtime management is a launcher (admin) capability, not one
+    apps hold: an app iframe's requests carry an unforgeable ``/apps/<id>/``
+    Referer, while the top-level launcher, curl, and tests do not. Read-only
+    status/diagnostics stay open; only the mutating endpoints use this guard.
+    """
+    if _referer_app_id(request) is not None:
+        raise HTTPException(403, "local-AI management is not available to apps")
 
 
 @app.get("/api/app-state/{app_id}")
@@ -344,6 +360,7 @@ async def local_ai_status() -> JSONResponse:
 
 @app.put("/api/local-ai/profile")
 async def set_local_ai_profile(request: Request) -> JSONResponse:
+    _deny_app_iframe(request)
     body = await request.json()
     try:
         profile = _registry.get_profile(str(body.get("profile_id", "")))
@@ -363,6 +380,7 @@ async def local_ai_install_plan() -> JSONResponse:
 
 @app.post("/api/local-ai/authorize")
 async def authorize_local_ai_install(request: Request) -> JSONResponse:
+    _deny_app_iframe(request)
     body = await request.json()
     try:
         token = _ollama_manager.authorize(str(body.get("plan_id", "")))
@@ -373,6 +391,7 @@ async def authorize_local_ai_install(request: Request) -> JSONResponse:
 
 @app.post("/api/local-ai/install")
 async def install_local_ai(request: Request) -> JSONResponse:
+    _deny_app_iframe(request)
     body = await request.json()
     try:
         _ollama_manager.install(str(body.get("plan_id", "")), str(body.get("token", "")))
@@ -382,7 +401,8 @@ async def install_local_ai(request: Request) -> JSONResponse:
 
 
 @app.post("/api/local-ai/start")
-async def start_local_ai() -> JSONResponse:
+async def start_local_ai(request: Request) -> JSONResponse:
+    _deny_app_iframe(request)
     executable = shutil.which("ollama")
     if not executable:
         raise HTTPException(400, "Ollama is not installed")
@@ -392,7 +412,8 @@ async def start_local_ai() -> JSONResponse:
 
 
 @app.post("/api/local-ai/pull/{model_id}")
-async def pull_local_ai_model(model_id: str) -> StreamingResponse:
+async def pull_local_ai_model(model_id: str, request: Request) -> StreamingResponse:
+    _deny_app_iframe(request)
     try:
         _registry.get_model(model_id)
     except InvalidRegistryError as exc:
@@ -409,7 +430,8 @@ async def pull_local_ai_model(model_id: str) -> StreamingResponse:
 
 
 @app.delete("/api/local-ai/models/{model_id}")
-async def remove_local_ai_model(model_id: str) -> JSONResponse:
+async def remove_local_ai_model(model_id: str, request: Request) -> JSONResponse:
+    _deny_app_iframe(request)
     try:
         await _ollama_manager.remove_managed_model(model_id)
     except (UnmanagedModelError, InvalidRegistryError) as exc:
@@ -420,7 +442,8 @@ async def remove_local_ai_model(model_id: str) -> JSONResponse:
 
 
 @app.post("/api/local-ai/verify/{model_id}")
-async def verify_local_ai_model(model_id: str) -> JSONResponse:
+async def verify_local_ai_model(model_id: str, request: Request) -> JSONResponse:
+    _deny_app_iframe(request)
     try:
         return JSONResponse(asdict(await _ollama_manager.verify(model_id)))
     except InvalidRegistryError as exc:

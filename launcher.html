@@ -78,6 +78,8 @@
   .app-info .tags { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
   .app-info .tag { font-size:12px; background:#20283a; color:#9db4e0; border-radius:6px; padding:2px 9px; }
   .app-info .by { color:#6b7482; font-size:12px; }
+  .app-info .perm-head { margin-top:12px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#6b7482; }
+  .app-info .tag.perm { background:#2a2113; color:#f0c887; }
   .shots { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
   .shots img { width:100%; border:1px solid var(--line); border-radius:9px; background:#0d1016; }
 </style>
@@ -193,7 +195,7 @@ function buildAppButton(app) {
     btn.onclick=()=>showInfo(app);
   } else {
     if(app.chat_enabled){ const dot=element('span','chat-dot','💬'); btn.append(dot); }
-    if(app.description||app.author||(app.screenshots&&app.screenshots.length)||(app.categories&&app.categories.length)){
+    if(app.description||app.author||(app.screenshots&&app.screenshots.length)||(app.categories&&app.categories.length)||(app.permissions&&app.permissions.length)){
       const info=element('button','info','ⓘ'); info.setAttribute('aria-label','About '+app.label);
       info.onclick=e=>{ e.stopPropagation(); showInfo(app); }; btn.append(info);
     }
@@ -209,6 +211,12 @@ function showInfo(app) {
   if(app.description) body.append(element('p','desc', app.description));
   if(app.categories&&app.categories.length){ const tags=element('div','tags'); for(const c of app.categories) tags.append(element('span','tag', c)); body.append(tags); }
   if(app.author) body.append(element('div','by','by '+app.author));
+  if(app.permissions&&app.permissions.length){
+    body.append(element('div','perm-head','Requests access to'));
+    const perms=element('div','tags');
+    for(const p of app.permissions) perms.append(element('span','tag perm', p));
+    body.append(perms);
+  }
   if(app.compatible===false) body.append(element('p','desc','⚠️ Requires engine ≥ '+app.min_engine_version+' ('+(state.engine?state.engine.version:'unknown')+' installed).'));
   if(app.screenshots&&app.screenshots.length){ const shots=element('div','shots'); for(const s of app.screenshots){ const img=document.createElement('img'); img.loading='lazy'; img.alt=app.label+' screenshot'; img.src=app.url+s; shots.append(img); } body.append(shots); }
   $('#info-dialog').showModal();
@@ -229,7 +237,13 @@ function openApp(app,btn) {
   state.active=app.id; $('#sidebar').classList.remove('open');
   if (state.instances[app.id]) { state.instances[app.id].classList.add('active'); signalLifecycle(app.id,'visible'); return; }
   const inst=document.createElement('section'); inst.className='instance active';
-  const iframe=document.createElement('iframe'); iframe.title=app.label; if(app.sandbox) iframe.sandbox=app.sandbox; iframe.src=app.url;
+  const iframe=document.createElement('iframe'); iframe.title=app.label; if(app.sandbox) iframe.sandbox=app.sandbox;
+  // Delegate the app's declared browser capabilities (mic, camera, …) to the
+  // iframe; the browser prompts for consent at point of use. Only takes effect
+  // when the app's sandbox includes allow-same-origin (opaque origins can't be
+  // granted powerful features). Server-sanitized against an allowlist.
+  if(app.allow) iframe.allow=app.allow;
+  iframe.src=app.url;
   iframe.addEventListener('load',()=>{ if(state.active===app.id) signalLifecycle(app.id,'visible'); });
   inst.append(iframe);
   if(app.chat_enabled) { inst.append(buildChat(app)); $('#mobile-chat').hidden=false; } else $('#mobile-chat').hidden=true;

@@ -23,13 +23,24 @@ ENGINE_VERSION = "1.0.0"
 APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _SEMVER_RE = re.compile(r"^\d+(\.\d+){0,2}([-+][0-9A-Za-z.-]+)?$")
 
+# Capabilities an app may request via ``permissions``. These are browser
+# Permissions-Policy features, each mapping 1:1 to a token in the iframe's
+# ``allow`` attribute; the browser then handles runtime consent (the mic/camera
+# prompt) at point of use. Kept to a conservative allowlist so a manifest can't
+# inject arbitrary policy tokens. Powerful features only work when the app's
+# sandbox includes allow-same-origin (an opaque origin can't be granted them).
+PERMISSION_FEATURES = frozenset({
+    "microphone", "camera", "display-capture", "geolocation",
+    "midi", "clipboard-read", "clipboard-write", "fullscreen", "autoplay",
+})
+
 # Fields the shared manifest contract recognizes. Atrium-only fields are listed
 # so the shared validator doesn't warn about them (keeps apps portable).
 KNOWN_FIELDS = frozenset({
     # identity & listing metadata
     "id", "label", "icon", "version", "description", "categories", "author", "screenshots",
     # runtime
-    "sandbox", "entry_point", "min_engine_version",
+    "sandbox", "entry_point", "min_engine_version", "permissions",
     # local-AI tutor
     "chat_enabled", "chat_system_prompt", "chat_knowledge",
     # Atrium-only (recognized here so the shared contract stays warning-free)
@@ -132,6 +143,15 @@ def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[
         if key in m and not isinstance(m[key], str):
             errors.append(f"{key} must be a string")
 
+    perms = m.get("permissions")
+    if perms is not None:
+        if not (isinstance(perms, list) and all(isinstance(p, str) for p in perms)):
+            errors.append("permissions must be a list of capability strings")
+        else:
+            for p in perms:
+                if p not in PERMISSION_FEATURES:
+                    warnings.append(f"unknown permission {p!r} (ignored; not a recognized capability)")
+
     sandbox = m.get("sandbox", "allow-scripts")
     if not (sandbox is False or isinstance(sandbox, str)):
         errors.append("sandbox must be a string or false")
@@ -143,8 +163,46 @@ def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[
     return (errors, warnings)
 
 
+def _features_from_allow(raw: object) -> list[str]:
+    """Extract recognized features from a legacy Permissions-Policy ``allow``
+    string (e.g. "microphone; camera"). Kept so Atrium's `allow` manifests
+    remain a valid source under the shared contract."""
+    out: list[str] = []
+    if isinstance(raw, str):
+        for part in re.split(r"[;,]", raw):
+            token = part.strip()
+            name = token.split()[0].lower() if token else ""
+            if name in PERMISSION_FEATURES and name not in out:
+                out.append(name)
+    return out
+
+
+def permission_list(m: dict) -> list[str]:
+    """The app's granted browser capabilities: recognized entries from
+    ``permissions`` (canonical) unioned with any from a legacy ``allow`` string,
+    deduped and order-stable. Unknown tokens are dropped."""
+    out: list[str] = []
+    perms = m.get("permissions")
+    if isinstance(perms, list):
+        for p in perms:
+            if isinstance(p, str) and p in PERMISSION_FEATURES and p not in out:
+                out.append(p)
+    for f in _features_from_allow(m.get("allow", "")):
+        if f not in out:
+            out.append(f)
+    return out
+
+
+def permissions_to_allow(perms: list[str]) -> str:
+    """Render a permission list into an iframe ``allow`` (Permissions-Policy)
+    attribute value. The container grants each feature to the iframe's own
+    origin, so no per-feature origin list is needed."""
+    return "; ".join(perms)
+
+
 def normalize(m: dict, dir_name: str) -> dict:
     """Return the normalized listing/runtime fields for a validated manifest."""
+    permissions = permission_list(m)
     sandbox = m.get("sandbox", "allow-scripts")
     if sandbox is False:
         sandbox = ""
@@ -158,6 +216,8 @@ def normalize(m: dict, dir_name: str) -> dict:
         "author": m.get("author", ""),
         "screenshots": [s for s in (m.get("screenshots", []) or []) if _is_relative_asset(s)],
         "min_engine_version": str(m.get("min_engine_version", "") or ""),
+        "permissions": permissions,
+        "allow": permissions_to_allow(permissions),
         "sandbox": sandbox,
         "chat_enabled": bool(m.get("chat_enabled", False)),
         "chat_system_prompt": m.get("chat_system_prompt", ""),

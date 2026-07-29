@@ -144,7 +144,8 @@ working.
   "author": "Your Name",
   "screenshots": ["media/home.png"],
   "min_engine_version": "1.0.0",
-  "sandbox": "allow-scripts",
+  "permissions": ["microphone"],
+  "sandbox": "allow-scripts allow-same-origin",
   "chat_enabled": false,
   "chat_system_prompt": "",
   "entry_point": ""
@@ -158,6 +159,7 @@ working.
 | `version` | Semver; the `major.minor.patch` triple defines update ordering. |
 | `description`, `categories`, `author`, `screenshots` | Listing metadata (catalog card, search, category grouping, info dialog). Screenshots are relative paths inside the app. |
 | `min_engine_version` | Minimum engine required; older engines show the app as incompatible instead of serving it broken. |
+| `permissions` | Browser capabilities the app requests (see below). |
 | `sandbox` | iframe `sandbox` attribute (default `allow-scripts`). |
 | `entry_point` | Backend URL to reverse-proxy `/apps/{id}/…` to (omit for static apps). |
 | `chat_enabled`, `chat_system_prompt`, `chat_knowledge` | Opt into the grounded local-AI tutor panel. |
@@ -174,6 +176,31 @@ python -m app_engine.manifest path/to/my-app
 
 A malformed manifest is surfaced in the launcher (and `GET /api/apps/rejected`)
 with the specific error, rather than the app silently vanishing.
+
+### Permissions / capabilities
+
+An app declares the sensitive **browser capabilities** it needs in
+`permissions` (a shared field also honored by Atrium; a legacy Atrium `allow`
+string is accepted too). Recognized values:
+
+```
+microphone · camera · display-capture · geolocation · midi
+clipboard-read · clipboard-write · fullscreen · autoplay
+```
+
+The host delegates the granted set to the app iframe's `allow`
+(Permissions-Policy) attribute, and the **browser** prompts for consent at the
+point of use (the standard mic/camera/location prompt) — the engine adds no
+prompt of its own. The launcher's info dialog (ⓘ) discloses what each app
+requests. A powerful feature only actually works when the app's `sandbox`
+includes `allow-same-origin` (an opaque origin can't be granted one); unknown
+permission tokens are ignored with a warning.
+
+**Host capabilities** are gated separately: local-AI model management
+(`/api/local-ai/*` install / pull / start / remove / profile) is a launcher
+action, **not** something an app can drive — those endpoints reject requests
+originating from an app iframe. Read-only `GET /api/local-ai/status` stays open
+so tutor panels can poll readiness.
 
 ## Config (env)
 

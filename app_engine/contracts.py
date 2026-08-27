@@ -682,6 +682,16 @@ class LifecycleManager(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def retain(self, launch_id: LaunchId) -> None:
+        """Keep an exact launch active while a consumer session uses it."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def release(self, launch_id: LaunchId) -> None:
+        """Release one launch lease and begin its idle policy at zero leases."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def stop(self, launch_id: LaunchId, reason: StopReason) -> StopResult:
         raise NotImplementedError
 

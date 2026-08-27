@@ -155,7 +155,11 @@ class ImmutableAppCatalog(AppCatalog):
                     (
                         child
                         for child in source.root.iterdir()
-                        if child.is_dir() and (child / "app.json").is_file()
+                        if child.is_dir()
+                        and (
+                            (child / "app.json").is_file()
+                            or (child / "index.html").is_file()
+                        )
                     ),
                     key=lambda child: child.name,
                 )
@@ -172,6 +176,20 @@ class ImmutableAppCatalog(AppCatalog):
                 continue
 
             for child_order, app_root in enumerate(children):
+                if not (app_root / "app.json").is_file():
+                    rejections.append(
+                        CatalogRejection(
+                            root=app_root.resolve(strict=False),
+                            app_id=app_root.name,
+                            reason="missing_manifest",
+                            detail=(
+                                "directory contains index.html but no app.json; "
+                                "import it in App Studio to create a manifest"
+                            ),
+                            source=source,
+                        )
+                    )
+                    continue
                 inspection = parse_manifest(app_root)
                 if inspection.manifest is None:
                     detail = "; ".join(issue.message for issue in inspection.errors)

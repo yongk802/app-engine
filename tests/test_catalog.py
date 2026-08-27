@@ -151,6 +151,9 @@ async def test_catalog_surfaces_malformed_incompatible_and_shadowed_candidates(
         "future",
         min_engine_version="999.0.0",
     )
+    missing_manifest = fallback_root / "missing-manifest"
+    missing_manifest.mkdir()
+    (missing_manifest / "index.html").write_text("app-like", encoding="utf-8")
 
     catalog = ImmutableAppCatalog()
     snapshot = await catalog.configure(
@@ -169,6 +172,7 @@ async def test_catalog_surfaces_malformed_incompatible_and_shadowed_candidates(
         for token in ("manifest", "json", "invalid")
     )
     assert "compatib" in _rejection_text(by_root[incompatible.resolve()])
+    assert by_root[missing_manifest.resolve()].reason == "missing_manifest"
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -224,6 +225,45 @@ def _open_request() -> OpenAppRequest:
 async def _body(*chunks: bytes):
     for chunk in chunks:
         yield chunk
+
+
+@pytest.mark.asyncio
+async def test_legacy_entry_point_uses_the_same_safe_loopback_proxy(tmp_path):
+    root = tmp_path / "demo"
+    root.mkdir()
+    manifest = _manifest(root, managed=False)
+    manifest = replace(
+        manifest,
+        targets=(
+            TargetSpec(
+                TargetId("web"),
+                "web",
+                None,
+                "http://127.0.0.1:8912/base",
+            ),
+        ),
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://127.0.0.1:8912/base/hello"
+        class Stream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b"legacy backend"
+
+        return httpx.Response(200, stream=Stream())
+
+    gateway = _gateway_type()(
+        catalog=_Catalog(manifest),
+        lifecycle=_Lifecycle(),
+        catalog_key=CatalogKey("test"),
+        transport=httpx.MockTransport(handler),
+    )
+    session = await gateway.open(_open_request())
+
+    response = await gateway.proxy(
+        session, ProxyRequest("GET", "hello", (), (), _body())
+    )
+    assert b"".join([chunk async for chunk in response.body]) == b"legacy backend"
 
 
 @pytest.mark.asyncio

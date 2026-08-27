@@ -13,7 +13,7 @@ import uuid
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -101,6 +101,13 @@ class DefaultAppGateway(AppGateway):
             )
 
         runtime = target.runtime
+        if target.entry_point is not None:
+            endpoint = _entry_point_endpoint(target.entry_point)
+            async with self._map_lock:
+                self._require_open_gateway()
+                return await self._register_session(
+                    manifest, target, None, endpoint, None
+                )
         if runtime is None:
             async with self._map_lock:
                 self._require_open_gateway()
@@ -178,10 +185,10 @@ class DefaultAppGateway(AppGateway):
         self, session: AppSession, request: AssetRequest
     ) -> AssetResponse:
         record = await self._session_record(session)
-        if record.target.runtime is not None:
+        if record.endpoint is not None:
             raise TargetProviderError(
                 "managed_target_asset",
-                "Managed targets must serve content through the application proxy.",
+                "Backend targets must serve content through the application proxy.",
             )
 
         root = record.manifest.root.resolve(strict=True)
@@ -481,6 +488,25 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(normalized).is_loopback
     except ValueError:
         return False
+
+
+def _entry_point_endpoint(value: str) -> TargetEndpoint:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        raise TargetProviderError(
+            "invalid_entry_point", "The legacy entry point is not an HTTP URL."
+        )
+    if parsed.port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    else:
+        port = parsed.port
+    endpoint = TargetEndpoint(
+        scheme=parsed.scheme,
+        host=parsed.hostname,
+        port=port,
+        base_path=parsed.path or "/",
+    )
+    return _normalize_loopback_endpoint(endpoint)
 
 
 def _normalize_loopback_endpoint(endpoint: TargetEndpoint) -> TargetEndpoint:

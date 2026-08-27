@@ -645,7 +645,15 @@ def _v1_manifest(
     return AppManifest(
         manifest_version=1, app_id=AppId(normalized["id"]), label=normalized["label"],
         icon=normalized["icon"], root=root, default_target=TargetId("web"),
-        targets=(TargetSpec(TargetId("web"), "web", None),), configuration=(),
+        targets=(
+            TargetSpec(
+                TargetId("web"),
+                "web",
+                None,
+                normalized["entry_point"] or None,
+            ),
+        ),
+        configuration=(),
         metadata=metadata,
         browser=BrowserPolicy(
             sandbox=normalized["sandbox"], permissions=tuple(normalized["permissions"]),

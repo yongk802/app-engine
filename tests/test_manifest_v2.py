@@ -241,6 +241,7 @@ def test_v1_entry_point_becomes_static_web_target_without_managed_runtime(tmp_pa
     assert result.manifest.targets[0].target_id == "web"
     assert result.manifest.targets[0].kind == "web"
     assert result.manifest.targets[0].runtime is None
+    assert result.manifest.targets[0].entry_point == "http://127.0.0.1:8550"
 
 
 def test_unknown_safe_v2_fields_are_warnings(tmp_path):

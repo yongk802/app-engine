@@ -167,6 +167,7 @@ class TargetSpec:
     target_id: TargetId
     kind: str
     runtime: RuntimeSpec | None
+    entry_point: str | None = None
 
 
 @dataclass(frozen=True)

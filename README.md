@@ -56,6 +56,50 @@ APP_ENGINE_APPS_DIR=/path/to/personal-apps python engine.py
 You can equally write your own apps — the only requirement is an `app.json`
 manifest (and usually an `index.html`).
 
+## App Studio and managed apps
+
+The standalone distribution includes the same App Studio Atrium embeds. After
+starting app-engine, open
+[`http://127.0.0.1:8770/api/app-engine/studio/`](http://127.0.0.1:8770/api/app-engine/studio/)
+to create, import, configure, launch, and diagnose apps. The wizard ships with
+static web, generic HTTP, Python/uv, Node.js, Go, and Rust starters. It previews
+every filesystem or process plan before applying it and never overwrites an
+existing project directory.
+
+Managed apps are language-neutral. A version-2 `app.json` declares argv arrays,
+not shell strings; app-engine assigns `PORT`, starts the process, waits for its
+HTTP health endpoint, captures logs, and reuses unchanged builds and warm
+processes:
+
+```json
+{
+  "manifest_version": 2,
+  "id": "hello-api",
+  "label": "Hello API",
+  "icon": "👋",
+  "default_target": "web",
+  "targets": {
+    "web": {
+      "kind": "web",
+      "runtime": {
+        "driver": "process",
+        "scope": "per_user",
+        "install": [{"argv": ["uv", "sync"]}],
+        "start": {"argv": ["uv", "run", "python", "main.py"]},
+        "health": {"kind": "http", "path": "/health"},
+        "idle_timeout_seconds": 300
+      }
+    }
+  }
+}
+```
+
+The process must bind an HTTP server to `127.0.0.1:$PORT`; `GET /health` must
+return success when it is ready. The provider registry deliberately keeps
+`kind` open-ended, so future iOS and Android providers can add toolchains,
+templates, validation, preparation, and launch behavior without changing the
+core manifest parser.
+
 ## Local tutor setup
 
 Chat-enabled apps use [Ollama](https://ollama.com/) and remain strictly local:

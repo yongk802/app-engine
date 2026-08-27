@@ -200,3 +200,42 @@ __all__ = [
     "ValidationIssue",
     "ValidationReport",
 ]
+
+__all__ += [
+    "DefaultAppEngineRuntime",
+    "DefaultAppGateway",
+    "ImmutableAppCatalog",
+    "LocalHostAdapter",
+    "PortableStudioService",
+    "ProcessLifecycleManager",
+    "ProviderRegistry",
+    "create_app_engine_router",
+]
+
+_LAZY_EXPORTS = {
+    "DefaultAppEngineRuntime": (".runtime", "DefaultAppEngineRuntime"),
+    "DefaultAppGateway": (".gateway", "DefaultAppGateway"),
+    "ImmutableAppCatalog": (".catalog", "ImmutableAppCatalog"),
+    "LocalHostAdapter": (".runtime", "LocalHostAdapter"),
+    "PortableStudioService": (".studio", "PortableStudioService"),
+    "ProcessLifecycleManager": (".lifecycle", "ProcessLifecycleManager"),
+    "ProviderRegistry": (".providers", "ProviderRegistry"),
+    "create_app_engine_router": (".routes", "create_app_engine_router"),
+}
+
+
+def __getattr__(name: str):
+    """Load concrete services only when requested.
+
+    Contract-only imports remain dependency-light, which keeps manifest
+    validation usable even in a minimal build environment.
+    """
+    try:
+        module_name, attribute = _LAZY_EXPORTS[name]
+    except KeyError:
+        raise AttributeError(name) from None
+    from importlib import import_module
+
+    value = getattr(import_module(module_name, __name__), attribute)
+    globals()[name] = value
+    return value

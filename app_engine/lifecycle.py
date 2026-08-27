@@ -466,6 +466,15 @@ class ProcessLifecycleManager(LifecycleManager):
         next_cursor = selected[-1].sequence if selected else after
         return LogPage(records=selected, next_cursor=next_cursor)
 
+    def active_launch_ids(self) -> tuple[LaunchId, ...]:
+        """Return currently supervised launch ids for diagnostics/shutdown."""
+        return tuple(
+            record.launch_id
+            for record in self._records.values()
+            if record.state
+            not in {RuntimeState.STOPPED, RuntimeState.FAILED}
+        )
+
     def _resolve_target(
         self, request: LaunchRequest
     ) -> tuple[AppManifest, TargetSpec]:

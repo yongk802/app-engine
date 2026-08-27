@@ -79,8 +79,10 @@ class _RecordingHost(HostAdapter):
     async def save_configuration(
         self,
         subject: HostSubject,
+        app_id: AppId,
         values: tuple[ConfigurationValue, ...],
     ) -> ConfigurationResult:
+        assert app_id == self.save_app_id
         self.saved.append((subject, values))
         return ConfigurationResult(
             app_id=self.save_app_id,

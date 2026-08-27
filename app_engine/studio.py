@@ -452,11 +452,13 @@ class PortableStudioService(StudioService):
             for template in self._all_templates()
         )
 
-    async def inspect_import(self, path: Path) -> ImportProposal:
+    async def inspect_import(
+        self, path: Path, subject: HostSubject | None = None
+    ) -> ImportProposal:
         root, _ = await self._allowed_path(
             # Import has no subject in the frozen contract, so the catalog's
             # configured host identity is represented by the sole inspect root.
-            await self._inspection_subject(), path, "inspect"
+            subject or await self._inspection_subject(), path, "inspect"
         )
         if not await asyncio.to_thread(root.is_dir):
             raise AppEngineError(
@@ -829,7 +831,9 @@ class PortableStudioService(StudioService):
                 "Required configuration values are missing.",
                 context=tuple(("key", key) for key in missing),
             )
-        result = await self._host.save_configuration(subject, values)
+        result = await self._host.save_configuration(
+            subject, manifest.app_id, values
+        )
         self._configuration_context[subject] = (
             manifest,
             declared,

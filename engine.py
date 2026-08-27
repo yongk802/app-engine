@@ -50,7 +50,10 @@ from app_engine import manifest as _manifest
 from app_engine.manifest import ENGINE_VERSION
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
+from app_engine.routes import create_app_engine_router
+from app_engine.runtime import DefaultAppEngineRuntime, LocalHostAdapter
 from app_engine.system_probe import SystemProbe
+from app_engine.contracts import HostSubject
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -70,16 +73,40 @@ _admin_capability = secrets.token_urlsafe(32)
 
 _proxy: httpx.AsyncClient | None = None
 
+_runtime_subject = HostSubject("local", "admin")
+_runtime_host = LocalHostAdapter(
+    apps_roots=(APPS_DIR,),
+    state_root=STATE_DIR,
+    subject=_runtime_subject,
+)
+_app_runtime = DefaultAppEngineRuntime(
+    host=_runtime_host,
+    subject=_runtime_subject,
+    runtime_root=STATE_DIR / "runtime",
+)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await _app_runtime.start()
     yield
+    await _app_runtime.close(5.0)
     if _proxy and not _proxy.is_closed:
         await _proxy.aclose()
     await _ollama_manager.close()
 
 
 app = FastAPI(title="app-engine", lifespan=lifespan)
+
+
+async def _runtime_authenticate() -> HostSubject:
+    """Standalone app-engine is a single local administrative session."""
+    return _runtime_subject
+
+
+app.include_router(
+    create_app_engine_router(_app_runtime, authenticate=_runtime_authenticate)
+)
 _registry = ModelRegistry.load(Path(__file__).parent / "model-registry.json")
 _knowledge = KnowledgeBase.load(Path(__file__).parent / "knowledge" / "tutors.json")
 _config = ConfigStore(STATE_DIR)

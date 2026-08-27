@@ -755,6 +755,18 @@ class HostAdapter(ABC):
     ) -> ResolvedConfiguration:
         raise NotImplementedError
 
+    async def save_configuration(
+        self,
+        subject: HostSubject,
+        app_id: AppId,
+        values: tuple[ConfigurationValue, ...],
+    ) -> ConfigurationResult:
+        """Persist declared app configuration when the host supports Studio."""
+        raise ConfigurationError(
+            "configuration_write_unavailable",
+            "This host does not expose writable app configuration.",
+        )
+
     @abstractmethod
     async def authorize(self, subject: HostSubject, plan: LaunchPlan) -> Authorization:
         raise NotImplementedError
@@ -788,7 +800,9 @@ class StudioService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def inspect_import(self, path: Path) -> ImportProposal:
+    async def inspect_import(
+        self, path: Path, subject: HostSubject | None = None
+    ) -> ImportProposal:
         raise NotImplementedError
 
     @abstractmethod

@@ -1,0 +1,7 @@
+include README.md LICENSE
+include launcher.html app.schema.json model-registry.json
+recursive-include knowledge *.json
+recursive-include app_engine *.json
+recursive-include app_engine/studio *
+recursive-include app_engine/templates *
+global-exclude __pycache__ *.py[cod]

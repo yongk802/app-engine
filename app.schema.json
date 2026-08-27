@@ -2,11 +2,17 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://app-engine/app.schema.json",
   "title": "app-engine app.json",
-  "description": "Manifest for an app-engine / Atrium app. Place this file at the root of an app directory alongside index.html (or declare an entry_point backend). The authoritative validator is app_engine/manifest.py; this schema mirrors it for editor tooling.",
+  "description": "Manifest for an app-engine / Atrium app. Version 1 is the legacy static/proxy format; version 2 adds named, argv-only process targets. The authoritative validator is app_engine/manifest.py; this schema mirrors it for editor tooling.",
   "type": "object",
   "required": ["label", "icon"],
   "additionalProperties": true,
   "properties": {
+    "manifest_version": {
+      "type": "integer",
+      "enum": [1, 2],
+      "default": 1,
+      "description": "Manifest contract version. Omit for the compatible version-1 format."
+    },
     "id": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -70,6 +76,67 @@
       "type": "string",
       "description": "Backend URL to reverse-proxy /apps/{id}/... to. Omit for a pure static (index.html) app."
     },
+    "default_target": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Named v2 target to open by default. Required by the runtime validator when more than one explicit target is declared."
+    },
+    "targets": {
+      "oneOf": [
+        {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "additionalProperties": { "$ref": "#/definitions/target" }
+        },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/target" }
+        }
+      ],
+      "description": "Version-2 named targets, as an array with id fields or an object keyed by id. index.html remains an implicit static web target."
+    },
+    "configuration": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/configurationField" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/configurationField" }
+        }
+      ],
+      "description": "Configuration declarations only. Values and embedded secrets belong to the host configuration store, never this file."
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "version": { "$ref": "#/properties/version" },
+        "description": { "$ref": "#/properties/description" },
+        "categories": { "$ref": "#/properties/categories" },
+        "author": { "$ref": "#/properties/author" },
+        "screenshots": { "$ref": "#/properties/screenshots" },
+        "min_engine_version": { "$ref": "#/properties/min_engine_version" },
+        "chat_enabled": { "$ref": "#/properties/chat_enabled" },
+        "chat_system_prompt": { "$ref": "#/properties/chat_system_prompt" },
+        "chat_knowledge": { "$ref": "#/properties/chat_knowledge" }
+      },
+      "additionalProperties": true,
+      "description": "Version-2 nested listing metadata. Equivalent top-level v1 fields remain supported."
+    },
+    "browser": {
+      "type": "object",
+      "properties": {
+        "sandbox": { "$ref": "#/properties/sandbox" },
+        "permissions": { "$ref": "#/properties/permissions" },
+        "allow": { "type": "string" },
+        "secret": { "type": "boolean" },
+        "multi": { "type": "boolean" },
+        "proxy_read_timeout": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": true,
+      "description": "Version-2 nested browser policy. Equivalent top-level v1 fields remain supported."
+    },
     "chat_enabled": {
       "type": "boolean",
       "default": false,
@@ -82,6 +149,134 @@
     "chat_knowledge": {
       "type": "string",
       "description": "Relative path to a reviewed knowledge pack used to ground tutor answers."
+    }
+  },
+  "definitions": {
+    "target": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "kind": {
+          "type": "string",
+          "pattern": "^(?!shell$)[a-z0-9][a-z0-9-]*$",
+          "default": "web",
+          "description": "Provider identifier. Provider availability is resolved by the host at launch time."
+        },
+        "runtime": { "$ref": "#/definitions/runtime" }
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["driver", "start"],
+      "properties": {
+        "driver": { "type": "string", "enum": ["process"] },
+        "scope": { "type": "string", "enum": ["shared", "per_user", "per_instance"], "default": "shared" },
+        "install": { "type": "array", "items": { "$ref": "#/definitions/commandStep" }, "default": [] },
+        "build": { "type": "array", "items": { "$ref": "#/definitions/commandStep" }, "default": [] },
+        "start": { "$ref": "#/definitions/commandStep" },
+        "health": { "$ref": "#/definitions/httpHealth" },
+        "idle_timeout_seconds": { "type": "number", "minimum": 0, "default": 0 },
+        "autostart": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": true
+    },
+    "commandStep": {
+      "type": "object",
+      "required": ["argv"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "step_id": { "type": "string", "minLength": 1 },
+        "argv": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "cwd": { "$ref": "#/definitions/containedPath" },
+        "inputs": { "type": "array", "items": { "$ref": "#/definitions/containedPath" } },
+        "outputs": { "type": "array", "items": { "$ref": "#/definitions/containedPath" } },
+        "environment": {
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/definitions/namedEnvironmentBinding" } },
+            { "type": "object", "additionalProperties": { "$ref": "#/definitions/environmentBinding" } }
+          ]
+        },
+        "timeout_seconds": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "containedPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![/\\\\])(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "description": "Relative path contained in the app root. The runtime additionally resolves symlinks before use."
+    },
+    "environmentBinding": {
+      "type": "object",
+      "required": ["source", "value"],
+      "properties": {
+        "source": { "type": "string", "enum": ["literal", "configuration", "host"] },
+        "value": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "namedEnvironmentBinding": {
+      "allOf": [
+        { "$ref": "#/definitions/environmentBinding" },
+        {
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+          }
+        }
+      ]
+    },
+    "httpHealth": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["http"], "default": "http" },
+        "path": { "type": "string", "pattern": "^/", "default": "/health" },
+        "timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 30 },
+        "interval_seconds": { "type": "number", "exclusiveMinimum": 0, "default": 0.1 }
+      },
+      "additionalProperties": true
+    },
+    "configurationField": {
+      "type": "object",
+      "not": {
+        "anyOf": [
+          { "required": ["value"] },
+          { "required": ["secret"] }
+        ]
+      },
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+        "type": { "type": "string", "enum": ["string", "integer", "number", "boolean", "enum", "path", "secret"], "default": "string" },
+        "value_type": { "type": "string", "enum": ["string", "integer", "number", "boolean", "enum", "path", "secret"] },
+        "label": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "required": { "type": "boolean", "default": false },
+        "scope": { "type": "string", "enum": ["shared", "user", "per_user", "per-user", "instance", "per_instance", "per-instance"], "default": "per_user" },
+        "environment": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+        "environment_name": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+        "env": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" },
+        "choices": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "default": { "type": ["string", "number", "boolean"] },
+        "default_value": { "type": ["string", "number", "boolean"] }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "secret" } },
+            "required": ["type"]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["default"] },
+                { "required": ["default_value"] }
+              ]
+            }
+          }
+        }
+      ]
     }
   }
 }

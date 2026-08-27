@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "transport": "http",
+  "bind_host": "127.0.0.1",
+  "port_environment": "PORT",
+  "health_path": "/health",
+  "start_executable": "./server"
+}

@@ -1,0 +1,6 @@
+:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+body { display: grid; min-height: 100vh; margin: 0; place-items: center; }
+main { max-width: 36rem; padding: 3rem; text-align: center; }
+.icon { display: block; font-size: 4rem; }
+button { cursor: pointer; padding: .65rem 1rem; }
+output { display: block; min-height: 1.5em; margin-top: 1rem; }

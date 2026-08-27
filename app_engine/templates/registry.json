@@ -1,3 +1,47 @@
 {
-  "templates": []
+  "schema_version": 1,
+  "templates": [
+    {
+      "template_id": "static-web",
+      "target_kind": "web",
+      "label": "Static web app",
+      "description": "A zero-build HTML, CSS, and JavaScript application.",
+      "required_toolchains": []
+    },
+    {
+      "template_id": "generic-http",
+      "target_kind": "web",
+      "label": "Generic HTTP service",
+      "description": "A language-neutral HTTP process contract for an executable named server.",
+      "required_toolchains": []
+    },
+    {
+      "template_id": "python-uv",
+      "target_kind": "web",
+      "label": "Python with uv",
+      "description": "A standard-library Python HTTP app managed with uv.",
+      "required_toolchains": ["python", "uv"]
+    },
+    {
+      "template_id": "node",
+      "target_kind": "web",
+      "label": "Node.js",
+      "description": "A dependency-free Node.js HTTP app.",
+      "required_toolchains": ["node"]
+    },
+    {
+      "template_id": "go",
+      "target_kind": "web",
+      "label": "Go",
+      "description": "A small Go HTTP app built to a native executable.",
+      "required_toolchains": ["go"]
+    },
+    {
+      "template_id": "rust",
+      "target_kind": "web",
+      "label": "Rust",
+      "description": "A dependency-free Rust HTTP app built with Cargo.",
+      "required_toolchains": ["cargo"]
+    }
+  ]
 }

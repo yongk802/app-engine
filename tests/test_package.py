@@ -157,7 +157,7 @@ def test_clean_venv_install_resolves_assets_and_console_manifest_entrypoint(tmp_
                 "assert all((data / name).is_file() for name in "
                 "('launcher.html', 'app.schema.json', 'model-registry.json')); "
                 "assert (data / 'knowledge' / 'tutors.json').is_file(); "
-                "assert app_engine.__version__ == '1.1.0'"
+                "assert app_engine.__version__ == '0.1.0'"
             ),
         ],
         cwd=outside,

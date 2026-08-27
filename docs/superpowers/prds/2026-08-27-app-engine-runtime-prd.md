@@ -303,9 +303,18 @@ class AppEngineRuntime:
     async def close(self, grace_seconds: float) -> ShutdownReport: ...
 ```
 
-Streaming DTOs carry async byte iterators. The gateway preserves repeated query
-parameters, supports SSE and WebSocket upgrade paths, removes hop-by-hop
-headers, and never exposes a non-loopback managed target.
+Streaming HTTP DTOs carry async byte iterators. The gateway preserves repeated
+query parameters, supports SSE, removes hop-by-hop headers, and never exposes a
+non-loopback managed target. The frozen HTTP DTO cannot represent bidirectional
+WebSocket frames: ``DefaultAppGateway.websocket_endpoint()`` is the explicit
+seam for a host route adapter to bridge authenticated WebSocket frames to the
+pinned loopback endpoint. HTTP proxy calls reject upgrades rather than silently
+degrading them into ordinary requests.
+
+The concrete gateway also exposes ``shutdown()`` for runtime composition. It
+cancels pending idle timers, stops warm zero-idle launches with the shutdown
+reason, and closes pooled HTTP resources; the frozen ``AppGateway.close``
+method remains scoped to one public app session.
 
 ## Errors
 

@@ -17,7 +17,9 @@ python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-All 60+ tests should pass before you start.
+All tests should pass before you start. Cross-repository tutor checks use a
+sibling `personal-apps` clone automatically, or set `PERSONAL_APPS_DIR` to its
+location explicitly.
 
 ## The git workflow for a change
 

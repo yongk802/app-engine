@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 from app_engine.benchmark import (  # noqa: E402
     BenchmarkCandidate, compare_results, load_suite, render_markdown, run_candidate,
 )
-from app_engine.grounding import KnowledgeBase  # noqa: E402
+from app_engine.grounding import KnowledgeBase, load_declared_knowledge  # noqa: E402
 
 
 CANDIDATES = (
@@ -50,6 +50,22 @@ def ollama_version() -> str:
         return "unknown"
 
 
+def benchmark_knowledge() -> KnowledgeBase:
+    """Prefer the app-owned packs from personal-apps; retain legacy fallback."""
+    configured = os.environ.get("PERSONAL_APPS_DIR")
+    apps_dir = Path(configured).expanduser() if configured else ROOT.parent / "personal-apps"
+    if not apps_dir.is_dir():
+        return KnowledgeBase.load(ROOT / "knowledge" / "tutors.json")
+    entries = {}
+    for manifest_path in apps_dir.glob("*/app.json"):
+        manifest = json.loads(manifest_path.read_text())
+        declared = manifest.get("chat_knowledge")
+        if manifest.get("chat_enabled") and declared:
+            for entry in load_declared_knowledge(manifest_path.parent, declared).entries:
+                entries[entry.id] = entry
+    return KnowledgeBase(tuple(entries.values()))
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark strictly local tutor models through Ollama.")
     parser.add_argument("--endpoint", default="http://127.0.0.1:11434")
@@ -60,7 +76,7 @@ async def main() -> int:
 
     selected = tuple(c for c in CANDIDATES if not args.candidate or c.candidate_id in args.candidate)
     suite = load_suite(args.cases)
-    knowledge = KnowledgeBase.load(ROOT / "knowledge" / "tutors.json")
+    knowledge = benchmark_knowledge()
     results = []
     async with httpx.AsyncClient(base_url=args.endpoint) as client:
         for candidate in selected:

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "apps": [
+    "ai-from-scratch", "algo-drill", "coding-challenges", "ctf-arena",
+    "ffmpeg-lab", "film-school", "gift-finder", "linux-ops-academy",
+    "llm-stack", "math-for-ai", "quantum-computing", "vim-dojo", "vllm-stack"
+  ]
+}

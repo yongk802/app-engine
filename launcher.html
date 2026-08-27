@@ -124,6 +124,8 @@
   </dialog>
 
 <script>
+const ADMIN_HEADERS={'X-App-Engine-Admin':'__APP_ENGINE_ADMIN_CAPABILITY__'};
+function adminOptions(options={}) { return {...options,headers:{...(options.headers||{}),...ADMIN_HEADERS}}; }
 const state = { apps:[], instances:{}, active:null, ai:null, engine:null, rejected:[], query:'' };
 let pullController = null;
 const $ = selector => document.querySelector(selector);
@@ -218,7 +220,7 @@ function showInfo(app) {
     body.append(perms);
   }
   if(app.compatible===false) body.append(element('p','desc','⚠️ Requires engine ≥ '+app.min_engine_version+' ('+(state.engine?state.engine.version:'unknown')+' installed).'));
-  if(app.screenshots&&app.screenshots.length){ const shots=element('div','shots'); for(const s of app.screenshots){ const img=document.createElement('img'); img.loading='lazy'; img.alt=app.label+' screenshot'; img.src=app.url+s; shots.append(img); } body.append(shots); }
+  if(app.screenshots&&app.screenshots.length){ const shots=element('div','shots'); for(const s of app.screenshots){ const img=document.createElement('img'); img.loading='lazy'; img.alt=app.label+' screenshot'; img.src=new URL(s,app.url).href; shots.append(img); } body.append(shots); }
   $('#info-dialog').showModal();
 }
 
@@ -311,29 +313,29 @@ async function renderAISettings(){
     $('#download-ai').hidden=!data.ollama.running||data.ollama.installed_model_ids.includes(model.model_id);
     const managed=$('#managed-models'); managed.replaceChildren();
     for(const modelId of data.managed_model_ids){ const row=element('p','status-line',`Managed model: ${modelId} `); const remove=element('button','secondary','Remove');
-      remove.onclick=async()=>{ if(!confirm(`Remove ${modelId}? Ollama may reclaim its downloaded files.`))return; const response=await fetch('/api/local-ai/models/'+encodeURIComponent(modelId),{method:'DELETE'}); if(response.ok)notifyAIStatusChanged('model_removed'); await renderAISettings(); }; row.append(remove); managed.append(row); }
+      remove.onclick=async()=>{ if(!confirm(`Remove ${modelId}? Ollama may reclaim its downloaded files.`))return; const response=await fetch('/api/local-ai/models/'+encodeURIComponent(modelId),adminOptions({method:'DELETE'})); if(response.ok)notifyAIStatusChanged('model_removed'); await renderAISettings(); }; row.append(remove); managed.append(row); }
   } catch(error){ $('#ai-summary').textContent='Could not inspect local AI: '+error.message; }
 }
 
-document.querySelectorAll('.profile').forEach(button=>button.onclick=async()=>{ const response=await fetch('/api/local-ai/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:button.dataset.profile})}); if(response.ok)notifyAIStatusChanged('profile_changed'); await renderAISettings(); });
+document.querySelectorAll('.profile').forEach(button=>button.onclick=async()=>{ const response=await fetch('/api/local-ai/profile',adminOptions({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:button.dataset.profile})})); if(response.ok)notifyAIStatusChanged('profile_changed'); await renderAISettings(); });
 $('#install-ai').onclick=async()=>{ const plan=await (await fetch('/api/local-ai/install-plan')).json();
   if(!confirm(`Open the official Ollama installer?\n\nSource: ${plan.official_source}\nEffect: ${plan.effect}`))return;
-  const token=await (await fetch('/api/local-ai/authorize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.plan_id})})).json();
-  await fetch('/api/local-ai/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.plan_id,token:token.token})});
+  const token=await (await fetch('/api/local-ai/authorize',adminOptions({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.plan_id})}))).json();
+  await fetch('/api/local-ai/install',adminOptions({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:plan.plan_id,token:token.token})}));
   $('#ai-operation').textContent='Complete the official installer, then choose Check again.';
 };
-$('#start-ai').onclick=async()=>{ const response=await fetch('/api/local-ai/start',{method:'POST'}); if(response.ok)notifyAIStatusChanged('runtime_started'); $('#ai-operation').textContent='Starting Ollama…'; setTimeout(renderAISettings,1500); };
+$('#start-ai').onclick=async()=>{ const response=await fetch('/api/local-ai/start',adminOptions({method:'POST'})); if(response.ok)notifyAIStatusChanged('runtime_started'); $('#ai-operation').textContent='Starting Ollama…'; setTimeout(renderAISettings,1500); };
 $('#download-ai').onclick=async()=>{ const data=state.ai||await fetchAIStatus(), model=data.profiles.find(p=>p.profile_id===data.selected_profile);
   if(!confirm(`Download ${model.display_name}?\n\nUses about ${(model.expected_download_bytes/1e9).toFixed(1)} GB of disk space.`))return;
   const progress=$('#ai-progress'); progress.hidden=false; $('#ai-operation').textContent='Preparing download…'; $('#cancel-ai').hidden=false;
   pullController=new AbortController();
   let pullCompleted=false;
   try {
-    const response=await fetch('/api/local-ai/pull/'+encodeURIComponent(model.model_id),{method:'POST',signal:pullController.signal}), reader=response.body.getReader(), dec=new TextDecoder(); let streamBuffer='';
+    const response=await fetch('/api/local-ai/pull/'+encodeURIComponent(model.model_id),adminOptions({method:'POST',signal:pullController.signal})), reader=response.body.getReader(), dec=new TextDecoder(); let streamBuffer='';
     for(;;){const {done,value}=await reader.read(); streamBuffer+=dec.decode(value||new Uint8Array(),{stream:!done}); const lines=streamBuffer.split('\n'); streamBuffer=done?'':lines.pop();
       for(const line of lines){if(!line.startsWith('data: '))continue; const event=JSON.parse(line.slice(6)); progress.value=event.percent||0; pullCompleted=event.status==='complete'||pullCompleted; $('#ai-operation').textContent=event.status==='error'?event.message:`${event.status} · ${event.percent||0}%`;}
       if(done)break;}
-    if(pullCompleted){ $('#ai-operation').textContent='Verifying the local tutor…'; const verifyResponse=await fetch('/api/local-ai/verify/'+encodeURIComponent(model.model_id),{method:'POST'}); const result=await verifyResponse.json(); if(verifyResponse.ok&&result.ok)notifyAIStatusChanged('model_verified'); $('#ai-operation').textContent=result.ok?'Local tutor verified: '+result.sample:'Verification failed. Try the smaller model.'; }
+    if(pullCompleted){ $('#ai-operation').textContent='Verifying the local tutor…'; const verifyResponse=await fetch('/api/local-ai/verify/'+encodeURIComponent(model.model_id),adminOptions({method:'POST'})); const result=await verifyResponse.json(); if(verifyResponse.ok&&result.ok)notifyAIStatusChanged('model_verified'); $('#ai-operation').textContent=result.ok?'Local tutor verified: '+result.sample:'Verification failed. Try the smaller model.'; }
   } catch(error) { $('#ai-operation').textContent=error.name==='AbortError'?'Download cancelled. You can resume later.':'Download failed: '+error.message; }
   finally { pullController=null; $('#cancel-ai').hidden=true; await renderAISettings(); }
 };

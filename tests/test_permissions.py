@@ -22,7 +22,11 @@ def make_app(apps_dir, name, m):
 
 
 def _ref(app_id):
-    return {"referer": f"http://testserver/apps/{app_id}/index.html"}
+    return {"host": f"{app_id}.localhost", "referrer-policy": "no-referrer"}
+
+
+def _admin(module):
+    return {"x-app-engine-admin": module._admin_capability}
 
 
 # ── manifest permission parsing ───────────────────────────────────────────────
@@ -78,7 +82,7 @@ def test_api_apps_exposes_permissions_and_allow(tmp_path, monkeypatch):
 def test_local_ai_management_denied_to_app_iframes(tmp_path, monkeypatch):
     module = load_engine(tmp_path, monkeypatch)
     with TestClient(module.app) as client:
-        # an app iframe (identified by its /apps/<id>/ Referer) cannot switch models
+        # An app origin cannot switch models, even with its Referer suppressed.
         r = client.put("/api/local-ai/profile", json={"profile_id": "compatibility"}, headers=_ref("evil"))
         assert r.status_code == 403
         # …nor start the runtime or remove a model
@@ -89,8 +93,8 @@ def test_local_ai_management_denied_to_app_iframes(tmp_path, monkeypatch):
 def test_local_ai_management_allowed_for_launcher(tmp_path, monkeypatch):
     module = load_engine(tmp_path, monkeypatch)
     with TestClient(module.app) as client:
-        # the top-level launcher / curl (no app Referer) may manage local AI
-        assert client.put("/api/local-ai/profile", json={"profile_id": "compatibility"}).status_code == 200
+        assert client.put("/api/local-ai/profile", json={"profile_id": "compatibility"},
+                          headers=_admin(module)).status_code == 200
 
 
 def test_local_ai_status_stays_readable_by_apps(tmp_path, monkeypatch):

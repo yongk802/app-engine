@@ -44,6 +44,13 @@ def test_no_index_and_no_entry_point_is_error():
     assert any("index.html" in e or "entry_point" in e for e in errors)
 
 
+def test_loopback_entry_point_is_valid():
+    errors, _ = manifest.validate_manifest(
+        {"label": "X", "icon": "x", "entry_point": "http://127.0.0.1:8550"},
+        has_index=False, dir_name="x")
+    assert errors == []
+
+
 def test_bad_id_and_version_and_categories_and_screenshots():
     errors, _ = manifest.validate_manifest({
         "id": "Bad_ID", "label": "X", "icon": "x",

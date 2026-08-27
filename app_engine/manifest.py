@@ -16,6 +16,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Bump when the host<->app contract changes in a way apps can depend on.
 ENGINE_VERSION = "1.0.0"
@@ -115,6 +116,15 @@ def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[
     if not isinstance(entry_point, str):
         errors.append("entry_point must be a string (a backend URL)")
         entry_point = ""
+    if entry_point:
+        try:
+            parsed = urlparse(entry_point)
+        except ValueError:
+            parsed = None
+        if (parsed is None or parsed.scheme != "http" or
+                parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or
+                parsed.username is not None or parsed.password is not None):
+            errors.append("entry_point must be an http:// loopback URL (localhost, 127.0.0.1, or ::1)")
     if not has_index and not entry_point:
         errors.append("app has neither an index.html nor an entry_point")
 

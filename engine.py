@@ -30,6 +30,7 @@ import mimetypes
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 from contextlib import asynccontextmanager
@@ -60,18 +61,12 @@ STATE_DIR = Path(
 MAX_STATE_BYTES = 100 * 1024  # 100 KB, matches Atrium
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
-# Per-app state isolation. app-engine serves every app from one origin, so an
-# app's fetch() could ask for another app's /api/app-state/{id}. The one request
-# attribute a browser app CANNOT forge is the Referer (a forbidden header for
-# fetch): for a same-origin app iframe it reliably names the calling app. Modes:
-#   off     — no check (any caller may read/write any app's state; pre-1.0 behavior)
-#   referer — deny an identified cross-app request; non-app callers (curl, tests,
-#             the top-level launcher) are still allowed  [default]
-#   strict  — require a same-origin /apps/<id>/ Referer matching the target id
-_APP_STATE_ISOLATION = os.environ.get("APP_ENGINE_APP_STATE_ISOLATION", "referer").strip().lower()
-if _APP_STATE_ISOLATION not in {"off", "referer", "strict"}:
-    _APP_STATE_ISOLATION = "referer"
-_APPS_REFERER_RE = re.compile(r"/apps/([a-z0-9][a-z0-9-]*)")
+# Browser apps run on per-app ``<id>.localhost`` origins. Unforgeable random
+# capabilities provide defense in depth and also authorize app-state calls from
+# non-browser clients. Tokens live only for this engine process and never enter
+# query strings or server logs.
+_app_capabilities: dict[str, str] = {}
+_admin_capability = secrets.token_urlsafe(32)
 
 _proxy: httpx.AsyncClient | None = None
 
@@ -194,54 +189,39 @@ def _state_file(app_id: str) -> Path:
     return STATE_DIR / f"{app_id}.json"
 
 
-def _referer_app_id(request: Request) -> str | None:
-    """The app id a same-origin Referer identifies, or None.
+def _hostname(request: Request) -> str:
+    return (request.url.hostname or "").lower().rstrip(".")
 
-    The browser sets Referer to the requesting frame's URL and fetch() cannot
-    override it, so a same-origin app iframe's requests reliably carry
-    ``/apps/<id>/…``. Foreign/cross-origin referers are ignored.
-    """
-    ref = request.headers.get("referer") or request.headers.get("referrer")
-    if not ref:
+
+def _app_host_id(request: Request) -> str | None:
+    host = _hostname(request)
+    if not host.endswith(".localhost"):
         return None
-    try:
-        parsed = urlparse(ref)
-    except ValueError:
-        return None
-    host = request.headers.get("host", "")
-    if parsed.netloc and host and parsed.netloc != host:
-        return None  # a different origin — not one of our app iframes
-    m = _APPS_REFERER_RE.search(parsed.path or "")
-    return m.group(1) if m else None
+    candidate = host[:-len(".localhost")]
+    return candidate if _APP_ID_RE.fullmatch(candidate) else None
+
+
+def _is_launcher_host(request: Request) -> bool:
+    return _hostname(request) in {"127.0.0.1", "localhost", "::1", "testserver"}
+
+
+def _app_capability(app_id: str) -> str:
+    return _app_capabilities.setdefault(app_id, secrets.token_urlsafe(32))
 
 
 def _enforce_app_state_access(request: Request, app_id: str) -> None:
-    """Gate /api/app-state/{app_id} so one app can't read/clobber another's.
-
-    See ``_APP_STATE_ISOLATION`` for the modes. Raises 403 on a denied call.
-    """
-    if _APP_STATE_ISOLATION == "off":
-        return
-    caller = _referer_app_id(request)
-    if _APP_STATE_ISOLATION == "strict":
-        if caller != app_id:
-            raise HTTPException(403, "app-state access denied (isolation: strict)")
-        return
-    # referer mode: block only an identified cross-app caller
-    if caller is not None and caller != app_id:
-        raise HTTPException(403, "cross-app app-state access denied")
+    host_app = _app_host_id(request)
+    supplied = request.headers.get("x-app-state-token", "")
+    expected = _app_capability(app_id)
+    if host_app != app_id or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(403, "app-state capability denied")
 
 
 def _deny_app_iframe(request: Request) -> None:
-    """Reject a request that originates from an app iframe.
-
-    Local-AI model/runtime management is a launcher (admin) capability, not one
-    apps hold: an app iframe's requests carry an unforgeable ``/apps/<id>/``
-    Referer, while the top-level launcher, curl, and tests do not. Read-only
-    status/diagnostics stay open; only the mutating endpoints use this guard.
-    """
-    if _referer_app_id(request) is not None:
-        raise HTTPException(403, "local-AI management is not available to apps")
+    """Require the launcher-only capability for local-AI mutations."""
+    supplied = request.headers.get("x-app-engine-admin", "")
+    if not _is_launcher_host(request) or not secrets.compare_digest(supplied, _admin_capability):
+        raise HTTPException(403, "launcher capability required")
 
 
 @app.get("/api/app-state/{app_id}")
@@ -488,13 +468,17 @@ def _inject_base_href(html: bytes, app_id: str) -> bytes:
 
 
 @app.get("/apps/{filename}")
-async def shared_file(filename: str) -> Response:
+async def shared_file(filename: str, request: Request) -> Response:
     """Serve shared root-level files (e.g. app-state-bridge.js) referenced as
     ``../file.js`` from inside an app iframe."""
     if "." not in filename or "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(404)
     candidate = (APPS_DIR / filename).resolve()
-    if candidate.is_file() and str(candidate).startswith(str(APPS_DIR)):
+    try:
+        candidate.relative_to(APPS_DIR)
+    except ValueError:
+        raise HTTPException(404)
+    if candidate.is_file():
         mime, _ = mimetypes.guess_type(str(candidate))
         return Response(candidate.read_bytes(), media_type=mime or "application/octet-stream",
                         headers=_SEC_HEADERS)
@@ -528,6 +512,8 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
     app_obj = apps.get(app_id)
     if not app_obj:
         raise HTTPException(404)
+    if _app_host_id(request) != app_id:
+        raise HTTPException(403, "app must be opened on its isolated origin")
 
     # entry_point apps: reverse-proxy everything to their own backend.
     if app_obj.entry_point:
@@ -536,9 +522,11 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
     safe = Path(path) if path else Path("index.html")
     if ".." in safe.parts or safe.is_absolute():
         raise HTTPException(404)
-    root = Path(app_obj.root)
+    root = Path(app_obj.root).resolve()
     full = (root / safe).resolve()
-    if not str(full).startswith(str(root)):
+    try:
+        full.relative_to(root)
+    except ValueError:
         raise HTTPException(404)
     if full.is_dir():
         full = full / "index.html"
@@ -552,10 +540,15 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
 # ── Launcher UI ───────────────────────────────────────────────────────────────
 
 @app.get("/api/apps")
-async def api_apps() -> JSONResponse:
+async def api_apps(request: Request) -> JSONResponse:
+    if not _is_launcher_host(request):
+        raise HTTPException(403, "launcher origin required")
     apps = [asdict(a) for a in discover().values()]
     for a in apps:
         a.pop("root", None)
+        port = request.url.port
+        authority = f"{a['id']}.localhost" + (f":{port}" if port else "")
+        a["url"] = f"{request.url.scheme}://{authority}/apps/{a['id']}/#atrium_state_token={_app_capability(a['id'])}"
     return JSONResponse(apps)
 
 
@@ -576,8 +569,12 @@ async def api_apps_rejected() -> JSONResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def launcher() -> HTMLResponse:
-    return HTMLResponse((Path(__file__).parent / "launcher.html").read_text())
+async def launcher(request: Request) -> HTMLResponse:
+    if not _is_launcher_host(request):
+        raise HTTPException(403, "launcher origin required")
+    html = (Path(__file__).parent / "launcher.html").read_text()
+    html = html.replace("__APP_ENGINE_ADMIN_CAPABILITY__", _admin_capability)
+    return HTMLResponse(html, headers={"Content-Security-Policy": "frame-ancestors 'none'"})
 
 
 if __name__ == "__main__":

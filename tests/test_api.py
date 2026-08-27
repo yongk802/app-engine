@@ -11,6 +11,10 @@ def load_engine(tmp_path, monkeypatch):
     return importlib.reload(engine)
 
 
+def _admin(module):
+    return {"x-app-engine-admin": module._admin_capability}
+
+
 def test_local_ai_status_is_actionable(tmp_path, monkeypatch):
     module = load_engine(tmp_path, monkeypatch)
     with TestClient(module.app) as client:
@@ -24,14 +28,14 @@ def test_local_ai_status_is_actionable(tmp_path, monkeypatch):
 def test_profile_endpoint_rejects_unknown_profile(tmp_path, monkeypatch):
     module = load_engine(tmp_path, monkeypatch)
     with TestClient(module.app) as client:
-        response = client.put("/api/local-ai/profile", json={"profile_id": "huge"})
+        response = client.put("/api/local-ai/profile", json={"profile_id": "huge"}, headers=_admin(module))
     assert response.status_code == 400
 
 
 def test_profile_endpoint_persists_selection(tmp_path, monkeypatch):
     module = load_engine(tmp_path, monkeypatch)
     with TestClient(module.app) as client:
-        assert client.put("/api/local-ai/profile", json={"profile_id": "compatibility"}).status_code == 200
+        assert client.put("/api/local-ai/profile", json={"profile_id": "compatibility"}, headers=_admin(module)).status_code == 200
         assert client.get("/api/local-ai/status").json()["selected_profile"] == "compatibility"
 
 
@@ -39,9 +43,9 @@ def test_install_plan_requires_bound_confirmation(tmp_path, monkeypatch):
     module = load_engine(tmp_path, monkeypatch)
     with TestClient(module.app) as client:
         plan = client.get("/api/local-ai/install-plan").json()
-        bad = client.post("/api/local-ai/install", json={"plan_id": plan["plan_id"], "token": "bad"})
+        bad = client.post("/api/local-ai/install", json={"plan_id": plan["plan_id"], "token": "bad"}, headers=_admin(module))
         assert bad.status_code == 400
-        token = client.post("/api/local-ai/authorize", json={"plan_id": plan["plan_id"]}).json()["token"]
+        token = client.post("/api/local-ai/authorize", json={"plan_id": plan["plan_id"]}, headers=_admin(module)).json()["token"]
     assert token
 
 

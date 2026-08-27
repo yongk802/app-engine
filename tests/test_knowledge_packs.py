@@ -1,21 +1,24 @@
-import json
-from collections import Counter
 from pathlib import Path
 
-from app_engine.grounding import KnowledgeBase
+import pytest
 
-
-APPS = Path("/Users/yongkim/git/personal-apps")
+from app_engine.grounding import KnowledgeBase, load_declared_knowledge
+from tests.catalog import personal_apps_dir
 
 
 def test_every_chat_app_has_two_reviewed_knowledge_entries():
-    chat_apps = set()
-    for manifest in APPS.glob("*/app.json"):
-        data = json.loads(manifest.read_text())
-        if data.get("chat_enabled"):
-            chat_apps.add(data.get("id", manifest.parent.name))
-    knowledge = KnowledgeBase.load(Path("knowledge/tutors.json"))
-    counts = Counter(entry.app_id for entry in knowledge.entries)
-    assert set(counts) == chat_apps
-    assert all(counts[app_id] >= 2 for app_id in chat_apps)
-    assert all(entry.source_note.strip() for entry in knowledge.entries)
+    apps_dir = personal_apps_dir()
+    if not apps_dir:
+        pytest.skip("cross-repo knowledge validation needs PERSONAL_APPS_DIR or a sibling personal-apps checkout")
+    import json
+    for manifest_path in apps_dir.glob("*/app.json"):
+        data = json.loads(manifest_path.read_text())
+        if not data.get("chat_enabled"):
+            continue
+        declared = data.get("chat_knowledge")
+        assert declared, f"{manifest_path.parent.name} must declare chat_knowledge"
+        knowledge = load_declared_knowledge(manifest_path.parent, declared)
+        app_id = data.get("id", manifest_path.parent.name)
+        entries = [entry for entry in knowledge.entries if entry.app_id == app_id]
+        assert len(entries) >= 2, f"{app_id} needs at least two reviewed knowledge entries"
+        assert all(entry.source_note.strip() for entry in entries)

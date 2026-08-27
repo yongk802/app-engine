@@ -1,17 +1,12 @@
-import json
 from collections import Counter
 from pathlib import Path
 
 from app_engine.benchmark import load_suite
+from tests.catalog import expected_chat_apps
 
 
 def test_suite_covers_every_chat_enabled_personal_app_twice():
-    apps_dir = Path("/Users/yongkim/git/personal-apps")
-    chat_apps = set()
-    for manifest in apps_dir.glob("*/app.json"):
-        data = json.loads(manifest.read_text())
-        if data.get("chat_enabled"):
-            chat_apps.add(data["id"])
+    chat_apps = expected_chat_apps()
     suite = load_suite(Path("benchmarks/tutor-cases.json"))
     counts = Counter(case.app_id for case in suite.cases)
     critical = {case.app_id for case in suite.cases if case.critical}

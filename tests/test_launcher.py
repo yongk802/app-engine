@@ -11,6 +11,7 @@ def test_manifest_values_are_not_inserted_with_inner_html():
     # textContent (never innerHTML) — so untrusted manifest text is inert.
     assert "element('span','label', app.label)" in HTML
     assert "node.textContent=text" in HTML
+    assert "new URL(s,app.url).href" in HTML
 
 
 def test_local_ai_setup_has_privacy_profiles_and_confirmation():

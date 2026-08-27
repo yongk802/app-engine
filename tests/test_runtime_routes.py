@@ -21,6 +21,21 @@ def _write_static_app(root: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_proxy_response_preserves_repeated_headers():
+    from app_engine.contracts import ProxyResponse
+    from app_engine.routes import _streaming_proxy_response
+
+    async def body():
+        yield b"partial"
+
+    response = _streaming_proxy_response(
+        ProxyResponse(207, (("x-demo", "one"), ("x-demo", "two")), body())
+    )
+    assert response.status_code == 207
+    assert response.raw_headers == [(b"x-demo", b"one"), (b"x-demo", b"two")]
+
+
+@pytest.mark.asyncio
 async def test_runtime_composes_catalog_gateway_studio_and_diagnostics(tmp_path):
     from app_engine.runtime import DefaultAppEngineRuntime, LocalHostAdapter
 

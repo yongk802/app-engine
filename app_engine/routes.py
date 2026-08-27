@@ -37,6 +37,16 @@ from .runtime import DefaultAppEngineRuntime
 Authenticate = Callable[[], HostSubject | Awaitable[HostSubject]]
 
 
+def _streaming_proxy_response(result) -> StreamingResponse:
+    """Build a streaming response without collapsing repeated HTTP headers."""
+    response = StreamingResponse(result.body, status_code=result.status_code)
+    response.raw_headers = [
+        (name.lower().encode("latin-1"), value.encode("latin-1"))
+        for name, value in result.headers
+    ]
+    return response
+
+
 def _catalog_app(item) -> dict[str, object]:
     manifest = item.manifest
     return {
@@ -249,15 +259,11 @@ def create_app_engine_router(
                 method=request.method,
                 path=proxy_path,
                 query=tuple(request.query_params.multi_items()),
-                headers=tuple(request.headers.multi_items()),
+                headers=tuple(request.headers.items()),
                 body=request_body(),
             ),
         )
-        return StreamingResponse(
-            result.body,
-            status_code=result.status_code,
-            headers=dict(result.headers),
-        )
+        return _streaming_proxy_response(result)
 
     @router.get("/launches/{launch_id}")
     async def launch_status(launch_id: str, subject: HostSubject = Depends(authenticate)):

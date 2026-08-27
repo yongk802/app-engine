@@ -106,6 +106,9 @@ async def test_reusable_router_exposes_catalog_studio_assets_and_static_session(
             studio = await client.get("/api/app-engine/studio/")
             assert studio.status_code == 200
             assert "App Studio" in studio.text
+            assert "app-engine-csrf-url" in studio.text
+            assert "o.entry_url||o.url" in studio.text
+            assert "approval_required" in studio.text
 
             opened = await client.post("/api/app-engine/apps/demo/open", json={})
             assert opened.status_code == 200

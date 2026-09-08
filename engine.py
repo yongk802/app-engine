@@ -41,7 +41,7 @@ from urllib.parse import urlparse
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from app_engine.chat import ChatRuntime
 from app_engine.config import ConfigStore
@@ -494,7 +494,7 @@ def _inject_base_href(html: bytes, app_id: str) -> bytes:
     return attr.sub(lambda x: x.group(1) + pref + x.group(2), html)
 
 
-@app.get("/apps/{filename}")
+@app.api_route("/apps/{filename}", methods=["GET", "HEAD"])
 async def shared_file(filename: str, request: Request) -> Response:
     """Serve shared root-level files (e.g. app-state-bridge.js) referenced as
     ``../file.js`` from inside an app iframe."""
@@ -507,7 +507,7 @@ async def shared_file(filename: str, request: Request) -> Response:
         raise HTTPException(404)
     if candidate.is_file():
         mime, _ = mimetypes.guess_type(str(candidate))
-        return Response(candidate.read_bytes(), media_type=mime or "application/octet-stream",
+        return FileResponse(candidate, media_type=mime or "application/octet-stream",
                         headers=_SEC_HEADERS)
     raise HTTPException(404)
 
@@ -532,8 +532,8 @@ async def _proxy_entry_point(app_obj: App, path: str, request: Request) -> Respo
     return Response(content, status_code=resp.status_code, headers=hdrs, media_type=ctype)
 
 
-@app.api_route("/apps/{app_id}/", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-@app.api_route("/apps/{app_id}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@app.api_route("/apps/{app_id}/", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"])
+@app.api_route("/apps/{app_id}/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"])
 async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
     apps = discover()
     app_obj = apps.get(app_id)
@@ -560,7 +560,7 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
     if not full.is_file():
         raise HTTPException(404)
     mime, _ = mimetypes.guess_type(str(full))
-    return Response(full.read_bytes(), media_type=mime or "application/octet-stream",
+    return FileResponse(full, media_type=mime or "application/octet-stream",
                     headers=_SEC_HEADERS)
 
 

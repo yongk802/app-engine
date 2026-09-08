@@ -6,7 +6,7 @@ import asyncio
 import errno
 import hashlib
 import ipaddress
-import mimetypes
+from .media_types import asset_media_type
 import os
 import stat
 import uuid
@@ -212,7 +212,7 @@ class DefaultAppGateway(AppGateway):
             asset_name = "index.html"
 
         etag = f'"{hashlib.sha256(body).hexdigest()}"'
-        media_type = mimetypes.guess_type(asset_name)[0] or "application/octet-stream"
+        media_type = asset_media_type(asset_name)
         headers = (
             ("X-Content-Type-Options", "nosniff"),
             ("ETag", etag),

@@ -1,6 +1,23 @@
 from fastapi.testclient import TestClient
+import mimetypes
 
 from test_security import load_engine
+
+
+def test_script_mime_types_do_not_depend_on_windows_file_associations(tmp_path, monkeypatch):
+    root = tmp_path / "apps" / "demo"
+    root.mkdir(parents=True)
+    (root / "app.json").write_text('{"id":"demo","label":"Demo","icon":"D"}')
+    (root / "index.html").write_text("safe")
+    (root / "app.mjs").write_text("export const ready = true;")
+    (root.parent / "bridge.js").write_text("console.log('bridge');")
+    module = load_engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(mimetypes, 'guess_type', lambda value: ('text/plain', None))
+    with TestClient(module.app) as client:
+        for path in ('/apps/demo/app.mjs', '/apps/bridge.js'):
+            response = client.get(path, headers={'host': 'demo.localhost'})
+            assert response.status_code == 200
+            assert response.headers['content-type'].split(';')[0] == 'text/javascript'
 
 
 def test_media_supports_seeking_and_head(tmp_path, monkeypatch):

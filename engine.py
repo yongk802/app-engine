@@ -26,7 +26,6 @@ Config via env:
 from __future__ import annotations
 
 import json
-import mimetypes
 import os
 import platform
 import re
@@ -44,6 +43,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from app_engine.chat import ChatRuntime
+from app_engine.media_types import asset_media_type
 from app_engine.config import ConfigStore
 from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_declared_knowledge
 from app_engine import manifest as _manifest
@@ -506,8 +506,7 @@ async def shared_file(filename: str, request: Request) -> Response:
     except ValueError:
         raise HTTPException(404)
     if candidate.is_file():
-        mime, _ = mimetypes.guess_type(str(candidate))
-        return FileResponse(candidate, media_type=mime or "application/octet-stream",
+        return FileResponse(candidate, media_type=asset_media_type(candidate),
                         headers=_SEC_HEADERS)
     raise HTTPException(404)
 
@@ -559,8 +558,7 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
         full = full / "index.html"
     if not full.is_file():
         raise HTTPException(404)
-    mime, _ = mimetypes.guess_type(str(full))
-    return FileResponse(full, media_type=mime or "application/octet-stream",
+    return FileResponse(full, media_type=asset_media_type(full),
                     headers=_SEC_HEADERS)
 
 

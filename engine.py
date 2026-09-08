@@ -167,8 +167,8 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
         if not manifest.is_file():
             continue
         try:
-            m = json.loads(manifest.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
+            m = json.loads(manifest.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeError, OSError) as exc:
             rejected.append({"dir": d.name, "reason": f"invalid app.json: {exc}"})
             continue
         has_index = (d / "index.html").is_file()
@@ -258,8 +258,8 @@ async def get_app_state(app_id: str, request: Request) -> JSONResponse:
     if not f.is_file():
         return JSONResponse({})
     try:
-        return JSONResponse(json.loads(f.read_text()))
-    except (json.JSONDecodeError, OSError):
+        return JSONResponse(json.loads(f.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, UnicodeError, OSError):
         return JSONResponse({})
 
 
@@ -276,7 +276,7 @@ async def put_app_state(app_id: str, request: Request) -> JSONResponse:
     if not isinstance(data, (dict, list)):
         raise HTTPException(400, "state must be object or array")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    _state_file(app_id).write_text(json.dumps(data))
+    _state_file(app_id).write_text(json.dumps(data), encoding="utf-8")
     return JSONResponse({"ok": True})
 
 
@@ -599,13 +599,13 @@ async def api_apps_rejected() -> JSONResponse:
 async def launcher(request: Request) -> HTMLResponse:
     if not _is_launcher_host(request):
         raise HTTPException(403, "launcher origin required")
-    html = (Path(__file__).parent / "launcher.html").read_text()
+    html = (Path(__file__).parent / "launcher.html").read_text(encoding="utf-8")
     html = html.replace("__APP_ENGINE_ADMIN_CAPABILITY__", _admin_capability)
     return HTMLResponse(html, headers={"Content-Security-Policy": "frame-ancestors 'none'"})
 
 
 if __name__ == "__main__":
-    print(f"app-engine → apps from {APPS_DIR}")
+    print(f"app-engine -> apps from {APPS_DIR}")
     print(f"            state in {STATE_DIR}")
     print(f"            Local AI at {_config.load().ollama_endpoint} ({_config.load().selected_profile})")
     uvicorn.run(

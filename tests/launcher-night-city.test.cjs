@@ -14,9 +14,9 @@ function harness() {
 }
 test('managed app opens a runtime session and delegates its browser permissions', async()=>{
  const h=harness();
- await h.w.api.openApp({id:'cyberpunk-tcg',label:'Night City',engine_managed:true,allow:'microphone',sandbox:'allow-scripts allow-same-origin',url:'http://cyberpunk-tcg.localhost:8042/apps/cyberpunk-tcg/'});
+ await h.w.api.openApp({id:'cyberpunk-tcg',label:'Night City',engine_managed:true,allow:'microphone',sandbox:'allow-scripts allow-same-origin',url:'http://cyberpunk-tcg.localhost:8042/apps/cyberpunk-tcg/#atrium_state_token=existing-save-capability'});
  assert.equal(h.calls[0][0],'/api/app-engine/apps/cyberpunk-tcg/open');
- assert.equal(h.w.document.querySelector('iframe').getAttribute('src'),'http://cyberpunk-tcg.localhost:8042/api/app-engine/sessions/s/proxy/');
+ assert.equal(h.w.document.querySelector('iframe').getAttribute('src'),'http://cyberpunk-tcg.localhost:8042/api/app-engine/sessions/s/proxy/#atrium_state_token=existing-save-capability');
  assert.equal(h.w.document.querySelector('iframe').allow,'microphone');
  h.close();
 });

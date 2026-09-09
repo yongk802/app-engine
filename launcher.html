@@ -283,7 +283,11 @@ async function openApp(app,btn) {
   if(app.allow) iframe.allow=app.allow;
   // Gateway entry_url is host-neutral; mount the actual proxy route on the
   // app's isolated origin, preserving relative asset/API URLs and mic policy.
-  iframe.src=session?new URL('/api/app-engine/sessions/'+encodeURIComponent(session.session_id)+'/proxy/',new URL(app.url,location.href)).href:app.url;
+  const appURL=new URL(app.url,location.href);
+  const frameURL=session?new URL('/api/app-engine/sessions/'+encodeURIComponent(session.session_id)+'/proxy/',appURL):appURL;
+  // Keep the existing app-state capability when changing only the serving path.
+  frameURL.hash=appURL.hash;
+  iframe.src=frameURL.href;
   iframe.addEventListener('load',()=>{ if(state.active===app.id) signalLifecycle(app.id,'visible'); });
   inst.append(iframe);
   if(app.chat_enabled) { inst.append(buildChat(app)); $('#mobile-chat').hidden=false; } else $('#mobile-chat').hidden=true;

@@ -568,7 +568,22 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
 async def api_apps(request: Request) -> JSONResponse:
     if not _is_launcher_host(request):
         raise HTTPException(403, "launcher origin required")
-    apps = [asdict(a) for a in discover().values()]
+    listing = {a.id: asdict(a) for a in discover().values()}
+    for item in _app_runtime.catalog.snapshot(_app_runtime.catalog_key).apps:
+        manifest = item.manifest
+        target = next(t for t in manifest.targets if t.target_id == manifest.default_target)
+        if target.runtime is None:
+            continue
+        listing[str(manifest.app_id)] = {
+            **listing.get(str(manifest.app_id), {}),
+            "id": str(manifest.app_id), "label": manifest.label, "icon": manifest.icon,
+            "version": manifest.metadata.version, "description": manifest.metadata.description,
+            "categories": list(manifest.metadata.categories), "author": manifest.metadata.author,
+            "sandbox": manifest.browser.sandbox, "allow": manifest.browser.allow,
+            "permissions": list(manifest.browser.permissions), "compatible": item.compatible,
+            "engine_managed": True,
+        }
+    apps = list(listing.values())
     for a in apps:
         a.pop("root", None)
         port = request.url.port
@@ -590,7 +605,10 @@ async def api_apps_rejected() -> JSONResponse:
     Surfaces malformed manifests for developers instead of silently dropping
     them. Empty in normal operation.
     """
-    return JSONResponse(inspect_apps()[1])
+    accepted = {item.manifest.root.resolve() for item in
+                _app_runtime.catalog.snapshot(_app_runtime.catalog_key).apps}
+    return JSONResponse([item for item in inspect_apps()[1]
+                         if (APPS_DIR / item["dir"]).resolve() not in accepted])
 
 
 @app.get("/", response_class=HTMLResponse)

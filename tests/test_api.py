@@ -56,3 +56,23 @@ def test_diagnostics_omit_chat_content_and_environment(tmp_path, monkeypatch):
         text = client.get("/api/local-ai/diagnostics").text
     assert "do-not-include" not in text
     assert "selected_profile" in text
+
+
+def test_managed_v2_catalog_is_exposed_to_launcher(tmp_path, monkeypatch):
+    import json
+    module = load_engine(tmp_path, monkeypatch)
+    app_dir = tmp_path / 'apps' / 'game'
+    app_dir.mkdir(parents=True)
+    (app_dir / 'app.json').write_text(json.dumps({
+        'manifest_version': 2, 'id': 'cyberpunk-tcg', 'label': 'Night City Table', 'icon': 'N',
+        'default_target': 'web',
+        'browser': {'sandbox': 'allow-scripts allow-same-origin', 'permissions': ['microphone']},
+        'targets': [{'id': 'web', 'kind': 'web', 'runtime': {'driver': 'process', 'start': {'argv': ['python', 'server.py']}}}],
+    }))
+    with TestClient(module.app, base_url='http://localhost') as client:
+        catalog = client.get('/api/app-engine/catalog').json()
+        assert catalog['apps'], catalog['rejections']
+        app = next(a for a in client.get('/api/apps').json() if a['id'] == 'cyberpunk-tcg')
+        assert client.get('/api/apps/rejected').json() == []
+    assert app['engine_managed'] is True
+    assert 'microphone' in app['allow']

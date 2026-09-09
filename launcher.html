@@ -10,6 +10,7 @@
   body { margin:0; height:100vh; overflow:hidden; display:flex; font-family:system-ui,sans-serif; background:var(--bg); color:#e6e6e6; }
   button,textarea,select { font:inherit; }
   button { cursor:pointer; }
+  body.night-city-playing #sidebar, body.night-city-playing #mobile-apps, body.night-city-playing #mobile-chat, body.night-city-playing .chat { display:none !important; }
   #sidebar { width:220px; flex:0 0 220px; background:var(--panel); border-right:1px solid var(--line); overflow-y:auto; z-index:10; }
   .side-head { display:flex; align-items:center; padding:12px 10px 7px 16px; position:sticky; top:0; background:var(--panel); z-index:1; }
   .side-head h1 { flex:1; font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:#7f8998; margin:0; }
@@ -230,22 +231,59 @@ function signalLifecycle(appId,event){
   try { frame && frame.contentWindow && frame.contentWindow.postMessage({type:'appengine:lifecycle',event,app:appId},'*'); } catch(_){}
 }
 
-function openApp(app,btn) {
+// Only the mounted, foreground game may control launcher presentation.
+window.addEventListener('message',event=>{
+  if(state.active!=='cyberpunk-tcg' || event.data?.type!=='night-city:play-mode' || typeof event.data.active!=='boolean') return;
+  const frame=state.instances[state.active]?.querySelector('iframe');
+  if(!frame || event.source!==frame.contentWindow || event.origin!==new URL(frame.src,location.href).origin) return;
+  document.body.classList.toggle('night-city-playing',event.data.active);
+});
+
+async function openManagedApp(app) {
+  const endpoint='/api/app-engine/apps/'+encodeURIComponent(app.id);
+  const options=adminOptions({method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  let response=await fetch(endpoint+'/open',options);
+  if(response.status===409) {
+    const pending=await response.json();
+    if(pending.detail?.code!=='approval_required') throw new Error('Launch conflict');
+    const previewResponse=await fetch(endpoint+'/preview',options);
+    if(!previewResponse.ok) throw new Error('Could not preview the launch plan');
+    const plan=await previewResponse.json();
+    const commands=(plan.steps||[]).map(step=>step.phase+': '+step.argv.join(' ')).join('\n');
+    if(!confirm('Approve this local process plan?\n\n'+commands)) throw new Error('Launch approval was cancelled');
+    const approval=await fetch('/api/app-engine/plans/'+encodeURIComponent(plan.fingerprint)+'/approve',adminOptions({method:'POST'}));
+    if(!approval.ok) throw new Error('Could not approve the launch plan');
+    response=await fetch(endpoint+'/open',options);
+  }
+  if(!response.ok) throw new Error('Launch failed ('+response.status+')');
+  return response.json();
+}
+
+async function openApp(app,btn) {
   if(app.compatible===false){ showInfo(app); return; }
+  document.body.classList.remove('night-city-playing');
   const previous=state.active;
   document.querySelectorAll('.app-btn').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active');
   $('#empty').hidden=true; document.querySelectorAll('.instance').forEach(i=>i.classList.remove('active'));
   if(previous && previous!==app.id) signalLifecycle(previous,'hidden');
   state.active=app.id; $('#sidebar').classList.remove('open');
   if (state.instances[app.id]) { state.instances[app.id].classList.add('active'); signalLifecycle(app.id,'visible'); return; }
-  const inst=document.createElement('section'); inst.className='instance active';
+  let session=null;
+  try { if(app.engine_managed) session=await openManagedApp(app); }
+  catch(error) { if(state.active===app.id){ $('#empty').hidden=false; $('#empty').textContent=error.message; } return; }
+  // A different app can be selected while the runtime is starting.
+  if(state.instances[app.id]) { if(session) fetch('/api/app-engine/sessions/'+encodeURIComponent(session.session_id),adminOptions({method:'DELETE'})); return; }
+  const inst=document.createElement('section'); inst.className=state.active===app.id?'instance active':'instance';
+  if(session) inst.dataset.engineSessionId=session.session_id;
   const iframe=document.createElement('iframe'); iframe.title=app.label; if(app.sandbox) iframe.sandbox=app.sandbox;
   // Delegate the app's declared browser capabilities (mic, camera, …) to the
   // iframe; the browser prompts for consent at point of use. Only takes effect
   // when the app's sandbox includes allow-same-origin (opaque origins can't be
   // granted powerful features). Server-sanitized against an allowlist.
   if(app.allow) iframe.allow=app.allow;
-  iframe.src=app.url;
+  // Gateway entry_url is host-neutral; mount the actual proxy route on the
+  // app's isolated origin, preserving relative asset/API URLs and mic policy.
+  iframe.src=session?new URL('/api/app-engine/sessions/'+encodeURIComponent(session.session_id)+'/proxy/',new URL(app.url,location.href)).href:app.url;
   iframe.addEventListener('load',()=>{ if(state.active===app.id) signalLifecycle(app.id,'visible'); });
   inst.append(iframe);
   if(app.chat_enabled) { inst.append(buildChat(app)); $('#mobile-chat').hidden=false; } else $('#mobile-chat').hidden=true;

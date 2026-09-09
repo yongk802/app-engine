@@ -314,3 +314,7 @@ setup, git workflow, and guidelines.
 ## License
 
 Released under the [MIT License](LICENSE). Free to use, modify, and distribute.
+
+### Launcher regression tests
+
+Run `npm ci` followed by `npm test` for the browser-launcher tests. These cover managed runtime launch, approval cancellation, browser permissions, and Night City Table focus messages. The Python API tests remain `python -m pytest tests/test_api.py`.

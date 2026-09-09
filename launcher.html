@@ -29,7 +29,9 @@
   /* Desktop: the apps panel collapses to a floating ☰ button; remembered per browser. */
   @media (min-width: 701px) {
     body.sidebar-collapsed #sidebar { display:none; }
-    body.sidebar-collapsed #mobile-apps { display:block; }
+    /* A slim rail, not an overlay: nothing covers the app's own header. */
+    body.sidebar-collapsed #mobile-apps { display:block; position:static; flex:0 0 auto; align-self:stretch; margin:0; padding:10px 9px; border:0; border-right:1px solid var(--line); border-radius:0; background:var(--panel); font-size:18px; line-height:1; }
+    body.sidebar-collapsed #mobile-apps .txt { display:none; }
   }
   .chat { width:340px; flex:0 0 340px; min-width:0; background:#12151c; border-left:1px solid var(--line); display:flex; flex-direction:column; }
   .chat-head { padding:11px 14px; font-size:13px; border-bottom:1px solid var(--line); color:var(--muted); }
@@ -97,7 +99,7 @@
     <div id="rejected-note"></div>
     <div id="applist"></div>
   </nav>
-  <button id="mobile-apps" aria-label="Show the apps panel" aria-expanded="true" title="Show the apps panel (Ctrl+B)">☰ Apps</button>
+  <button id="mobile-apps" aria-label="Show the apps panel" aria-expanded="true" title="Show the apps panel (Ctrl+B)">☰<span class="txt"> Apps</span></button>
   <button id="mobile-chat" aria-label="Show or hide tutor chat" hidden>💬 Tutor</button>
   <main id="main"><div id="empty">Select an app →</div></main>
 

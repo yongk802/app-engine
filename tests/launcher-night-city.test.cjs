@@ -9,7 +9,7 @@ function harness() {
   const calls=[];
   w.fetch=async (url,options)=>{calls.push([url,options]);return {ok:true,status:200,json:async()=>({entry_url:'/apps/cyberpunk-tcg/sessions/s/',session_id:'s'})};};
   w.confirm=()=>true;
-  w.eval(html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/boot\(\);\s*$/, '')+'\nwindow.api={openApp,state};');
+  w.eval(html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/boot\(\);\s*$/, '')+'\nwindow.api={openApp,state,toggleSidebar,setSidebarCollapsed};');
   return {w,calls,close:()=>w.close()};
 }
 test('managed app opens a runtime session and delegates its browser permissions', async()=>{
@@ -47,4 +47,29 @@ test('managed launch shows preview commands and does not approve when declined',
  assert.equal(h.w.document.querySelector('iframe'),null);
  assert.match(h.w.document.querySelector('#empty').textContent,/cancelled/);
  h.close();
+});
+test('the apps panel collapses to a floating button on desktop, remembers it, and Ctrl+B toggles',()=>{
+ const h=harness(),w=h.w,body=w.document.body;
+ assert.equal(body.classList.contains('sidebar-collapsed'),false);
+ w.document.querySelector('#collapse-apps').click();
+ assert.equal(body.classList.contains('sidebar-collapsed'),true);
+ assert.equal(w.localStorage.getItem('appengine.sidebar'),'collapsed');
+ assert.equal(w.document.querySelector('#mobile-apps').getAttribute('aria-expanded'),'false');
+ w.document.querySelector('#mobile-apps').click();
+ assert.equal(body.classList.contains('sidebar-collapsed'),false);
+ assert.equal(w.localStorage.getItem('appengine.sidebar'),'open');
+ w.document.dispatchEvent(new w.KeyboardEvent('keydown',{key:'b',ctrlKey:true,cancelable:true}));
+ assert.equal(body.classList.contains('sidebar-collapsed'),true);
+ w.document.dispatchEvent(new w.KeyboardEvent('keydown',{key:'b'}));
+ assert.equal(body.classList.contains('sidebar-collapsed'),true,'plain b types, never toggles');
+ h.close();
+});
+test('a remembered collapsed panel starts collapsed',()=>{
+ const html=fs.readFileSync('launcher.html','utf8');
+ const dom=new JSDOM(html.replace(/<script>[\s\S]*?<\/script>/,''),{url:'http://localhost:8042',runScripts:'outside-only'});
+ dom.window.localStorage.setItem('appengine.sidebar','collapsed');
+ dom.window.fetch=async()=>({ok:true,status:200,json:async()=>[]});
+ dom.window.eval(html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/boot\(\);\s*$/,''));
+ assert.equal(dom.window.document.body.classList.contains('sidebar-collapsed'),true);
+ dom.window.close();
 });

@@ -26,6 +26,11 @@
   #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#667085; }
   #mobile-apps,#mobile-chat { display:none; position:fixed; z-index:8; top:8px; border:1px solid var(--line); background:#1d2230; color:white; border-radius:8px; padding:8px 10px; }
   #mobile-apps { left:8px; } #mobile-chat { right:8px; }
+  /* Desktop: the apps panel collapses to a floating ☰ button; remembered per browser. */
+  @media (min-width: 701px) {
+    body.sidebar-collapsed #sidebar { display:none; }
+    body.sidebar-collapsed #mobile-apps { display:block; }
+  }
   .chat { width:340px; flex:0 0 340px; min-width:0; background:#12151c; border-left:1px solid var(--line); display:flex; flex-direction:column; }
   .chat-head { padding:11px 14px; font-size:13px; border-bottom:1px solid var(--line); color:var(--muted); }
   .chat-status { padding:12px; }
@@ -87,12 +92,12 @@
 </head>
 <body>
   <nav id="sidebar" aria-label="Applications">
-    <div class="side-head"><h1>Apps</h1><button id="ai-settings" class="icon-btn" aria-label="Local AI settings">⚙</button></div>
+    <div class="side-head"><h1>Apps</h1><button id="ai-settings" class="icon-btn" aria-label="Local AI settings">⚙</button><button id="collapse-apps" class="icon-btn" aria-label="Hide the apps panel" title="Hide the apps panel (Ctrl+B)">«</button></div>
     <div class="search-wrap"><input id="app-search" type="search" placeholder="Search apps…" aria-label="Search apps" autocomplete="off"></div>
     <div id="rejected-note"></div>
     <div id="applist"></div>
   </nav>
-  <button id="mobile-apps" aria-label="Open apps">☰ Apps</button>
+  <button id="mobile-apps" aria-label="Show the apps panel" aria-expanded="true" title="Show the apps panel (Ctrl+B)">☰ Apps</button>
   <button id="mobile-chat" aria-label="Show or hide tutor chat" hidden>💬 Tutor</button>
   <main id="main"><div id="empty">Select an app →</div></main>
 
@@ -384,7 +389,21 @@ $('#download-ai').onclick=async()=>{ const data=state.ai||await fetchAIStatus(),
 $('#cancel-ai').onclick=()=>{ if(pullController) pullController.abort(); };
 $('#diagnostics-ai').onclick=async()=>{ const data=await (await fetch('/api/local-ai/diagnostics')).json(), text=JSON.stringify(data,null,2); try{await navigator.clipboard.writeText(text); $('#ai-operation').textContent='Diagnostics copied.';}catch(_){$('#ai-operation').textContent=text;} };
 $('#retry-ai').onclick=async()=>{await renderAISettings(); notifyAIStatusChanged('manual_refresh');}; $('#ai-settings').onclick=openAISettings; $('#close-ai').onclick=()=>$('#ai-dialog').close();
-$('#mobile-apps').onclick=()=>$('#sidebar').classList.toggle('open');
+// Apps panel: a slide-in drawer on narrow screens, a collapsible column elsewhere.
+const SIDEBAR_KEY='appengine.sidebar';
+function setSidebarCollapsed(collapsed){
+  document.body.classList.toggle('sidebar-collapsed',collapsed);
+  $('#mobile-apps').setAttribute('aria-expanded',String(!collapsed));
+  try{ localStorage.setItem(SIDEBAR_KEY,collapsed?'collapsed':'open'); }catch(_){}
+}
+function toggleSidebar(){
+  if(window.matchMedia&&matchMedia('(max-width: 700px)').matches){ $('#sidebar').classList.toggle('open'); return; }
+  setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+}
+$('#collapse-apps').onclick=()=>setSidebarCollapsed(true);
+$('#mobile-apps').onclick=toggleSidebar;
+document.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&(e.key||'').toLowerCase()==='b'){ e.preventDefault(); toggleSidebar(); } });
+try{ if(localStorage.getItem(SIDEBAR_KEY)==='collapsed') setSidebarCollapsed(true); }catch(_){}
 $('#mobile-chat').onclick=()=>{ const chat=document.querySelector('.instance.active .chat'); if(chat)chat.classList.toggle('mobile-hidden'); };
 $('#app-search').oninput=e=>{ state.query=e.target.value; renderList(); };
 $('#close-info').onclick=()=>$('#info-dialog').close();

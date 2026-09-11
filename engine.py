@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from app_engine.chat import ChatRuntime
@@ -52,6 +52,7 @@ from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationE
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.routes import create_app_engine_router
 from app_engine.runtime import DefaultAppEngineRuntime, LocalHostAdapter
+from app_engine.search import category_counts, search_apps
 from app_engine.system_probe import SystemProbe
 from app_engine.contracts import HostSubject
 
@@ -564,10 +565,8 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
 
 # ── Launcher UI ───────────────────────────────────────────────────────────────
 
-@app.get("/api/apps")
-async def api_apps(request: Request) -> JSONResponse:
-    if not _is_launcher_host(request):
-        raise HTTPException(403, "launcher origin required")
+def _app_listing() -> list[dict]:
+    """Discovered apps merged with managed catalog targets, without URLs."""
     listing = {a.id: asdict(a) for a in discover().values()}
     for item in _app_runtime.catalog.snapshot(_app_runtime.catalog_key).apps:
         manifest = item.manifest
@@ -586,10 +585,30 @@ async def api_apps(request: Request) -> JSONResponse:
     apps = list(listing.values())
     for a in apps:
         a.pop("root", None)
+    return apps
+
+
+@app.get("/api/apps")
+async def api_apps(
+    request: Request, q: str = "", category: list[str] = Query(default=[]),
+) -> JSONResponse:
+    """Launcher app list. ``q`` and ``category`` filter it and rank by relevance."""
+    if not _is_launcher_host(request):
+        raise HTTPException(403, "launcher origin required")
+    apps = search_apps(_app_listing(), q, category)
+    for a in apps:
         port = request.url.port
         authority = f"{a['id']}.localhost" + (f":{port}" if port else "")
         a["url"] = f"{request.url.scheme}://{authority}/apps/{a['id']}/#atrium_state_token={_app_capability(a['id'])}"
     return JSONResponse(apps)
+
+
+@app.get("/api/apps/categories")
+async def api_app_categories(request: Request) -> JSONResponse:
+    """Category vocabulary with per-category app counts, for the filter control."""
+    if not _is_launcher_host(request):
+        raise HTTPException(403, "launcher origin required")
+    return JSONResponse(category_counts(_app_listing()))
 
 
 @app.get("/api/engine")

@@ -35,12 +35,17 @@
     },
     "description": {
       "type": "string",
-      "description": "One- or two-line summary shown in the catalog."
+      "minLength": 1,
+      "description": "Two- or three-sentence summary shown in the catalog and matched by search. Every app should declare one; discovery warns when it is missing."
     },
     "categories": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Taxonomy tags for grouping and search (e.g. [\"games\"], [\"tools\", \"ai\"])."
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": ["games", "learning", "ai", "developer", "security", "science", "creative", "productivity", "business", "news", "home", "wellness", "system"]
+      },
+      "description": "One to three ids from the shared vocabulary in app_engine/search.py, primary category first (e.g. [\"games\"], [\"learning\", \"ai\"]). Used for grouping, filtering, and search; discovery warns on missing or unknown ids."
     },
     "author": {
       "type": "string",

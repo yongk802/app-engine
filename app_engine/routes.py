@@ -8,7 +8,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .contracts import (
@@ -32,6 +32,7 @@ from .contracts import (
     TargetId,
 )
 from .runtime import DefaultAppEngineRuntime
+from .search import category_counts, search_apps
 
 
 Authenticate = Callable[[], HostSubject | Awaitable[HostSubject]]
@@ -118,14 +119,25 @@ def create_app_engine_router(
             raise HTTPException(404, "launch not found")
 
     @router.get("/catalog")
-    async def catalog(subject: HostSubject = Depends(authenticate)):
+    async def catalog(
+        q: str = "",
+        category: list[str] = Query(default=[]),
+        subject: HostSubject = Depends(authenticate),
+    ):
         del subject
         snapshot = runtime.catalog.snapshot(runtime.catalog_key)
+        apps = [_catalog_app(item) for item in snapshot.apps]
         return {
             "generation": snapshot.generation,
-            "apps": [_catalog_app(item) for item in snapshot.apps],
+            "apps": search_apps(apps, q, category),
             "rejections": [asdict(item) for item in snapshot.rejections],
         }
+
+    @router.get("/categories")
+    async def categories(subject: HostSubject = Depends(authenticate)):
+        del subject
+        snapshot = runtime.catalog.snapshot(runtime.catalog_key)
+        return category_counts(_catalog_app(item) for item in snapshot.apps)
 
     @router.post("/catalog/refresh")
     async def refresh(subject: HostSubject = Depends(authenticate)):

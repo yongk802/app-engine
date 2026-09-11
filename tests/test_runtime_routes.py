@@ -117,6 +117,12 @@ async def test_reusable_router_exposes_catalog_studio_assets_and_static_session(
             catalog = await client.get("/api/app-engine/catalog")
             assert catalog.status_code == 200
             assert catalog.json()["apps"][0]["id"] == "demo"
+            found = await client.get("/api/app-engine/catalog", params={"q": "dem"})
+            assert [app["id"] for app in found.json()["apps"]] == ["demo"]
+            filtered = await client.get("/api/app-engine/catalog", params={"category": "games"})
+            assert filtered.json()["apps"] == []
+            categories = await client.get("/api/app-engine/categories")
+            assert {c["id"]: c["count"] for c in categories.json()}["games"] == 0
 
             studio = await client.get("/api/app-engine/studio/")
             assert studio.status_code == 200

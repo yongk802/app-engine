@@ -68,6 +68,7 @@
   }
   .search-wrap { padding:4px 10px 8px; position:sticky; top:41px; background:var(--panel); z-index:1; }
   #app-search { width:100%; background:#0d1016; color:#e6e6e6; border:1px solid #2b323f; border-radius:8px; padding:7px 10px; font-size:13px; }
+  #app-category { width:100%; margin-top:6px; background:#0d1016; color:#c3cbd6; border:1px solid #2b323f; border-radius:8px; padding:6px 8px; font-size:12px; }
   .cat-head { padding:10px 16px 3px; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:#6b7482; }
   .app-btn { align-items:flex-start; }
   .app-btn .body { min-width:0; flex:1; display:flex; flex-direction:column; }
@@ -85,6 +86,8 @@
   .app-info .desc { color:#c3cbd6; font-size:14px; line-height:1.5; margin:6px 0 2px; }
   .app-info .tags { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
   .app-info .tag { font-size:12px; background:#20283a; color:#9db4e0; border-radius:6px; padding:2px 9px; }
+  .app-info button.tag { border:0; font:inherit; font-size:12px; cursor:pointer; }
+  .app-info button.tag:hover { background:#2b3a57; color:#c9d8f5; }
   .app-info .by { color:#6b7482; font-size:12px; }
   .app-info .perm-head { margin-top:12px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#6b7482; }
   .app-info .tag.perm { background:#2a2113; color:#f0c887; }
@@ -95,7 +98,7 @@
 <body>
   <nav id="sidebar" aria-label="Applications">
     <div class="side-head"><h1>Apps</h1><button id="ai-settings" class="icon-btn" aria-label="Local AI settings">⚙</button><button id="collapse-apps" class="icon-btn" aria-label="Hide the apps panel" title="Hide the apps panel (Ctrl+B)">«</button></div>
-    <div class="search-wrap"><input id="app-search" type="search" placeholder="Search apps…" aria-label="Search apps" autocomplete="off"></div>
+    <div class="search-wrap"><input id="app-search" type="search" placeholder="Search apps or descriptions…" aria-label="Search apps" autocomplete="off"><select id="app-category" aria-label="Filter apps by category" hidden><option value="">All categories</option></select></div>
     <div id="rejected-note"></div>
     <div id="applist"></div>
   </nav>
@@ -134,7 +137,7 @@
 <script>
 const ADMIN_HEADERS={'X-App-Engine-Admin':'__APP_ENGINE_ADMIN_CAPABILITY__'};
 function adminOptions(options={}) { return {...options,headers:{...(options.headers||{}),...ADMIN_HEADERS}}; }
-const state = { apps:[], instances:{}, active:null, ai:null, engine:null, rejected:[], query:'' };
+const state = { apps:[], instances:{}, active:null, ai:null, engine:null, rejected:[], query:'', category:'', categories:[], results:null, searchError:'' };
 let pullController = null;
 const $ = selector => document.querySelector(selector);
 const AI_CHANGE_REASONS = ['profile_changed','runtime_started','model_verified','model_removed','manual_refresh'];
@@ -145,14 +148,17 @@ function notifyAIStatusChanged(reason){
 
 async function boot() {
   try {
-    const [appsRes, engineRes, rejRes] = await Promise.all([
+    const [appsRes, engineRes, rejRes, catRes] = await Promise.all([
       fetch('/api/apps'), fetch('/api/engine').catch(()=>null), fetch('/api/apps/rejected').catch(()=>null),
+      fetch('/api/apps/categories').catch(()=>null),
     ]);
     if (!appsRes.ok) throw new Error(`HTTP ${appsRes.status}`);
     state.apps = await appsRes.json();
     if (engineRes && engineRes.ok) state.engine = await engineRes.json();
     if (rejRes && rejRes.ok) state.rejected = await rejRes.json();
+    if (catRes && catRes.ok) state.categories = await catRes.json();
     renderRejected();
+    renderCategories();
     renderList();
     if (!state.apps.length && !state.rejected.length) $('#empty').textContent='No apps found. Point APP_ENGINE_APPS_DIR at your apps folder.';
   } catch (error) { $('#empty').textContent=`Could not load apps: ${error.message}`; }
@@ -167,24 +173,63 @@ function renderRejected() {
   host.append(note);
 }
 
-function appMatches(app,q) {
-  if(!q) return true;
-  const hay=[app.label,app.description,app.id,(app.categories||[]).join(' '),app.author].join(' ').toLowerCase();
-  return hay.includes(q);
+function categoryLabel(id) {
+  const known=state.categories.find(c=>c.id===id);
+  return known?known.label:id;
+}
+
+function renderCategories() {
+  const select=$('#app-category');
+  const used=state.categories.filter(c=>c.count>0);
+  const options=[new Option(`All categories (${state.apps.length})`,'')];
+  for(const c of used){ const option=new Option(`${c.label} (${c.count})`,c.id); option.title=c.description||''; options.push(option); }
+  select.replaceChildren(...options);
+  select.value=state.category;
+  select.hidden=!used.length;
+}
+
+// Search runs server-side (app_engine.search) so every host ranks apps alike.
+let searchTimer=null, searchSeq=0;
+function scheduleSearch(delay=150) { clearTimeout(searchTimer); searchTimer=setTimeout(runSearch,delay); }
+async function runSearch() {
+  const q=state.query.trim(), category=state.category, seq=++searchSeq;
+  if(!q && !category){ state.results=null; state.searchError=''; renderList(); return; }
+  const params=new URLSearchParams();
+  if(q) params.set('q',q);
+  if(category) params.set('category',category);
+  let results=[], searchError='';
+  try {
+    const res=await fetch('/api/apps?'+params.toString());
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    results=await res.json();
+  } catch(error) { searchError=error.message; }
+  if(seq!==searchSeq) return;  // a newer search superseded this one
+  state.results=results; state.searchError=searchError;
+  renderList();
+}
+
+function setCategory(id) {
+  state.category=id;
+  $('#app-category').value=id;
+  scheduleSearch(0);
 }
 
 function renderList() {
   const host=$('#applist'); host.replaceChildren();
-  const q=state.query.trim().toLowerCase();
-  const matched=state.apps.filter(a=>appMatches(a,q));
-  if(!matched.length){ host.append(element('div','no-match', state.apps.length?'No apps match your search.':'')); return; }
-  // Group by first category; uncategorized last under "Apps".
+  // A search or category filter shows the server's results in relevance order.
+  if(state.results!==null){
+    if(!state.results.length){ host.append(element('div','no-match', state.searchError?`Search failed: ${state.searchError}`:'No apps match your search.')); return; }
+    for(const app of state.results) host.append(buildAppButton(app));
+    return;
+  }
+  const matched=state.apps;
+  // Group by primary category; uncategorized last under "Other".
   const groups=new Map();
   for(const app of matched){ const cat=(app.categories&&app.categories[0])||'￿Apps'; if(!groups.has(cat)) groups.set(cat,[]); groups.get(cat).push(app); }
-  const cats=[...groups.keys()].sort((a,b)=>a.localeCompare(b));
+  const cats=[...groups.keys()].sort((a,b)=>categoryLabel(a).localeCompare(categoryLabel(b)));
   const showHeads=cats.length>1;
   for(const cat of cats){
-    if(showHeads){ const label=cat==='￿Apps'?'Other':cat; host.append(element('div','cat-head', label)); }
+    if(showHeads){ const label=cat==='￿Apps'?'Other':categoryLabel(cat); host.append(element('div','cat-head', label)); }
     for(const app of groups.get(cat)) host.append(buildAppButton(app));
   }
 }
@@ -219,7 +264,15 @@ function showInfo(app) {
   if(app.version && app.version!=='0.0.0') $('#info-title').append(element('span','ver','v'+app.version));
   const body=$('#info-body'); body.replaceChildren();
   if(app.description) body.append(element('p','desc', app.description));
-  if(app.categories&&app.categories.length){ const tags=element('div','tags'); for(const c of app.categories) tags.append(element('span','tag', c)); body.append(tags); }
+  if(app.categories&&app.categories.length){
+    const tags=element('div','tags');
+    for(const c of app.categories){
+      const tag=element('button','tag', categoryLabel(c)); tag.type='button'; tag.title=`Show ${categoryLabel(c)} apps`;
+      tag.onclick=()=>{ $('#info-dialog').close(); setCategory(c); };
+      tags.append(tag);
+    }
+    body.append(tags);
+  }
   if(app.author) body.append(element('div','by','by '+app.author));
   if(app.permissions&&app.permissions.length){
     body.append(element('div','perm-head','Requests access to'));
@@ -407,7 +460,8 @@ $('#mobile-apps').onclick=toggleSidebar;
 document.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&(e.key||'').toLowerCase()==='b'){ e.preventDefault(); toggleSidebar(); } });
 try{ if(localStorage.getItem(SIDEBAR_KEY)==='collapsed') setSidebarCollapsed(true); }catch(_){}
 $('#mobile-chat').onclick=()=>{ const chat=document.querySelector('.instance.active .chat'); if(chat)chat.classList.toggle('mobile-hidden'); };
-$('#app-search').oninput=e=>{ state.query=e.target.value; renderList(); };
+$('#app-search').oninput=e=>{ state.query=e.target.value; scheduleSearch(); };
+$('#app-category').onchange=e=>{ state.category=e.target.value; scheduleSearch(0); };
 $('#close-info').onclick=()=>$('#info-dialog').close();
 boot();
 </script>

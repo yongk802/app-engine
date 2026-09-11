@@ -1,6 +1,6 @@
 {
   "name": "app-engine-launcher-tests",
   "private": true,
-  "scripts": {"test": "node --test tests/launcher-night-city.test.cjs"},
+  "scripts": {"test": "node --test tests/launcher-night-city.test.cjs tests/launcher-search.test.cjs"},
   "devDependencies": {"jsdom": "26.1.0"}
 }

@@ -38,6 +38,7 @@ from .contracts import (
     TargetSpec,
     ValidationIssue,
 )
+from .search import CATEGORY_IDS
 
 # Bump when the host<->app contract changes in a way apps can depend on.
 # Keep manifest compatibility checks and the distribution identity in lockstep.
@@ -113,6 +114,28 @@ def _is_relative_asset(p: str) -> bool:
     return True
 
 
+def listing_problems(description: object, categories: object) -> list[str]:
+    """Search-readiness problems in an app's listing metadata.
+
+    Every app should carry a description and at least one category from the
+    shared vocabulary (``app_engine.search.CATEGORIES``) so launchers can find
+    it by search and category. Discovery reports these as warnings, so older
+    apps keep loading; ``python -m app_engine.manifest --strict`` fails on them.
+    """
+    known = ", ".join(sorted(CATEGORY_IDS))
+    problems: list[str] = []
+    if not isinstance(description, str) or not description.strip():
+        problems.append("no description — add a 2-3 sentence summary so search can find the app")
+    if categories is None or isinstance(categories, list):
+        declared = [c for c in categories or () if isinstance(c, str) and c.strip()]
+        if not declared:
+            problems.append(f"no categories — add at least one of: {known}")
+        for category in declared:
+            if category not in CATEGORY_IDS:
+                problems.append(f"unknown category {category!r} — use one of: {known}")
+    return problems
+
+
 def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[list[str], list[str]]:
     """Validate a parsed app.json.
 
@@ -175,6 +198,7 @@ def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[
     for key in ("description", "author"):
         if key in m and not isinstance(m[key], str):
             errors.append(f"{key} must be a string")
+    warnings.extend(listing_problems(m.get("description"), cats))
 
     perms = m.get("permissions")
     if perms is not None:
@@ -859,23 +883,38 @@ def parse_manifest(app_root: Path) -> ManifestInspection:
 
 
 def _cli(argv: list[str]) -> int:
-    if not argv:
-        print("usage: python -m app_engine.manifest <app-dir> [<app-dir> ...]", file=sys.stderr)
+    strict = "--strict" in argv
+    paths = [arg for arg in argv if arg != "--strict"]
+    if not paths:
+        print(
+            "usage: python -m app_engine.manifest [--strict] <app-dir> [<app-dir> ...]\n"
+            "  --strict  also fail apps missing a description or a known category",
+            file=sys.stderr,
+        )
         return 2
     rc = 0
-    for arg in argv:
+    for arg in paths:
         d = Path(arg)
         inspection = parse_manifest(d)
         label = str(inspection.manifest.app_id) if inspection.manifest else d.name
-        if inspection.errors:
+        metadata = inspection.manifest.metadata if inspection.manifest else None
+        listing = (
+            listing_problems(metadata.description, list(metadata.categories))
+            if strict and metadata is not None else []
+        )
+        if inspection.errors or listing:
             rc = 1
-            print(f"✗ {label}: {len(inspection.errors)} error(s)")
+            print(f"✗ {label}: {len(inspection.errors) + len(listing)} error(s)")
             for issue in inspection.errors:
                 suffix = f" ({issue.path})" if issue.path else ""
                 print(f"    error:   {issue.message}{suffix}")
+            for message in listing:
+                print(f"    error:   {message}")
         else:
             print(f"✓ {label}: valid" + (f" (engine {ENGINE_VERSION})" if not inspection.warnings else ""))
         for issue in inspection.warnings:
+            if issue.message in listing:
+                continue
             suffix = f" ({issue.path})" if issue.path else ""
             print(f"    warning: {issue.message}{suffix}")
     return rc

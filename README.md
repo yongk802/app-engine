@@ -154,6 +154,8 @@ cover a question.
 | `GET/PUT /api/app-state/{id}` | per-app JSON blob (a `localStorage` replacement, 100 KB) |
 | `POST /api/app-multiplayer/{id}/command` | room command for an app that declares `multiplayer`; the host runs the app's room service (see [Multiplayer](#multiplayer-tables-hosted-for-any-game)) |
 | `GET /api/app-multiplayer/{id}/health` | `{protocol, rulesVersion, catalogDigest}` of that app's room service |
+| `POST /api/players/sign-in` | public-origin mode: username + password → bearer token for a game running elsewhere |
+| `POST /api/players/{id}/command`, `GET …/health` | the same room commands for a signed-in player's own game client (bearer token, CORS-open) |
 | `POST /api/app-chat` | typed SSE stream to the selected local Ollama model |
 | `GET /api/local-ai/status` | hardware recommendation, readiness, and installed model state |
 | `GET/POST /api/local-ai/*` | confirmed installation, model pull, verification, and diagnostics |
@@ -361,11 +363,37 @@ play.example.com, *.play.example.com {
 DNS: `A play.example.com` and `A *.play.example.com` to the server. Install
 Node.js 18+ for multiplayer, clone your apps collection (Night City Table
 needs its card catalog imported on the server), and run the engine under a
-service manager with the variables above. Multiplayer tables, tournaments and
-the friend roster work exactly as on loopback; a friend joining today does so
-with the owner's session, which is why the next phase of the
-[public-origin design](docs/specs/2026-09-13-public-origin-mode-design.md) adds
-invitation-only player accounts.
+service manager with the variables above.
+
+#### Players
+
+The owner invites players; nobody signs up on their own. From the launcher's
+**Players** panel (👥) or the shell:
+
+```bash
+app-engine-players invite --username rook --name "Rook" --apps cyberpunk-tcg
+app-engine-players list | disable rook | enable rook | reinvite rook | remove rook
+```
+
+An invitation is a one-time link (`/join/<code>`, valid seven days) where the
+player chooses a password (stored as a salted PBKDF2 hash). A player then
+signs in with username and password — at `/sign-in` for the launcher on the
+server, or **from inside a game on their own computer**: games list the servers
+they know in `app.json` (`multiplayer.servers`, name + https origin), call
+`POST /api/players/sign-in`, and send room commands to
+`POST /api/players/<app>/command` with the bearer token. That API is CORS-open
+because tokens never travel on their own; cookies never reach it. Players see
+and can open only the apps on their allow-list (everything else answers
+`404`), their saves and app capabilities are their own, and managed apps open
+for them once the owner has approved the launch plan — an approval now stands
+until the plan changes. Disabling, removing or signing out ends sessions
+immediately; the engine re-reads `players.json` when the CLI changes it.
+
+On the room service, a signed-in player's friend roster is bound to their
+account (signing in on another device brings it back), and
+`queueJoin`/`queueStatus`/`queueLeave` pair two waiting players into a random
+match. See [MULTIPLAYER.md in Night City Table](https://github.com/yongk802/personal-apps/blob/main/cyberpunk-tcg/MULTIPLAYER.md)
+for the player's view.
 
 ### Per-app state isolation
 

@@ -1,7 +1,7 @@
 # Public-Origin Mode Design
 
 **Date:** 2026-09-13  
-**Status:** Phases 1–2 implemented 2026-09-13 (`app_engine/public_origin.py`: `APP_ENGINE_PUBLIC_ORIGIN`, `APP_ENGINE_TRUST_PROXY`, `APP_ENGINE_ADMIN_SECRET`, owner sign-in at `/admin`, gate middleware, bind guard); phases 3–4 proposed  
+**Status:** Phases 1–3 implemented 2026-09-13. Phase 3 was reshaped after review: players run a game on their own computer and connect out to a server the game lists in `app.json` (`multiplayer.servers`), signing in with a username and password (`POST /api/players/sign-in` → bearer token; `POST /api/players/{app}/command`, CORS-open). Invitations are still owner-minted one-time links, where the player sets the password. The room service binds friend rosters to accounts (`X-App-Player`) and adds a random-match queue. Phase 4 (rate limits beyond sign-in, audit log, player cap warnings) remains proposed.  
 **Scope:** Run one app-engine on a VPS so invited people can open the games it hosts and play each other; the owner keeps the single-user product they have today.  
 **Depends on:** [Multiplayer Host Design](2026-09-13-multiplayer-host-design.md) (implemented).
 

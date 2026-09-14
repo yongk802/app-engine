@@ -1,7 +1,7 @@
 # Multiplayer Host Design
 
 **Date:** 2026-09-13  
-**Status:** Proposed design (contract for the port; implementation tracked in Atrium chat `44ab73b6`)  
+**Status:** Implemented 2026-09-13 (Node service in `app_engine/multiplayer/`, host route `/api/app-multiplayer/{id}`, manifest field `multiplayer`; Night City Table migrated). Decisions: Node for the service; friend roster per app with the storage path as the single seam for a host-wide roster.  
 **Scope:** app-engine owns the multiplayer room service; games plug in a rules module
 
 ## Goal
@@ -111,8 +111,8 @@ In the host this becomes one route the iframe can reach same-origin:
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/app-engine/multiplayer/{app_id}/command` | `{op, ...payload}`; seat, tournament or friend credential in `X-App-Multiplayer-Credential`; JSON `{ok, result}` or `{ok:false, error:{code, message}}` |
-| `GET /api/app-engine/multiplayer/{app_id}/health` | `{protocol, rulesVersion, catalogDigest}` for compatibility checks |
+| `POST /api/app-multiplayer/{app_id}/command` (implemented beside `/api/app-state`, gated by the app's origin and state capability) | `{op, ...payload}`; seat, tournament or friend credential in `X-App-Multiplayer-Credential`; JSON `{ok, result}` or `{ok:false, error:{code, message}}` |
+| `GET /api/app-multiplayer/{app_id}/health` | `{protocol, rulesVersion, catalogDigest}` for compatibility checks |
 
 Rules the current proxy enforces and the host must keep: same-origin only
 (reject `Sec-Fetch-Site: cross-site`), an explicit opt-in header, a fixed

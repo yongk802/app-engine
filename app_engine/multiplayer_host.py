@@ -161,6 +161,11 @@ class MultiplayerHost:
         record.base_url = base
         asyncio.create_task(self._pump(record))
         await self._await_health(record)
+        # Local tooling (a terminal-driven second seat, a smoke test) finds the service here;
+        # the file is private to the user and removed when the service stops.
+        address = record.data_dir / "address.json"
+        address.write_text(json.dumps({"url": base, "pid": record.process.pid}))
+        address.chmod(0o600)
 
     @staticmethod
     def _environment() -> dict[str, str]:
@@ -220,6 +225,7 @@ class MultiplayerHost:
     async def _terminate(self, record: RoomProcess) -> None:
         process = record.process
         record.base_url = ""
+        (record.data_dir / "address.json").unlink(missing_ok=True)
         if process is None or process.returncode is not None:
             return
         process.terminate()

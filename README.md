@@ -152,6 +152,8 @@ cover a question.
 | `GET /api/apps/rejected` | folders that failed manifest validation, with the reason (dev aid) |
 | `GET /state` | `{csrf_token, session}` — single-user stub |
 | `GET/PUT /api/app-state/{id}` | per-app JSON blob (a `localStorage` replacement, 100 KB) |
+| `POST /api/app-multiplayer/{id}/command` | room command for an app that declares `multiplayer`; the host runs the app's room service (see [Multiplayer](#multiplayer-tables-hosted-for-any-game)) |
+| `GET /api/app-multiplayer/{id}/health` | `{protocol, rulesVersion, catalogDigest}` of that app's room service |
 | `POST /api/app-chat` | typed SSE stream to the selected local Ollama model |
 | `GET /api/local-ai/status` | hardware recommendation, readiness, and installed model state |
 | `GET/POST /api/local-ai/*` | confirmed installation, model pull, verification, and diagnostics |
@@ -246,6 +248,50 @@ action, **not** something an app can drive — those endpoints reject requests
 originating from an app iframe. Read-only `GET /api/local-ai/status` stays open
 so tutor panels can poll readiness.
 
+## Multiplayer: tables hosted for any game
+
+app-engine runs a **room service** for every app that names a rules module:
+
+```json
+{ "multiplayer": { "rules": "multiplayer/rules.mjs", "ai": "ai.mjs", "protocol": 1 } }
+```
+
+The service (`app_engine/multiplayer/`, Node.js 18+) is game-agnostic: private
+tables with a two-seat lobby and 24 h invitations, moves validated against the
+game's own `legalActions` with idempotent commands and a private view per seat,
+optional 24 h/72 h turn clocks, presence, chat, WebRTC voice signaling, move
+alerts by webhook, single-elimination and round-robin tournaments with AI fill,
+a friend roster (shareable `ncf1:` codes, online/away, invitations that seat a
+friend directly), and durable JSON storage. The game supplies only its rules.
+
+`rules` is an ES module inside the app whose default export is a constructed
+rules module:
+
+```ts
+{ rulesVersion, catalogDigest,            // compatibility: mismatched clients get INCOMPATIBLE
+  createMatch(decks, seed), legalActions(state, seat), applyAction(state, seat, action),
+  viewFor(state, seat), validateDeck(deck), generateDeck(meta, seed),
+  chooseAction?(view, actions, seed),     // AI seats and tournament fill (or a separate `ai` module)
+  daily?: {validDay, replayDaily, gigResult, rankBoard} }   // optional seeded challenge board
+```
+
+The first command for an app starts `node app_engine/multiplayer/server.mjs`
+with that module on an ephemeral loopback port, waits for its health check,
+keeps its output for diagnostics and restarts it if it dies. Storage is per app
+under `APP_ENGINE_STATE_DIR/multiplayer/<id>/` (`rooms.json`, `tournaments.json`,
+`friends.json`); that path is the one seam to change for a host-wide roster
+later. The app reaches the service only through
+`POST /api/app-multiplayer/<id>/command`, gated like `/api/app-state` (its own
+origin plus its state capability) with the seat credential in
+`X-App-Multiplayer-Credential`; `app-state-bridge.js` exposes it as
+`Multiplayer.command(appId, op, payload, credential)`. Apps without the field,
+without Node, or with a broken module get `MULTIPLAYER_UNAVAILABLE` and keep
+working solo. `APP_ENGINE_MULTIPLAYER_SERVER=http://host:port` (or a JSON
+object keyed by app id) relays to a shared service instead, which is how two
+machines on a LAN or VPN meet at one table. Night City Table
+(`personal-apps/cyberpunk-tcg`) is the reference game; its client prefers this
+route and falls back to its own backend proxy on hosts without it.
+
 ## Config (env)
 
 | Var | Default | Meaning |
@@ -253,6 +299,7 @@ so tutor panels can poll readiness.
 | `APP_ENGINE_APPS_DIR` | `./apps` | directory whose children are apps |
 | `APP_ENGINE_STATE_DIR` | `~/.config/app-engine/app-state` | per-app state storage |
 | `APP_ENGINE_HOST` / `APP_ENGINE_PORT` | `127.0.0.1` / `8770` | bind address |
+| `APP_ENGINE_MULTIPLAYER_SERVER` | *(unset: run one per app)* | relay room commands to a shared room service instead |
 
 The Ollama endpoint is stored in `local-ai.json` under the state directory and
 must resolve to loopback (`127.0.0.1`, `localhost`, or `::1`). Remote and cloud

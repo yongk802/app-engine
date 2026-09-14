@@ -90,6 +90,8 @@ def test_a_game_plays_through_the_host_and_storage_is_per_app(tmp_path, monkeypa
         assert not (state / "dice" / "rooms.json").exists()
         assert module._multiplayer.data_dir("cards") != module._multiplayer.data_dir("dice")
         assert module._multiplayer.logs("cards") and "listening" in " ".join(module._multiplayer.logs("cards"))
+        address = json.loads((state / "cards" / "address.json").read_text())
+        assert address["url"].startswith("http://127.0.0.1:"), "local tooling can find the service"
 
         # The friend roster is per app: an identity registered for cards does not exist for dice.
         friend = command(client, module, "cards", {"op": "friendRegister", "name": "Alex", **COMPAT}).json()["result"]

@@ -311,3 +311,52 @@ def test_players_cli_changes_are_seen_by_a_running_engine(tmp_path, monkeypatch,
         players_main(["--state-dir", state, "remove", "nobody"])
     with pytest.raises(SystemExit):
         players_main(["--state-dir", state, "invite", "--username", "x"])
+
+
+def test_phase_four_limits_audit_and_same_origin_layout(tmp_path, monkeypatch):
+    from app_engine.public_origin import RateLimiter, startup_warnings
+
+    limiter = RateLimiter(per_second=1000, burst=3)
+    assert [limiter.allow("k") for _ in range(4)][:3] == [0.0, 0.0, 0.0] and limiter.allow("k") > 0
+    assert limiter.allow("other") == 0.0, "buckets are per key"
+
+    make_app(tmp_path / "apps", "cards")
+    monkeypatch.setenv("APP_ENGINE_RATE_LIMIT", "0.001,5")
+    import app_engine.public_origin as public_origin
+    importlib.reload(public_origin)
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN="https://srv1242099.hstgr.cloud", APP_ENGINE_APP_ORIGINS="same", APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    assert module._PUBLIC.layout == "same"
+    assert any("share one browser origin" in w for w in startup_warnings("127.0.0.1", module._PUBLIC, True))
+    assert any("TRUST_PROXY" in w for w in startup_warnings("127.0.0.1", module._PUBLIC, False))
+    assert any("public interface" in w for w in startup_warnings("0.0.0.0", module._PUBLIC, True))
+    base = "https://srv1242099.hstgr.cloud"
+    with TestClient(module.app, base_url=base) as client:
+        assert client.post(f"{base}/admin/sign-in", data={"secret": "hunter2-but-longer"}, follow_redirects=False).status_code == 303
+        listing = client.get(f"{base}/api/apps").json()
+        assert listing[0]["url"].startswith(f"{base}/apps/cards/#atrium_state_token="), "apps live under the one host name"
+        token = listing[0]["url"].split("atrium_state_token=")[1]
+        assert client.get(f"{base}/apps/cards/").status_code == 200
+        assert client.put(f"{base}/api/app-state/cards", json={"n": 1}, headers={"x-app-state-token": token}).status_code == 200
+        assert client.get("https://cards.srv1242099.hstgr.cloud/apps/cards/", headers={"cookie": ""}).status_code in (401, 403), "subdomains are not the layout here"
+        # Rate limiting: the busy surfaces answer 429 with Retry-After once the burst is spent.
+        codes = [client.get(f"{base}/api/app-state/cards", headers={"x-app-state-token": token}).status_code for _ in range(7)]
+        assert codes == [200] * 4 + [429] * 3, "the PUT above spent one of the five burst tokens; refill is negligible here"
+        limited = client.get(f"{base}/api/app-state/cards", headers={"x-app-state-token": token})
+        assert limited.status_code == 429 and limited.headers["retry-after"] and limited.json()["error"]["code"] == "RATE_LIMITED"
+        assert client.get(f"{base}/").status_code == 200, "the launcher is not metered"
+
+    monkeypatch.delenv("APP_ENGINE_RATE_LIMIT")
+    importlib.reload(public_origin)
+    audit = (tmp_path / "state" / "audit.log").read_text().splitlines()
+    events = [json.loads(line)["event"] for line in audit]
+    assert "engine.start" in events and "owner.sign_in" in events
+    assert "hunter2" not in "".join(audit), "the audit log never carries secrets"
+
+
+def test_player_cap_is_configurable(tmp_path, monkeypatch):
+    from app_engine import public_origin
+    monkeypatch.setattr(public_origin, "MAX_PLAYERS", 1)
+    accounts = public_origin.Accounts.load(tmp_path)
+    accounts.create_player("one", [])
+    with pytest.raises(ValueError, match="full"):
+        accounts.create_player("two", [])

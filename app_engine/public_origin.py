@@ -38,7 +38,11 @@ SESSION_COOKIE = "app_engine_session"
 SESSION_LIFETIME = 90 * 86400
 INVITE_LIFETIME = 7 * 86400
 SIGN_IN_ATTEMPTS = 5          # per address per minute
-MAX_PLAYERS = 200
+MAX_PLAYERS = int(os.environ.get("APP_ENGINE_MAX_PLAYERS", "50") or 50)
+# APP_ENGINE_RATE_LIMIT="20,60": sustained requests per second and burst, per session or address.
+_rate = (os.environ.get("APP_ENGINE_RATE_LIMIT", "") or "20,60").split(",")
+RATE_PER_SECOND = float(_rate[0] or 20)
+RATE_BURST = int(_rate[1] if len(_rate) > 1 and _rate[1] else 60)
 _LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
 _APP_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _USERNAME = re.compile(r"^[a-z0-9][a-z0-9_-]{2,23}$")
@@ -97,17 +101,27 @@ def _same(value: str, expected_hash: str) -> bool:
 
 @dataclass(frozen=True)
 class PublicOrigin:
-    """The launcher's public origin and what follows from it."""
+    """The launcher's public origin and what follows from it.
+
+    ``layout`` is where apps live: ``"subdomain"`` (``https://<id>.<host>``, the isolated
+    default, which needs a wildcard DNS record and certificate) or ``"same"`` (apps under
+    ``https://<host>/apps/<id>/`` for a server that only has one host name, such as a
+    hosting provider's ``srvNNN.example.cloud``; apps then share one browser origin).
+    """
 
     scheme: str
     host: str          # e.g. play.example.com (no port unless non-default)
     hostname: str      # host without port, lower-case
+    layout: str = "subdomain"
 
     @classmethod
-    def parse(cls, value: str | None) -> PublicOrigin | None:
+    def parse(cls, value: str | None, layout: str | None = None) -> PublicOrigin | None:
         raw = (value or "").strip()
         if not raw:
             return None
+        layout = (layout or "subdomain").strip().lower() or "subdomain"
+        if layout not in {"subdomain", "same"}:
+            raise ValueError("APP_ENGINE_APP_ORIGINS must be 'subdomain' or 'same'")
         parts = urlsplit(raw if "://" in raw else f"https://{raw}")
         if parts.scheme not in {"http", "https"} or not parts.hostname or parts.path not in {"", "/"} or parts.query or parts.fragment or parts.username:
             raise ValueError("APP_ENGINE_PUBLIC_ORIGIN must be an origin such as https://play.example.com")
@@ -119,7 +133,7 @@ class PublicOrigin:
         port = parts.port
         default = 443 if parts.scheme == "https" else 80
         host = hostname if port in (None, default) else f"{hostname}:{port}"
-        return cls(scheme=parts.scheme, host=host, hostname=hostname)
+        return cls(scheme=parts.scheme, host=host, hostname=hostname, layout=layout)
 
     @property
     def origin(self) -> str:
@@ -138,7 +152,10 @@ class PublicOrigin:
         return candidate if candidate and "." not in candidate else None
 
     def app_authority(self, app_id: str) -> str:
-        return f"{app_id}.{self.host}"
+        return self.host if self.layout == "same" else f"{app_id}.{self.host}"
+
+    def app_origin(self, app_id: str) -> str:
+        return f"{self.scheme}://{self.app_authority(app_id)}"
 
     def cookie_domain(self) -> str:
         # A leading dot is implied: the launcher and every app subdomain share the session.
@@ -468,6 +485,47 @@ def sign_in_page(error: str = "") -> str:
     return SIGN_IN_PAGE.replace("__ERROR__", f'<p class="error">{error}</p>' if error else "")
 
 
+class RateLimiter:
+    """A token bucket per key (a session or an address): a lost game client in a retry loop, or
+    a stranger hammering the player API, is slowed down rather than the whole server."""
+
+    def __init__(self, per_second: float = RATE_PER_SECOND, burst: int = RATE_BURST):
+        self.per_second, self.burst = per_second, burst
+        self._buckets: dict[str, tuple[float, float]] = {}
+
+    def allow(self, key: str) -> float:
+        """0.0 when the request may proceed, else the seconds to wait."""
+        now = time.monotonic()
+        tokens, stamp = self._buckets.get(key, (float(self.burst), now))
+        tokens = min(self.burst, tokens + (now - stamp) * self.per_second)
+        if tokens < 1.0:
+            self._buckets[key] = (tokens, now)
+            return (1.0 - tokens) / self.per_second
+        self._buckets[key] = (tokens - 1.0, now)
+        if len(self._buckets) > 10000:
+            oldest = sorted(self._buckets.items(), key=lambda item: item[1][1])[: len(self._buckets) // 2]
+            for stale, _ in oldest:
+                self._buckets.pop(stale, None)
+        return 0.0
+
+
+class Audit:
+    """Append-only JSON lines under the state directory: who signed in, who was invited,
+    what was approved. Never secrets, tokens or passwords."""
+
+    def __init__(self, state_dir: Path):
+        self.path = Path(state_dir) / "audit.log"
+
+    def record(self, event: str, **fields) -> None:
+        line = json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": event, **fields}, sort_keys=True)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, "a", encoding="utf-8", opener=lambda p, f: os.open(p, f, 0o600)) as handle:
+                handle.write(line + "\n")
+        except OSError:
+            pass
+
+
 class OwnerGate:
     """ASGI middleware: in public-origin mode nothing but the sign-in surface is served
     without a live owner session. HTML navigations are redirected to /admin; everything
@@ -476,9 +534,12 @@ class OwnerGate:
     OPEN_PATHS = {"/admin", "/admin/sign-in", "/sign-in", "/api/engine"}
     # Invitations, and the token-authenticated API that game clients on other machines use.
     OPEN_PREFIXES = ("/join/", "/api/players/")
+    # The busy, per-player surfaces; the launcher and static apps are not worth metering.
+    LIMITED_PREFIXES = ("/api/players/", "/api/app-multiplayer/", "/api/app-state/")
 
-    def __init__(self, app: ASGIApp, accounts: Accounts, enabled: bool):
+    def __init__(self, app: ASGIApp, accounts: Accounts, enabled: bool, limiter: RateLimiter | None = None):
         self.app, self.accounts, self.enabled = app, accounts, enabled
+        self.limiter = limiter or RateLimiter()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not self.enabled:
@@ -489,6 +550,14 @@ class OwnerGate:
         scope.setdefault("state", {})
         scope["state"]["session"] = session
         path = request.url.path
+        if path.startswith(self.LIMITED_PREFIXES) and request.method != "OPTIONS":
+            bearer = request.headers.get("authorization", "")
+            key = f"s:{_digest(request.cookies.get(SESSION_COOKIE) or bearer[7:])}" if (session or bearer) else f"a:{request.client.host if request.client else ''}"
+            wait = self.limiter.allow(key)
+            if wait:
+                response = JSONResponse({"ok": False, "error": {"code": "RATE_LIMITED", "message": "Slow down: too many requests."}}, status_code=429, headers={"Retry-After": str(max(1, int(wait + 0.999)))})
+                await response(scope, receive, send)
+                return
         if session is None and path not in self.OPEN_PATHS and not path.startswith(self.OPEN_PREFIXES):
             accepts_html = "text/html" in request.headers.get("accept", "") and request.method == "GET"
             response: Response = RedirectResponse("/admin", status_code=303) if accepts_html else JSONResponse({"detail": "sign in required"}, status_code=401)
@@ -577,6 +646,20 @@ def set_session_cookie(response: Response, token: str, public: PublicOrigin) -> 
 
 def clear_session_cookie(response: Response, public: PublicOrigin) -> None:
     response.delete_cookie(SESSION_COOKIE, domain=public.cookie_domain(), path="/")
+
+
+def startup_warnings(host: str, public: PublicOrigin | None, trust_proxy: bool) -> list[str]:
+    """Deployment mistakes worth a line in the log before the first visitor arrives."""
+    notes: list[str] = []
+    if public is None:
+        return notes
+    if public.secure and not trust_proxy:
+        notes.append("APP_ENGINE_PUBLIC_ORIGIN is https but APP_ENGINE_TRUST_PROXY is not set: behind a TLS proxy the engine will see http and Secure cookies will not be sent. Set APP_ENGINE_TRUST_PROXY=1.")
+    if host.strip().strip("[]").lower() not in _LOOPBACK:
+        notes.append(f"APP_ENGINE_HOST={host} listens on a public interface without TLS. Bind 127.0.0.1 and put Caddy or nginx in front.")
+    if public.layout == "same":
+        notes.append("APP_ENGINE_APP_ORIGINS=same: apps share one browser origin on this server (no per-app isolation). Use a domain with a wildcard record for the subdomain layout.")
+    return notes
 
 
 def bind_is_allowed(host: str, public: PublicOrigin | None, accounts: Accounts | None) -> str | None:

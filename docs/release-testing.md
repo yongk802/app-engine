@@ -25,3 +25,36 @@ profile/model, and the final smoke output in the release notes.
 GitHub Actions covers Python 3.10–3.13 on all three operating systems. It does
 not replace these UI and model-download checks, which require real OS installers,
 hardware, and several gigabytes of model data.
+
+## Public-origin mode (a server other people connect to)
+
+Run on a machine reachable from a second network (a VPS), with a TLS proxy in
+front and `APP_ENGINE_PUBLIC_ORIGIN`, `APP_ENGINE_TRUST_PROXY=1` and Node.js set
+up as in the README.
+
+1. Start the engine; confirm the log prints the public origin, no warnings, and
+   (first start only) the minted admin secret. `players.json` and `audit.log`
+   exist under the state directory with mode 600.
+2. From another network, open the origin: it redirects to `/admin`. A wrong
+   secret is refused; the sixth wrong attempt within a minute answers 429.
+   Sign in; the launcher lists every app and `/api/local-ai/status` answers 403.
+3. Open an app from the launcher. With the subdomain layout it loads on
+   `<id>.<host>` with a valid certificate; with `APP_ENGINE_APP_ORIGINS=same` it
+   loads under `/apps/<id>/`. Save state, reload, confirm it persists.
+4. Invite a player (Players panel and `app-engine-players invite`). In a
+   private window open the link, set a password, confirm the player launcher
+   shows only the allowed apps, no ⚙, and `Player · name`. Try an app not
+   granted: 404. Sign out, sign in at `/sign-in` with the password.
+5. On a second computer, run app-engine locally with the game whose `app.json`
+   lists this server. In the game, pick the server, sign in with the player's
+   username and password, set up the friend roster, and **Find a random
+   opponent** while `friend-bot --queue --server … --username … --password …`
+   waits: both are seated; play a full match; rematch.
+6. Sign in to the server from a third browser as the same player: the friend
+   roster is the same one. Disable the player from the Players panel: every
+   session of theirs stops within one request; enable and re-invite.
+7. Loop a client at more than 20 requests per second: it receives 429 with
+   `Retry-After`, other players are unaffected. Read `audit.log`: sign-ins,
+   invitations, approvals and player changes are there; no secrets are.
+8. Stop the proxy: the engine still only listens on 127.0.0.1. Restart the
+   engine: owner and player sessions survive, tables and rosters survive.

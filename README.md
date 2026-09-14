@@ -305,6 +305,9 @@ route and falls back to its own backend proxy on hosts without it.
 | `APP_ENGINE_PUBLIC_ORIGIN` | *(unset: loopback product)* | the launcher's public origin, e.g. `https://play.example.com`; turns on [public-origin mode](#public-origin-mode-reaching-your-engine-from-anywhere) |
 | `APP_ENGINE_ADMIN_SECRET` | *(minted on first public start)* | the owner's sign-in secret; setting a new value rotates it and signs every session out |
 | `APP_ENGINE_TRUST_PROXY` | `0` | honour `X-Forwarded-Proto`/`X-Forwarded-For` from a loopback reverse proxy |
+| `APP_ENGINE_APP_ORIGINS` | `subdomain` | where apps live on a public server: `subdomain` (`<id>.<host>`, isolated, needs wildcard DNS + certificate) or `same` (`<host>/apps/<id>/`, for a single host name) |
+| `APP_ENGINE_RATE_LIMIT` | `20,60` | requests per second and burst allowed per session or address on the player, multiplayer and app-state routes |
+| `APP_ENGINE_MAX_PLAYERS` | `50` | how many players the owner may invite |
 
 The Ollama endpoint is stored in `local-ai.json` under the state directory and
 must resolve to loopback (`127.0.0.1`, `localhost`, or `::1`). Remote and cloud
@@ -364,6 +367,34 @@ DNS: `A play.example.com` and `A *.play.example.com` to the server. Install
 Node.js 18+ for multiplayer, clone your apps collection (Night City Table
 needs its card catalog imported on the server), and run the engine under a
 service manager with the variables above.
+
+**Only one host name?** A hosting provider's name such as
+`srv1242099.hstgr.cloud` has no wildcard, so `<id>.<host>` cannot resolve. Set
+`APP_ENGINE_APP_ORIGINS=same`: apps are served under `https://<host>/apps/<id>/`
+on the launcher's origin (they then share one browser origin — no per-app
+isolation, which the engine says so in its startup log), and Caddy needs only
+that one certificate:
+
+```caddyfile
+srv1242099.hstgr.cloud {
+    reverse_proxy 127.0.0.1:8770
+}
+```
+
+Players connecting from their own computers never need app subdomains: the
+player API lives on the base origin. Prefer the subdomain layout whenever you
+can point a domain of your own at the server; without a DNS-challenge plugin,
+Caddy's on-demand TLS (`tls { on_demand }` with an `ask` endpoint that
+allows `*.play.example.com`) issues each app's certificate over HTTP-01 as it
+is first visited.
+
+Abuse limits: the player, multiplayer and app-state routes are metered per
+session or address (`APP_ENGINE_RATE_LIMIT`, 429 with `Retry-After`), sign-in
+attempts are limited to five a minute per address, the owner may invite at
+most `APP_ENGINE_MAX_PLAYERS`, and `audit.log` under the state directory
+records sign-ins, invitations, player changes and plan approvals as JSON lines
+(never secrets). The startup log warns about a public bind without a proxy,
+an https origin without `APP_ENGINE_TRUST_PROXY`, and the shared-origin layout.
 
 #### Players
 

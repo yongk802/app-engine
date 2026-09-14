@@ -52,6 +52,7 @@ from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY, Multip
 from app_engine.public_origin import (
     JOIN_ERROR_PAGE,
     LOCAL_SESSION,
+    Audit,
     SESSION_COOKIE,
     Accounts,
     OwnerGate,
@@ -66,6 +67,7 @@ from app_engine.public_origin import (
     player_sign_in_page,
     set_session_cookie,
     sign_in_page,
+    startup_warnings,
 )
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
@@ -96,11 +98,12 @@ _proxy: httpx.AsyncClient | None = None
 # Public-origin mode: apps at <id>.<public host>, owner sign-in required on every
 # request, TLS terminated by a loopback proxy. Absent, this is the loopback product.
 try:
-    _PUBLIC = PublicOrigin.parse(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN"))
+    _PUBLIC = PublicOrigin.parse(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN"), os.environ.get("APP_ENGINE_APP_ORIGINS"))
 except ValueError as _exc:
     raise SystemExit(f"app-engine: {_exc}") from _exc
 _TRUST_PROXY = os.environ.get("APP_ENGINE_TRUST_PROXY", "") in {"1", "true", "yes"}
 _accounts = Accounts.load(STATE_DIR) if _PUBLIC else None
+_audit = Audit(STATE_DIR) if _PUBLIC else None
 _minted_admin_secret = _accounts.ensure_admin_secret(os.environ.get("APP_ENGINE_ADMIN_SECRET")) if _accounts else None
 _sign_in_limiter = SignInLimiter()
 
@@ -120,9 +123,13 @@ _app_runtime = DefaultAppEngineRuntime(
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if _PUBLIC:
-        print(f"app-engine -> public origin {_PUBLIC.origin}; apps at <id>.{_PUBLIC.host}; owner sign-in at {_PUBLIC.origin}/admin")
+        where = f"{_PUBLIC.origin}/apps/<id>/" if _PUBLIC.layout == "same" else f"<id>.{_PUBLIC.host}"
+        print(f"app-engine -> public origin {_PUBLIC.origin}; apps at {where}; owner sign-in at {_PUBLIC.origin}/admin")
         if _minted_admin_secret:
             print(f"            admin secret (shown once, kept only as a hash): {_minted_admin_secret}")
+        for note in startup_warnings(os.environ.get("APP_ENGINE_HOST", "127.0.0.1"), _PUBLIC, _TRUST_PROXY):
+            print(f"            warning: {note}")
+        _audit.record("engine.start", origin=_PUBLIC.origin, layout=_PUBLIC.layout)
     await _app_runtime.start()
     yield
     await _app_runtime.close(5.0)
@@ -175,7 +182,7 @@ app.include_router(
         authenticate=_runtime_authenticate,
         authorize_app=_authorize_app,
         standing_approval=(lambda fingerprint: _accounts.plan_approved(fingerprint)) if _accounts else None,
-        record_approval=(lambda fingerprint: _accounts.approve_plan(fingerprint)) if _accounts else None,
+        record_approval=(lambda fingerprint: (_accounts.approve_plan(fingerprint), _audit.record("plan.approved", fingerprint=fingerprint))) if _accounts else None,
     )
 )
 _registry = ModelRegistry.load(Path(__file__).parent / "model-registry.json")
@@ -299,12 +306,19 @@ def _hostname(request: Request) -> str:
 def _app_host_id(request: Request) -> str | None:
     host = _hostname(request)
     # The public authority first: a rehearsal origin such as play.localhost also ends in .localhost.
-    candidate = _PUBLIC.app_id_for(host) if _PUBLIC else None
+    candidate = _PUBLIC.app_id_for(host) if _PUBLIC and _PUBLIC.layout == "subdomain" else None
     if candidate is None and host.endswith(".localhost"):
         candidate = host[:-len(".localhost")]
     if candidate is None:
         return None
     return candidate if _APP_ID_RE.fullmatch(candidate) else None
+
+
+def _served_on_app_origin(request: Request, app_id: str) -> bool:
+    """Is this request coming from where the app is allowed to live?"""
+    if _PUBLIC and _PUBLIC.layout == "same" and _hostname(request) == _PUBLIC.hostname:
+        return True
+    return _app_host_id(request) == app_id
 
 
 def _is_launcher_host(request: Request) -> bool:
@@ -315,7 +329,7 @@ def _is_launcher_host(request: Request) -> bool:
 def _app_origin(request: Request, app_id: str) -> str:
     """Where the launcher must open the app: its public authority, or ``<id>.localhost``."""
     if _PUBLIC:
-        return f"{_PUBLIC.scheme}://{_PUBLIC.app_authority(app_id)}"
+        return _PUBLIC.app_origin(app_id)
     port = request.url.port
     return f"{request.url.scheme}://{app_id}.localhost" + (f":{port}" if port else "")
 
@@ -336,10 +350,9 @@ def _require_app_access(session: Session, app_id: str) -> None:
 def _enforce_app_state_access(request: Request, app_id: str) -> Session:
     session = _session(request)
     _require_app_access(session, app_id)
-    host_app = _app_host_id(request)
     supplied = request.headers.get("x-app-state-token", "")
     expected = _app_capability(session, app_id)
-    if host_app != app_id or not secrets.compare_digest(supplied, expected):
+    if not _served_on_app_origin(request, app_id) or not secrets.compare_digest(supplied, expected):
         raise HTTPException(403, "app-state capability denied")
     return session
 
@@ -717,7 +730,7 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
     app_obj = apps.get(app_id)
     if not app_obj:
         raise HTTPException(404)
-    if _app_host_id(request) != app_id:
+    if not _served_on_app_origin(request, app_id):
         raise HTTPException(403, "app must be opened on its isolated origin")
 
     # entry_point apps: reverse-proxy everything to their own backend.
@@ -877,6 +890,7 @@ async def join_submit(code: str, request: Request) -> Response:
     if redeemed is None:
         return HTMLResponse(JOIN_ERROR_PAGE, status_code=404, headers=_NO_STORE)
     session, token = redeemed
+    _audit.record("player.joined", player=session.subject_id, username=session.username, address=request.client.host if request.client else "")
     response = RedirectResponse("/", status_code=303)
     set_session_cookie(response, token, _PUBLIC)
     return response
@@ -897,9 +911,12 @@ async def player_sign_in_submit(request: Request) -> Response:
     if not _sign_in_limiter.allow(address):
         return HTMLResponse(player_sign_in_page("Too many attempts. Wait a minute."), status_code=429, headers=_NO_STORE)
     form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
-    signed = _accounts.sign_in_player((form.get("username") or [""])[0], (form.get("password") or [""])[0])
+    username = (form.get("username") or [""])[0]
+    signed = _accounts.sign_in_player(username, (form.get("password") or [""])[0])
     if signed is None:
+        _audit.record("player.sign_in.failed", username=username[:40], address=address, via="browser")
         return HTMLResponse(player_sign_in_page("That username or password is not right."), status_code=403, headers=_NO_STORE)
+    _audit.record("player.sign_in", player=signed[0].subject_id, username=signed[0].username, address=address, via="browser")
     response = RedirectResponse("/", status_code=303)
     set_session_cookie(response, signed[1], _PUBLIC)
     return response
@@ -946,8 +963,10 @@ async def api_player_sign_in(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": {"code": "INVALID_REQUEST", "message": "Send a JSON object with username and password."}}, status_code=400)
     signed = _accounts.sign_in_player(str(body.get("username", "")), body.get("password", ""))
     if signed is None:
+        _audit.record("player.sign_in.failed", username=str(body.get("username", ""))[:40], address=address, via="api")
         return JSONResponse({"ok": False, "error": {"code": "AUTH_REQUIRED", "message": "That username or password is not right."}}, status_code=403)
     session, token = signed
+    _audit.record("player.sign_in", player=session.subject_id, username=session.username, address=address, via="api")
     return JSONResponse({"ok": True, "token": token, "player": _player_json(session), "server": {"name": "app-engine", "origin": _PUBLIC.origin, "version": ENGINE_VERSION}})
 
 
@@ -1031,6 +1050,7 @@ async def admin_players_create(request: Request) -> JSONResponse:
         player, code = _accounts.create_player(str(body.get("username", "")), body.get("apps", []), body.get("name"))
     except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    _audit.record("player.invited", player=player["id"], username=player["username"], apps=player["apps"])
     return JSONResponse({"player": player, "invite": invite_link(_PUBLIC, code)}, status_code=201)
 
 
@@ -1041,6 +1061,7 @@ async def admin_players_invite(player_id: str, request: Request) -> JSONResponse
     code = _accounts.regenerate_invite(player_id)
     if code is None:
         raise HTTPException(404, "player not found")
+    _audit.record("player.reinvited", player=player_id)
     return JSONResponse({"invite": invite_link(_PUBLIC, code)})
 
 
@@ -1062,6 +1083,7 @@ async def admin_players_update(player_id: str, request: Request) -> JSONResponse
         raise HTTPException(400, str(exc)) from exc
     if player is None:
         raise HTTPException(404, "player not found")
+    _audit.record("player.updated", player=player_id, disabled=player["disabled"], apps=player["apps"])
     return JSONResponse({"player": player})
 
 
@@ -1071,6 +1093,7 @@ async def admin_players_delete(player_id: str, request: Request) -> Response:
     _require_owner_action(request)
     if not _accounts.remove_player(player_id):
         raise HTTPException(404, "player not found")
+    _audit.record("player.removed", player=player_id)
     return Response(status_code=204)
 
 
@@ -1091,7 +1114,9 @@ async def admin_sign_in_submit(request: Request) -> Response:
     form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
     secret = (form.get("secret") or [""])[0]
     if not _accounts.verify_admin_secret(secret):
+        _audit.record("owner.sign_in.failed", address=address)
         return HTMLResponse(sign_in_page("That secret is not right."), status_code=403)
+    _audit.record("owner.sign_in", address=address)
     response = RedirectResponse("/", status_code=303)
     set_session_cookie(response, _accounts.create_admin_session(), _PUBLIC)
     return response

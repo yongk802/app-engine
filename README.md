@@ -447,6 +447,13 @@ with the player's username and password, then talks to
 `GET/POST /api/players/chat` with the bearer token. Messages are capped at
 500 characters, one per second and thirty a minute per person, the last 300
 are kept in `chat.json`, and the bar shows who polled in the last 45 seconds.
+When a game is in play mode or the browser is full screen, the dock leaves the
+layout and waits behind a 💬 tab on the right edge of the screen: rest the
+pointer on the tab (or click it) and the chat slides in over the game, and it
+slides away when the pointer leaves unless a message is being typed. A new
+message from someone else dings and peeks next to the tab for a few seconds;
+the bell in the dock bar mutes the sound. Night City Table adds its own chimes
+at the table (a friend's message, your move) with a switch under Move alerts.
 
 On the room service, a signed-in player's friend roster is bound to their
 account (signing in on another device brings it back), and

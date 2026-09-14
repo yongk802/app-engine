@@ -147,3 +147,36 @@ def test_incompatible_app_is_listed_but_flagged(tmp_path, monkeypatch):
         app = client.get("/api/apps").json()[0]
     assert app["compatible"] is False
     assert app["min_engine_version"] == "999.0.0"
+
+
+def test_multiplayer_field_normalizes_and_rejects_unsafe_modules(tmp_path):
+    from app_engine import manifest as mf
+
+    good = {"label": "T", "icon": "x", "multiplayer": {"rules": "multiplayer/rules.mjs", "ai": "ai.mjs"}}
+    errors, warnings = mf.validate_manifest(good, has_index=True, dir_name="t")
+    assert errors == []
+    assert not any("multiplayer" in w for w in warnings)
+    assert mf.normalize(good, "t")["multiplayer"] == {"rules": "multiplayer/rules.mjs", "ai": "ai.mjs", "protocol": 1}
+    assert mf.normalize({"label": "T", "icon": "x"}, "t")["multiplayer"] is None
+
+    for bad in ({"rules": "../escape.mjs"}, {"rules": "/abs.mjs"}, {"rules": ""}, {"rules": "r.mjs", "ai": "../ai.mjs"},
+                {"rules": "r.mjs", "protocol": 2}, {"rules": "r.mjs", "protocol": True}, "rules.mjs"):
+        errors, _ = mf.validate_manifest({"label": "T", "icon": "x", "multiplayer": bad}, has_index=True, dir_name="t")
+        assert any("multiplayer" in e for e in errors), bad
+
+    _, warnings = mf.validate_manifest({"label": "T", "icon": "x", "multiplayer": {"rules": "r.mjs", "bogus": 1}}, has_index=True, dir_name="t")
+    assert any("unknown multiplayer field 'bogus'" in w for w in warnings)
+
+    app = tmp_path / "game"
+    app.mkdir()
+    (app / "index.html").write_text("<!doctype html>")
+    (app / "app.json").write_text('{"manifest_version": 2, "label": "G", "icon": "g", "multiplayer": {"rules": "rules.mjs"}}')
+    inspection = mf.parse_manifest(app)
+    assert inspection.manifest is not None, inspection.errors
+    assert inspection.manifest.multiplayer.rules == "rules.mjs"
+    assert inspection.manifest.multiplayer.ai is None
+    assert inspection.manifest.multiplayer.protocol == 1
+    (app / "app.json").write_text('{"label": "G", "icon": "g", "multiplayer": {"rules": "rules.mjs", "ai": "ai.mjs"}}')
+    assert mf.parse_manifest(app).manifest.multiplayer.ai == "ai.mjs"
+    (app / "app.json").write_text('{"label": "G", "icon": "g"}')
+    assert mf.parse_manifest(app).manifest.multiplayer is None

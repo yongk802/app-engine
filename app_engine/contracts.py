@@ -207,6 +207,21 @@ class BrowserPolicy:
 
 
 @dataclass(frozen=True)
+class MultiplayerSpec:
+    """A game's hook into the host's room service: ES modules inside the app directory.
+
+    ``rules`` default-exports a constructed rules module (createMatch, legalActions,
+    applyAction, viewFor, validateDeck, generateDeck, rulesVersion, catalogDigest);
+    ``ai`` optionally exports chooseAction for AI seats; ``protocol`` is the room
+    protocol the app's client speaks.
+    """
+
+    rules: str
+    ai: str | None = None
+    protocol: int = 1
+
+
+@dataclass(frozen=True)
 class AppManifest:
     manifest_version: int
     app_id: AppId
@@ -218,6 +233,7 @@ class AppManifest:
     configuration: tuple[ConfigurationField, ...]
     metadata: AppMetadata
     browser: BrowserPolicy
+    multiplayer: MultiplayerSpec | None = None
 
 
 @dataclass(frozen=True)

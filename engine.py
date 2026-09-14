@@ -148,6 +148,7 @@ class App:
     compatible: bool
     warnings: list
     root: str  # filesystem path (not sent to client)
+    multiplayer: dict | None = None  # {rules, ai, protocol} when the app plays through the host
 
 
 def inspect_apps() -> tuple[dict[str, App], list[dict]]:
@@ -200,6 +201,7 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
             compatible=_manifest.is_compatible(n["min_engine_version"], ENGINE_VERSION),
             warnings=warnings,
             root=str(d.resolve()),
+            multiplayer=n["multiplayer"],
         )
     return out, rejected
 

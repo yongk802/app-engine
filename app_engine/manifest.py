@@ -32,6 +32,7 @@ from .contracts import (
     EnvironmentSource,
     HealthSpec,
     ManifestInspection,
+    MultiplayerSpec,
     ProcessScope,
     RuntimeSpec,
     TargetId,
@@ -68,6 +69,8 @@ KNOWN_FIELDS = frozenset({
     "sandbox", "entry_point", "min_engine_version", "permissions",
     # local-AI tutor
     "chat_enabled", "chat_system_prompt", "chat_knowledge",
+    # host multiplayer (rules module for the room service)
+    "multiplayer",
     # Atrium-only (recognized here so the shared contract stays warning-free)
     "secret", "allow", "proxy_read_timeout", "launch_mode", "multi",
 })
@@ -213,6 +216,10 @@ def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[
     if not (sandbox is False or isinstance(sandbox, str)):
         errors.append("sandbox must be a string or false")
 
+    multiplayer_errors, multiplayer_warnings = multiplayer_problems(m.get("multiplayer"))
+    errors.extend(multiplayer_errors)
+    warnings.extend(multiplayer_warnings)
+
     for key in m:
         if key not in KNOWN_FIELDS:
             warnings.append(f"unknown manifest field {key!r} (ignored — check for a typo)")
@@ -257,6 +264,49 @@ def permissions_to_allow(perms: list[str]) -> str:
     return "; ".join(perms)
 
 
+MULTIPLAYER_FIELDS = frozenset({"rules", "ai", "protocol"})
+MULTIPLAYER_PROTOCOL = 1
+
+
+def multiplayer_problems(value: object) -> tuple[list[str], list[str]]:
+    """Validate the optional ``multiplayer`` object: relative module paths, protocol 1."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    if value is None:
+        return errors, warnings
+    if not isinstance(value, dict):
+        return (["multiplayer must be an object with a rules module path"], warnings)
+    rules = value.get("rules")
+    if not isinstance(rules, str) or not rules or not _is_relative_asset(rules):
+        errors.append("multiplayer.rules must be a relative path to an ES module inside the app (no '/' prefix or '..')")
+    ai = value.get("ai")
+    if ai is not None and (not isinstance(ai, str) or not ai or not _is_relative_asset(ai)):
+        errors.append("multiplayer.ai must be a relative path to an ES module inside the app (no '/' prefix or '..')")
+    protocol = value.get("protocol", MULTIPLAYER_PROTOCOL)
+    if isinstance(protocol, bool) or protocol != MULTIPLAYER_PROTOCOL:
+        errors.append(f"multiplayer.protocol must be {MULTIPLAYER_PROTOCOL}")
+    for key in value:
+        if key not in MULTIPLAYER_FIELDS:
+            warnings.append(f"unknown multiplayer field {key!r} (ignored — check for a typo)")
+    return errors, warnings
+
+
+def normalize_multiplayer(m: dict) -> dict | None:
+    """The validated ``multiplayer`` object as plain data, or ``None`` when absent."""
+    value = m.get("multiplayer")
+    if not isinstance(value, dict) or not isinstance(value.get("rules"), str):
+        return None
+    ai = value.get("ai")
+    return {"rules": value["rules"], "ai": ai if isinstance(ai, str) and ai else None, "protocol": MULTIPLAYER_PROTOCOL}
+
+
+def _multiplayer_spec(normalized: dict) -> MultiplayerSpec | None:
+    value = normalized.get("multiplayer")
+    if not value:
+        return None
+    return MultiplayerSpec(rules=value["rules"], ai=value["ai"], protocol=value["protocol"])
+
+
 def normalize(m: dict, dir_name: str) -> dict:
     """Return the normalized listing/runtime fields for a validated manifest."""
     permissions = permission_list(m)
@@ -280,6 +330,7 @@ def normalize(m: dict, dir_name: str) -> dict:
         "chat_system_prompt": m.get("chat_system_prompt", ""),
         "chat_knowledge": m.get("chat_knowledge", ""),
         "entry_point": m.get("entry_point", "") or "",
+        "multiplayer": normalize_multiplayer(m),
     }
 
 
@@ -685,6 +736,7 @@ def _v1_manifest(
             multi=bool(raw.get("multi", False)),
             proxy_read_timeout=float(raw.get("proxy_read_timeout", 30.0)),
         ),
+        multiplayer=_multiplayer_spec(normalized),
     )
 
 
@@ -875,6 +927,7 @@ def parse_manifest(app_root: Path) -> ManifestInspection:
             multi=effective_raw.get("multi", False) if isinstance(effective_raw.get("multi", False), bool) else False,
             proxy_read_timeout=float(proxy_timeout),
         ),
+        multiplayer=_multiplayer_spec(normalized),
     )
     return ManifestInspection(
         root=root, manifest=None if errors else manifest,

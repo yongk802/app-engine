@@ -142,6 +142,17 @@
       "additionalProperties": true,
       "description": "Version-2 nested browser policy. Equivalent top-level v1 fields remain supported."
     },
+    "multiplayer": {
+      "type": "object",
+      "required": ["rules"],
+      "properties": {
+        "rules": { "type": "string", "description": "Relative path to an ES module whose default export is the game's rules module (createMatch, legalActions, applyAction, viewFor, validateDeck, generateDeck, rulesVersion, catalogDigest). The host runs its room service with it." },
+        "ai": { "type": "string", "description": "Optional relative path to an ES module exporting chooseAction(view, actions, seed) for AI seats." },
+        "protocol": { "type": "integer", "enum": [1], "default": 1, "description": "Room protocol the app's client speaks." }
+      },
+      "additionalProperties": false,
+      "description": "Opt the app into the host's multiplayer room service: tables, seats, clocks, chat, tournaments and a friend roster, driven by the app's own rules module. Reached from the app at POST /api/app-multiplayer/{id}/command."
+    },
     "chat_enabled": {
       "type": "boolean",
       "default": false,

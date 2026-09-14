@@ -172,6 +172,8 @@ def test_bind_guard_and_bad_origin(tmp_path, monkeypatch):
 
 def owner_client(module):
     client = public_client(module)
+    client.__enter__()          # run the lifespan: the runtime and its catalog start
+    client.close = lambda: TestClient.__exit__(client, None, None, None)
     assert sign_in(client).status_code == 303
     html = client.get(f"{LAUNCHER}/").text
     capability = html.split("'X-App-Engine-Admin':'")[1].split("'")[0]
@@ -360,3 +362,47 @@ def test_player_cap_is_configurable(tmp_path, monkeypatch):
     accounts.create_player("one", [])
     with pytest.raises(ValueError, match="full"):
         accounts.create_player("two", [])
+
+
+def test_owner_and_player_open_a_managed_app_in_public_mode(tmp_path, monkeypatch):
+    """Night City runs a managed backend: opening it must work for the signed-in owner and,
+    once the owner approved its plan, for a player. (The runtime is single-subject.)"""
+    import sys
+
+    root = tmp_path / "apps" / "game"
+    root.mkdir(parents=True)
+    (root / "index.html").write_text("<!doctype html><title>game</title>")
+    (root / "server.py").write_text(
+        "import os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class H(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
+        "    def log_message(self, *a): pass\n"
+        "HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
+    (root / "app.json").write_text(json.dumps({
+        "manifest_version": 2, "label": "Game", "icon": "g", "default_target": "web",
+        "targets": {"web": {"kind": "web", "runtime": {"driver": "process", "scope": "shared",
+                    "start": {"argv": [sys.executable, "server.py"]}, "health": {"kind": "http", "path": "/"}}}},
+    }))
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    owner, admin = owner_client(module)
+    try:
+        first = owner.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={})
+        assert first.status_code == 409 and first.json()["detail"]["code"] == "approval_required", first.text
+        plan = owner.post(f"{LAUNCHER}/api/app-engine/apps/game/preview", json={}, headers=admin).json()
+        assert owner.post(f"{LAUNCHER}/api/app-engine/plans/{plan['fingerprint']}/approve", headers=admin).status_code == 204
+        opened = owner.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={})
+        assert opened.status_code == 200, opened.text
+        assert owner.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={}).status_code == 200, "the approval stands for the next open"
+        invite = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["game"]}, headers=admin).json()["invite"]
+        with public_client(module) as guest:
+            guest.post(invite, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
+            player_open = guest.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={})
+            assert player_open.status_code == 200, player_open.text
+            body = player_open.json()
+            assert body["session_id"] and body["launch_id"], "the player got a session on the shared managed runtime"
+            # (Streaming the proxied backend through the sync TestClient is not supported; the
+            # session proxy itself is covered by tests/test_runtime_routes.py.)
+            assert guest.delete(f"{LAUNCHER}/api/app-engine/sessions/{body['session_id']}").status_code == 204
+            assert guest.post(f"{LAUNCHER}/api/app-engine/apps/notes/open", json={}).status_code == 404
+    finally:
+        owner.close()

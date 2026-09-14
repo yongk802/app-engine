@@ -156,32 +156,29 @@ def _session(request: Request) -> Session:
     return session
 
 
-# Players may open apps and use their sessions; every other host route is the owner's.
-_PLAYER_ROUTE = re.compile(r"^/api/app-engine/(apps/[a-z0-9][a-z0-9-]*/open|sessions/[^/]+(/.*)?)$")
+# Players may open apps they were granted and use their sessions; every other host route is the owner's.
+_PLAYER_ROUTE = re.compile(r"^/api/app-engine/(?:apps/(?P<app>[a-z0-9][a-z0-9-]*)/open|sessions/[^/]+(?:/.*)?)$")
 
 
 async def _runtime_authenticate(request: Request) -> HostSubject:
-    """The local owner, or the signed-in owner or player in public-origin mode."""
+    """Gate the host router by session, then hand the runtime its one subject.
+
+    The runtime's host adapter is single-subject (configuration, state and
+    approvals belong to this installation, not to a person), so the owner and
+    every player act as that subject once the session and allow-list checks pass.
+    """
     session = _session(request)
-    if session.role == "player" and not _PLAYER_ROUTE.match(request.url.path):
-        raise HTTPException(404)
-    if session is LOCAL_SESSION:
-        return _runtime_subject
-    return HostSubject(session.subject_id, session.role)
-
-
-def _authorize_app(subject: HostSubject, app_id: str) -> bool:
-    if subject.role != "player" or not _accounts:
-        return True
-    player = next((p for p in _accounts.players() if p["id"] == subject.subject_id), None)
-    return bool(player) and not player["disabled"] and app_id in player["apps"]
+    if session.role == "player":
+        match = _PLAYER_ROUTE.match(request.url.path)
+        if not match or (match.group("app") and not session.may_open(match.group("app"))):
+            raise HTTPException(404)
+    return _runtime_subject
 
 
 app.include_router(
     create_app_engine_router(
         _app_runtime,
         authenticate=_runtime_authenticate,
-        authorize_app=_authorize_app,
         standing_approval=(lambda fingerprint: _accounts.plan_approved(fingerprint)) if _accounts else None,
         record_approval=(lambda fingerprint: (_accounts.approve_plan(fingerprint), _audit.record("plan.approved", fingerprint=fingerprint))) if _accounts else None,
     )

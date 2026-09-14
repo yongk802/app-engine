@@ -302,10 +302,14 @@ export class RoomService extends RoomServiceContract {
       }
       case 'deck': {
         this.lobby(room);
-        if (!object(p.deck) || Object.keys(p.deck).some(k => !['name', 'legends', 'cards'].includes(k)) || !Array.isArray(p.deck.cards) || !Array.isArray(p.deck.legends) || p.deck.cards.length > 50 || p.deck.legends.length > 3 || [...p.deck.cards, ...p.deck.legends].some(id => typeof id !== 'string' || !id || id.length > 128) || (p.deck.name !== undefined && (typeof p.deck.name !== 'string' || p.deck.name.length > 160))) fail('INVALID_DECK', 'Choose a legal supported deck.', 422);
-        let valid = false;
-        try { valid = this.engine.validateDeck(copy(p.deck)).valid; } catch {}
-        if (!valid) fail('INVALID_DECK', 'Choose a legal supported deck.', 422);
+        if (!object(p.deck) || Object.keys(p.deck).some(k => !['name', 'legends', 'cards'].includes(k)) || !Array.isArray(p.deck.cards) || !Array.isArray(p.deck.legends) || p.deck.cards.length > 50 || p.deck.legends.length > 3 || [...p.deck.cards, ...p.deck.legends].some(id => typeof id !== 'string' || !id || id.length > 128) || (p.deck.name !== undefined && (typeof p.deck.name !== 'string' || p.deck.name.length > 160))) fail('INVALID_DECK', 'A deck is sent as a name, up to three Legend ids and up to 50 main-deck card ids.', 422);
+        // The server's rules decide, and say why: a player fixes a deck faster with the reason.
+        let verdict = null;
+        try { verdict = this.engine.validateDeck(copy(p.deck)); } catch {}
+        if (!verdict?.valid) {
+          const reasons = Array.isArray(verdict?.errors) ? verdict.errors.map(e => typeof e === 'string' ? e : e?.message).filter(Boolean) : [];
+          fail('INVALID_DECK', reasons.length ? `This deck is not legal here: ${reasons.slice(0, 3).join(' ')}${reasons.length > 3 ? ` (+${reasons.length - 3} more)` : ''}` : 'Choose a legal supported deck.', 422);
+        }
         seat.deck = copy(p.deck); seat.ready = false;
         break;
       }

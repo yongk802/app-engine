@@ -27,6 +27,8 @@ const fields = {
   signal: ['roomId', 'requestId', 'callId', 'kind', 'data'], leave: ['roomId', 'requestId'], rematch: ['roomId', 'requestId'],
   dailySubmit: ['day', 'name', 'playerId', 'actions', 'requestId', 'protocol', 'rulesVersion', 'catalogDigest'],
   dailyBoard: ['day', 'playerId', 'protocol', 'rulesVersion', 'catalogDigest'],
+  // Which version of each card this service plays with, so another install can check its decks match.
+  cardVersions: ['ids', 'protocol'],
 };
 const DAILY_DAYS_KEPT = 60;
 let TOURNEY_FIELDS = {}, FRIEND_FIELDS = {};
@@ -229,6 +231,12 @@ export class RoomService extends RoomServiceContract {
   async run(op, p, token, player = '') {
     if (!this.initialized) fail('STORAGE_FAILURE', 'Room service is not initialized.', 503);
     if (op === 'dailySubmit' || op === 'dailyBoard') return this.daily(op, p);
+    if (op === 'cardVersions') {
+      if (p.protocol !== PROTOCOL_VERSION) fail('INCOMPATIBLE', 'The room requires a matching protocol.', 409);
+      if (!Array.isArray(p.ids) || p.ids.length > 500 || p.ids.some(id => typeof id !== 'string' || !id || id.length > 128)) fail('INVALID_REQUEST', 'Send up to 500 card ids.');
+      if (typeof this.engine.cardVersions !== 'function') fail('MULTIPLAYER_UNAVAILABLE', 'This game does not publish card versions.', 503);
+      return copy({versions: this.engine.cardVersions([...new Set(p.ids)]), rulesVersion: this.rulesVersion, catalogDigest: this.catalogDigest});
+    }
     if (op.startsWith('tourney')) return this.tourney(op, p, token);
     if (op.startsWith('friend') || op.startsWith('queue')) return this.friend(op, p, token, player);
     if (op === 'create') {

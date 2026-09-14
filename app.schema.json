@@ -148,7 +148,21 @@
       "properties": {
         "rules": { "type": "string", "description": "Relative path to an ES module whose default export is the game's rules module (createMatch, legalActions, applyAction, viewFor, validateDeck, generateDeck, rulesVersion, catalogDigest). The host runs its room service with it." },
         "ai": { "type": "string", "description": "Optional relative path to an ES module exporting chooseAction(view, actions, seed) for AI seats." },
-        "protocol": { "type": "integer", "enum": [1], "default": 1, "description": "Room protocol the app's client speaks." }
+        "protocol": { "type": "integer", "enum": [1], "default": 1, "description": "Room protocol the app's client speaks." },
+        "servers": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": ["name", "url"],
+            "properties": {
+              "name": { "type": "string", "maxLength": 40 },
+              "url": { "type": "string", "description": "Origin of a public app-engine server (https://play.example.com) that hosts this game. Players sign in there with a username and password from inside the game." }
+            },
+            "additionalProperties": false
+          },
+          "description": "Public app-engine servers the game offers in its server list."
+        }
       },
       "additionalProperties": false,
       "description": "Opt the app into the host's multiplayer room service: tables, seats, clocks, chat, tournaments and a friend roster, driven by the app's own rules module. Reached from the app at POST /api/app-multiplayer/{id}/command."

@@ -168,3 +168,146 @@ def test_bind_guard_and_bad_origin(tmp_path, monkeypatch):
         importlib.reload(engine)
     monkeypatch.delenv("APP_ENGINE_PUBLIC_ORIGIN")
     importlib.reload(engine)
+
+
+def owner_client(module):
+    client = public_client(module)
+    assert sign_in(client).status_code == 303
+    html = client.get(f"{LAUNCHER}/").text
+    capability = html.split("'X-App-Engine-Admin':'")[1].split("'")[0]
+    return client, {"X-App-Engine-Admin": capability}
+
+
+def test_players_are_invited_choose_a_password_and_see_only_their_apps(tmp_path, monkeypatch):
+    make_app(tmp_path / "apps", "cards")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    owner, admin = owner_client(module)
+    assert "__APP_ENGINE_ROLE__" not in owner.get(f"{LAUNCHER}/").text and "'owner'" in owner.get(f"{LAUNCHER}/").text
+    assert owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["cards"]}).status_code == 403, "mutations need the launcher capability too"
+    assert owner.post(f"{LAUNCHER}/admin/players", json={"username": "Rook!", "apps": ["cards"]}, headers=admin).status_code == 400
+    assert owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["nope"]}, headers=admin).status_code == 400
+    created = owner.post(f"{LAUNCHER}/admin/players", json={"username": "Rook", "name": "Rook the Bot", "apps": ["cards"]}, headers=admin)
+    assert created.status_code == 201, created.text
+    player, invite = created.json()["player"], created.json()["invite"]
+    assert player["username"] == "rook" and player["invite_pending"] and not player["has_password"]
+    assert invite.startswith(f"{LAUNCHER}/join/")
+    assert owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": []}, headers=admin).status_code == 400, "usernames are unique"
+    listed = owner.get(f"{LAUNCHER}/admin/players").json()
+    assert [p["username"] for p in listed["players"]] == ["rook"] and listed["apps"] == ["cards", "notes"]
+
+    with public_client(module) as guest:
+        form = guest.get(invite)
+        assert form.status_code == 200 and 'value="rook"' in form.text
+        assert guest.post(invite, data={"password": "short", "confirm": "short"}).status_code == 400
+        assert guest.post(invite, data={"password": "long enough", "confirm": "different"}).status_code == 400
+        joined = guest.post(invite, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
+        assert joined.status_code == 303 and "set-cookie" in joined.headers
+        assert guest.get(invite).status_code == 404, "an invitation is one-time"
+        players_file = (tmp_path / "state" / "players.json").read_text()
+        assert "correct horse" not in players_file and "pbkdf2$" in players_file
+
+        home = guest.get(f"{LAUNCHER}/")
+        assert home.status_code == 200 and "'player'" in home.text and "'X-App-Engine-Admin':''" in home.text, "a player's launcher carries no owner capability"
+        assert guest.get(f"{LAUNCHER}/state").json()["session"] == {"username": "Rook the Bot", "role": "player"}
+        listing = guest.get(f"{LAUNCHER}/api/apps").json()
+        assert [a["id"] for a in listing] == ["cards"], "only the allowed app is listed"
+        assert guest.get(f"{LAUNCHER}/api/apps/categories").status_code == 200
+        token = listing[0]["url"].split("atrium_state_token=")[1]
+        assert guest.get("https://cards.play.example.com/apps/cards/").status_code == 200
+        assert guest.get(f"{APP}/apps/notes/").status_code == 404, "an app not granted does not exist for the player"
+        assert guest.get(f"{LAUNCHER}/api/apps/rejected").status_code == 404
+        assert guest.get(f"{LAUNCHER}/admin/players").status_code == 404
+        assert guest.get(f"{LAUNCHER}/api/app-engine/catalog").status_code == 404
+        assert guest.get(f"{LAUNCHER}/api/app-engine/studio/").status_code == 404
+        opened = guest.post(f"{LAUNCHER}/api/app-engine/apps/cards/open", json={})
+        assert opened.status_code == 200, opened.text
+        assert guest.post(f"{LAUNCHER}/api/app-engine/apps/notes/open", json={}).status_code == 404
+        state_headers = {"x-app-state-token": token}
+        assert guest.put("https://cards.play.example.com/api/app-state/cards", json={"deck": "mine"}, headers=state_headers).status_code == 200
+        assert (tmp_path / "state" / "players" / player["id"] / "cards.json").is_file(), "saves are per player"
+        assert not (tmp_path / "state" / "cards.json").exists()
+        assert guest.get("https://cards.play.example.com/api/app-state/cards", headers={"x-app-state-token": "wrong"}).status_code == 403
+
+    # The owner's capability for the same app is a different one, and their save is separate.
+    owner_token = owner.get(f"{LAUNCHER}/api/apps").json()[0]["url"].split("atrium_state_token=")[1]
+    assert owner_token != token
+    assert owner.get("https://cards.play.example.com/api/app-state/cards", headers={"x-app-state-token": owner_token}).json() == {}
+
+    # Password sign-in for a browser at the server; disabling ends every session.
+    with public_client(module) as again:
+        assert again.post(f"{LAUNCHER}/sign-in", data={"username": "rook", "password": "wrong password"}, follow_redirects=False).status_code == 403
+        assert again.post(f"{LAUNCHER}/sign-in", data={"username": "ROOK", "password": "correct horse battery"}, follow_redirects=False).status_code == 303
+        assert again.get(f"{LAUNCHER}/api/apps").status_code == 200
+        assert owner.post(f"{LAUNCHER}/admin/players/{player['id']}", json={"disabled": True}, headers=admin).json()["player"]["disabled"] is True
+        assert again.get(f"{LAUNCHER}/api/apps").status_code == 401
+        assert again.post(f"{LAUNCHER}/sign-in", data={"username": "rook", "password": "correct horse battery"}, follow_redirects=False).status_code == 403
+        assert owner.post(f"{LAUNCHER}/admin/players/{player['id']}", json={"disabled": False, "apps": ["cards", "notes"]}, headers=admin).json()["player"]["apps"] == ["cards", "notes"]
+        relink = owner.post(f"{LAUNCHER}/admin/players/{player['id']}/invite", headers=admin).json()["invite"]
+        assert again.get(relink).status_code == 200, "a fresh invitation lets the player set a new password"
+        assert owner.delete(f"{LAUNCHER}/admin/players/{player['id']}", headers=admin).status_code == 204
+        assert again.get(relink).status_code == 404
+    owner.close()
+
+
+def test_remote_game_clients_sign_in_with_a_password_and_use_bearer_tokens(tmp_path, monkeypatch):
+    make_app(tmp_path / "apps", "cards")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    owner, admin = owner_client(module)
+    invite = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["cards"]}, headers=admin).json()["invite"]
+    with public_client(module) as guest:
+        guest.post(invite, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
+    owner.close()
+
+    with TestClient(module.app, base_url="https://someones-laptop.example") as remote:
+        # A game on another origin: no cookies, preflight first, then a bearer token.
+        preflight = remote.options(f"{LAUNCHER}/api/players/sign-in", headers={"origin": "http://cyberpunk-tcg.localhost:8770", "access-control-request-method": "POST"})
+        assert preflight.status_code == 204 and preflight.headers["access-control-allow-origin"] == "*"
+        assert "authorization" in preflight.headers["access-control-allow-headers"].lower()
+        assert remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "nope"}).status_code == 403
+        assert remote.post(f"{LAUNCHER}/api/players/sign-in", content="not json", headers={"content-type": "application/json"}).status_code == 400
+        signed = remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}, headers={"origin": "http://cyberpunk-tcg.localhost:8770"})
+        assert signed.status_code == 200 and signed.headers["access-control-allow-origin"] == "*"
+        body = signed.json()
+        assert body["ok"] and body["player"]["username"] == "rook" and body["player"]["apps"] == ["cards"] and body["server"]["origin"] == PUBLIC
+        bearer = {"authorization": f"Bearer {body['token']}"}
+        assert remote.get(f"{LAUNCHER}/api/players/me").status_code == 401
+        assert remote.get(f"{LAUNCHER}/api/players/me", headers=bearer).json()["player"]["name"] == "rook"
+        denied = remote.post(f"{LAUNCHER}/api/players/notes/command", json={"op": "create"}, headers=bearer)
+        assert denied.status_code == 404 and denied.json()["error"]["code"] == "MULTIPLAYER_UNAVAILABLE"
+        unhosted = remote.post(f"{LAUNCHER}/api/players/cards/command", json={"op": "create"}, headers=bearer)
+        assert unhosted.status_code == 503 and unhosted.json()["error"]["code"] == "MULTIPLAYER_UNAVAILABLE", "cards declares no rules module"
+        assert remote.post(f"{LAUNCHER}/api/players/cards/command", content="[]", headers={**bearer, "content-type": "application/json"}).status_code == 400
+        assert remote.post(f"{LAUNCHER}/api/players/cards/command", json={"op": "create"}).status_code == 401
+        assert remote.post(f"{LAUNCHER}/api/players/sign-out", headers=bearer).json()["ok"] is True
+        assert remote.get(f"{LAUNCHER}/api/players/me", headers=bearer).status_code == 401, "signed out tokens die"
+        assert remote.get(f"{LAUNCHER}/api/apps").status_code == 401, "the cookie surface is untouched by the remote API"
+
+
+def test_players_cli_changes_are_seen_by_a_running_engine(tmp_path, monkeypatch, capsys):
+    from app_engine.__main__ import players_main
+
+    make_app(tmp_path / "apps", "cards")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    state = str(tmp_path / "state")
+    assert players_main(["--state-dir", state, "--origin", PUBLIC, "invite", "--username", "Rook", "--apps", "cards"]) == 0
+    out = capsys.readouterr().out
+    assert "invited rook for cards" in out
+    link = out.split("send this link once (valid 7 days): ")[1].strip()
+    assert link.startswith(f"{LAUNCHER}/join/")
+    with public_client(module) as guest:
+        assert guest.get(link).status_code == 200, "the engine re-reads players.json when the CLI changed it"
+        assert guest.post(link, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False).status_code == 303
+        assert [a["id"] for a in guest.get(f"{LAUNCHER}/api/apps").json()] == ["cards"]
+        assert players_main(["--state-dir", state, "list"]) == 0
+        listing = capsys.readouterr().out
+        assert "rook" in listing and "active" in listing and "cards" in listing
+        assert players_main(["--state-dir", state, "disable", "rook"]) == 0
+        assert guest.get(f"{LAUNCHER}/api/apps").status_code == 401
+        assert players_main(["--state-dir", state, "enable", "rook"]) == 0
+        assert players_main(["--state-dir", state, "--origin", PUBLIC, "reinvite", "rook"]) == 0
+        assert "/join/" in capsys.readouterr().out
+        assert players_main(["--state-dir", state, "remove", "rook"]) == 0
+    with pytest.raises(SystemExit):
+        players_main(["--state-dir", state, "remove", "nobody"])
+    with pytest.raises(SystemExit):
+        players_main(["--state-dir", state, "invite", "--username", "x"])

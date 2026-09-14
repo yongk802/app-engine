@@ -5,7 +5,7 @@
  * and, unlike rooms, survive a rules or catalog update. */
 import {createHmac} from 'node:crypto';
 
-const MAX_PLAYERS=1000,MAX_FRIENDS=50,MAX_REMEMBERED=500,INVITE_LIFETIME=86400000;
+const MAX_PLAYERS=1000,MAX_FRIENDS=50,MAX_REMEMBERED=500,INVITE_LIFETIME=86400000,MAX_TOKENS=5,QUEUE_LIFETIME=600000;
 const TURN_TIMERS={'24h':86400000,'72h':259200000};
 const CODE=/^ncf1:([A-Za-z0-9_-]{22}):([A-Za-z0-9_-]{1,256})$/;
 
@@ -15,6 +15,8 @@ export function installFriends(RoomService,{secret,digest,eqHash,text,object,cop
   friendSnapshot:[],friendRename:['requestId','name'],friendRecode:['requestId'],
   friendAdd:['requestId','code'],friendRemove:['requestId','friendId'],
   friendInvite:['requestId','friendId','turnTimer'],friendJoin:['requestId','roomId'],friendDecline:['requestId','roomId'],
+  // Random matches: a queue of roster identities; two waiting players are seated at a fresh table.
+  queueJoin:['requestId','turnTimer'],queueStatus:[],queueLeave:['requestId'],
  };
  const playerName=value=>text(value,'player name',40).trim();
  Object.assign(RoomService.prototype,{
@@ -28,7 +30,8 @@ export function installFriends(RoomService,{secret,digest,eqHash,text,object,cop
    const loaded=new Map();
    const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
    for(const p of saved.players){
-    if(!object(p)||!/^[A-Za-z0-9_-]{22}$/.test(p.id)||typeof p.name!=='string'||p.name.length>40||!hash(p.tokenHash)||!hash(p.codeHash)||!Array.isArray(p.friends)||p.friends.length>MAX_FRIENDS||!p.friends.every(id=>typeof id==='string')||!Array.isArray(p.requests)||loaded.has(p.id))throw new Error('Invalid friend player.');
+    if(object(p)&&hash(p.tokenHash)&&!Array.isArray(p.tokenHashes)){p.tokenHashes=[p.tokenHash];delete p.tokenHash;}
+    if(!object(p)||!/^[A-Za-z0-9_-]{22}$/.test(p.id)||typeof p.name!=='string'||p.name.length>40||!Array.isArray(p.tokenHashes)||!p.tokenHashes.length||p.tokenHashes.length>MAX_TOKENS||!p.tokenHashes.every(hash)||!hash(p.codeHash)||!Array.isArray(p.friends)||p.friends.length>MAX_FRIENDS||!p.friends.every(id=>typeof id==='string')||!Array.isArray(p.requests)||(p.player!==undefined&&typeof p.player!=='string')||(p.seatSeed!==undefined&&typeof p.seatSeed!=='string')||loaded.has(p.id))throw new Error('Invalid friend player.');
     p.lastSeen=null;
     loaded.set(p.id,p);
    }
@@ -55,27 +58,39 @@ export function installFriends(RoomService,{secret,digest,eqHash,text,object,cop
    return {name:to?.name||'Your friend',declined:!!room.friendInvite.declined,expired:room.inviteExpires<=this.now()};
   },
 
-  async friend(op,p,token){
+  matchesToken(pl,token){return pl.tokenHashes.some(h=>eqHash(token,h));},
+  async friend(op,p,token,player=''){
    if(op==='friendRegister'){
     this.compatible(p);
     const name=playerName(p.name);
+    // A host that knows who is signed in binds the roster identity to that account, so a new
+    // device or browser gets the same friends back instead of a fresh, empty roster.
+    const bound=player?[...this.players.values()].find(pl=>pl.player===player):null;
+    if(bound){
+     const again=copy(bound),playerToken=secret(),code=secret();
+     again.name=name;again.tokenHashes=[...again.tokenHashes.slice(-(MAX_TOKENS-1)),digest(playerToken)];again.codeHash=code?digest(code):again.codeHash;again.lastSeen=this.now();
+     await this.savePlayers(again);
+     return {playerId:again.id,token:playerToken,code,snapshot:this.friendSnapshot(again)};
+    }
     if(this.players.size>=MAX_PLAYERS)fail('CAPACITY','The friend roster is full.',503);
     const playerToken=secret(),code=secret(),id=secret().slice(0,22);
-    const player={id,name,tokenHash:digest(playerToken),codeHash:digest(code),friends:[],requests:[],createdAt:new Date(this.now()).toISOString(),lastSeen:this.now()};
-    await this.savePlayers(player);
-    return {playerId:id,token:playerToken,code,snapshot:this.friendSnapshot(player)};
+    const record={id,name,tokenHashes:[digest(playerToken)],codeHash:digest(code),friends:[],requests:[],createdAt:new Date(this.now()).toISOString(),lastSeen:this.now(),...(player?{player}:{})};
+    await this.savePlayers(record);
+    return {playerId:id,token:playerToken,code,snapshot:this.friendSnapshot(record)};
    }
    if(!token)fail('AUTH_REQUIRED','A friend credential is required.',401);
-   const existing=[...this.players.values()].find(pl=>eqHash(token,pl.tokenHash));
+   const existing=[...this.players.values()].find(pl=>this.matchesToken(pl,token));
    if(!existing)fail('AUTH_REQUIRED','A valid friend credential is required.',401);
    const me=copy(existing);
    me.lastSeen=this.now();
    if(op==='friendSnapshot'){await this.savePlayers(me);return this.friendSnapshot(me);}
+   if(op==='queueStatus'){await this.savePlayers(me);return this.queueSnapshot(me);}
    text(p.requestId,'request ID',128);
    if(me.requests.includes(p.requestId))return this.friendSnapshot(me);
    me.requests=[...me.requests.slice(-MAX_REMEMBERED),p.requestId];
    const changed=[me];
    let session=null;
+   if(op.startsWith('queue')){session=await this.queue(op,p,me);}
    if(op==='friendRename')me.name=playerName(p.name);
    if(op==='friendRecode'){const code=secret();me.codeHash=digest(code);session={code};}
    if(op==='friendAdd'){
@@ -119,7 +134,9 @@ export function installFriends(RoomService,{secret,digest,eqHash,text,object,cop
     if(!r||!r.friendInvite||r.friendInvite.to!==me.id)fail('ROOM_NOT_FOUND','That invitation was not found.',404);
     const room=copy(r);
     // The seat credential is derived from the friend credential, so a retried join lands on the same seat.
-    const seatToken=createHmac('sha256',token).update(`night-city-rooms:friend-seat:${room.id}`).digest('base64url');
+    // Derived from the identity, not the device token, so any signed-in device retries onto the same seat.
+    me.seatSeed||=secret();
+    const seatToken=createHmac('sha256',me.seatSeed).update(`night-city-rooms:friend-seat:${room.id}`).digest('base64url');
     if(op==='friendJoin'){
      if(!(room.seats[1]&&eqHash(seatToken,room.seats[1].tokenHash))){
       if(!this.friendInviteOpen(room))fail('INVALID_INVITE','This invitation is no longer open.',403);
@@ -134,15 +151,50 @@ export function installFriends(RoomService,{secret,digest,eqHash,text,object,cop
    }
    await this.savePlayers(...changed);
    const snapshot=this.friendSnapshot(me);
+   if(op.startsWith('queue')){if(session)this.matched.delete(me.id);return {...this.queueSnapshot(me),match:session,roster:snapshot};}
    return session?{...session,roster:snapshot}:snapshot;
   },
 
+  /** In-memory queue of roster identities waiting for any opponent. Two waiting identities get a
+   * table with both seated; each collects their seat with queueStatus (or a repeated queueJoin).
+   * Tables persist like any other; an uncollected seat is forgotten after ten minutes. */
+  sweepQueue(){
+   this.waiting||=new Map();this.matched||=new Map();
+   const now=this.now();
+   for(const [id,entry] of this.matched)if(now-entry.at>QUEUE_LIFETIME)this.matched.delete(id);
+   for(const [id,entry] of this.waiting)if(now-entry.at>QUEUE_LIFETIME)this.waiting.delete(id);
+   return now;
+  },
+  async queue(op,p,me){
+   const now=this.sweepQueue();
+   if(op==='queueLeave'){this.waiting.delete(me.id);return null;}
+   if(this.matched.has(me.id))return this.matched.get(me.id).session;
+   if(p.turnTimer!=null&&!Object.hasOwn(TURN_TIMERS,p.turnTimer))fail('INVALID_REQUEST','Choose a turn timer of none, 24h or 72h.');
+   const other=[...this.waiting.keys()].find(id=>id!==me.id&&this.players.has(id));
+   if(!other){if(!this.waiting.has(me.id))this.waiting.set(me.id,{at:now,turnTimer:p.turnTimer||null});return null;}
+   const rival=this.players.get(other),timer=this.waiting.get(other)?.turnTimer||p.turnTimer||null;
+   this.waiting.delete(other);this.waiting.delete(me.id);
+   if([...this.rooms.values()].filter(r=>r.status!=='closed').length>=100||this.rooms.size>=1000)fail('CAPACITY','Room capacity has been reached.',503);
+   const tokens=[secret(),secret()],id=secret().slice(0,22);
+   const room={id,revision:1,gameRevision:0,status:'lobby',seats:[this.newSeat(rival.name,tokens[0]),this.newSeat(me.name,tokens[1])],pending:null,inviteHash:digest(secret()),inviteExpires:0,inviteConsumed:true,joins:[],game:null,messages:[],signals:[],turnTimer:timer?TURN_TIMERS[timer]:null,turnDeadline:null,timeout:null,randomMatch:true};
+   const rooms=new Map(this.rooms);rooms.set(id,room);this.rooms=rooms;await this.commitAll();
+   this.matched.set(other,{at:now,session:{roomId:id,token:tokens[0],seat:0,snapshot:this.snapshot(room,0)}});
+   const mine={roomId:id,token:tokens[1],seat:1,snapshot:this.snapshot(room,1)};
+   this.matched.set(me.id,{at:now,session:mine});
+   return mine;
+  },
+  queueSnapshot(me){
+   this.sweepQueue();
+   const match=this.matched.get(me.id)?.session||null;
+   if(match)this.matched.delete(me.id);
+   return copy({waiting:this.waiting.has(me.id),waitingCount:this.waiting.size,match,now:this.now(),protocol:PROTOCOL_VERSION,rulesVersion:this.rulesVersion,catalogDigest:this.catalogDigest});
+  },
   friendSnapshot(me){
    const rooms=this.friendInviteRooms();
    const friends=me.friends.map(id=>this.players.get(id)).filter(Boolean).map(pl=>({id:pl.id,name:pl.name,connected:this.connected(pl)}));
    const invites=rooms.filter(r=>r.friendInvite.to===me.id&&this.friendInviteOpen(r)).map(r=>({roomId:r.id,from:{id:r.friendInvite.from,name:this.players.get(r.friendInvite.from)?.name||'A friend'},at:r.friendInvite.at,expires:r.inviteExpires}));
    const sent=rooms.filter(r=>r.friendInvite.from===me.id&&r.status!=='closed'&&(this.friendInviteOpen(r)||r.friendInvite.declined)).map(r=>({roomId:r.id,to:{id:r.friendInvite.to,name:this.players.get(r.friendInvite.to)?.name||'A friend'},declined:!!r.friendInvite.declined,at:r.friendInvite.at}));
-   return copy({playerId:me.id,name:me.name,friends,invites,sent,now:this.now(),protocol:PROTOCOL_VERSION,rulesVersion:this.rulesVersion,catalogDigest:this.catalogDigest});
+   return copy({playerId:me.id,name:me.name,account:me.player||null,friends,invites,sent,now:this.now(),protocol:PROTOCOL_VERSION,rulesVersion:this.rulesVersion,catalogDigest:this.catalogDigest});
   },
  });
  return fields;

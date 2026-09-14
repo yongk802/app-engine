@@ -50,13 +50,20 @@ from app_engine import manifest as _manifest
 from app_engine.manifest import ENGINE_VERSION
 from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY, MultiplayerHost, MultiplayerUnavailable, failure as multiplayer_failure
 from app_engine.public_origin import (
+    JOIN_ERROR_PAGE,
+    LOCAL_SESSION,
     SESSION_COOKIE,
     Accounts,
     OwnerGate,
     PublicOrigin,
+    RemoteApiCors,
+    Session,
     SignInLimiter,
     bind_is_allowed,
     clear_session_cookie,
+    invite_link,
+    join_page,
+    player_sign_in_page,
     set_session_cookie,
     sign_in_page,
 )
@@ -81,7 +88,7 @@ _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # capabilities provide defense in depth and also authorize app-state calls from
 # non-browser clients. Tokens live only for this engine process and never enter
 # query strings or server logs.
-_app_capabilities: dict[str, str] = {}
+_app_capabilities: dict[tuple[str, str], str] = {}   # (subject, app) -> capability
 _admin_capability = secrets.token_urlsafe(32)
 
 _proxy: httpx.AsyncClient | None = None
@@ -128,15 +135,48 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="app-engine", lifespan=lifespan)
 if _PUBLIC:
     app.add_middleware(OwnerGate, accounts=_accounts, enabled=True)
+    app.add_middleware(RemoteApiCors)
 
 
-async def _runtime_authenticate() -> HostSubject:
-    """Standalone app-engine is a single local administrative session."""
-    return _runtime_subject
+def _session(request: Request) -> Session:
+    """Who is asking: the gate's session in public-origin mode, the local owner otherwise."""
+    if not _PUBLIC:
+        return LOCAL_SESSION
+    session = request.scope.get("state", {}).get("session")
+    if session is None:
+        raise HTTPException(401, "sign in required")
+    return session
+
+
+# Players may open apps and use their sessions; every other host route is the owner's.
+_PLAYER_ROUTE = re.compile(r"^/api/app-engine/(apps/[a-z0-9][a-z0-9-]*/open|sessions/[^/]+(/.*)?)$")
+
+
+async def _runtime_authenticate(request: Request) -> HostSubject:
+    """The local owner, or the signed-in owner or player in public-origin mode."""
+    session = _session(request)
+    if session.role == "player" and not _PLAYER_ROUTE.match(request.url.path):
+        raise HTTPException(404)
+    if session is LOCAL_SESSION:
+        return _runtime_subject
+    return HostSubject(session.subject_id, session.role)
+
+
+def _authorize_app(subject: HostSubject, app_id: str) -> bool:
+    if subject.role != "player" or not _accounts:
+        return True
+    player = next((p for p in _accounts.players() if p["id"] == subject.subject_id), None)
+    return bool(player) and not player["disabled"] and app_id in player["apps"]
 
 
 app.include_router(
-    create_app_engine_router(_app_runtime, authenticate=_runtime_authenticate)
+    create_app_engine_router(
+        _app_runtime,
+        authenticate=_runtime_authenticate,
+        authorize_app=_authorize_app,
+        standing_approval=(lambda fingerprint: _accounts.plan_approved(fingerprint)) if _accounts else None,
+        record_approval=(lambda fingerprint: _accounts.approve_plan(fingerprint)) if _accounts else None,
+    )
 )
 _registry = ModelRegistry.load(Path(__file__).parent / "model-registry.json")
 _knowledge = KnowledgeBase.load(Path(__file__).parent / "knowledge" / "tutors.json")
@@ -243,9 +283,12 @@ def discover() -> dict[str, App]:
 
 # ── App-state persistence (localStorage replacement) ──────────────────────────
 
-def _state_file(app_id: str) -> Path:
+def _state_file(session: Session, app_id: str) -> Path:
+    """The owner's saves stay where they always were; each player has their own folder."""
     if not _APP_ID_RE.match(app_id):
         raise HTTPException(404)
+    if session.role == "player":
+        return STATE_DIR / "players" / session.subject_id / f"{app_id}.json"
     return STATE_DIR / f"{app_id}.json"
 
 
@@ -277,16 +320,28 @@ def _app_origin(request: Request, app_id: str) -> str:
     return f"{request.url.scheme}://{app_id}.localhost" + (f":{port}" if port else "")
 
 
-def _app_capability(app_id: str) -> str:
-    return _app_capabilities.setdefault(app_id, secrets.token_urlsafe(32))
+def _app_capability(session: Session | str, app_id: str | None = None) -> str:
+    """The unguessable capability for (subject, app). ``_app_capability("notes")`` is the local owner's."""
+    if isinstance(session, str):
+        session, app_id = LOCAL_SESSION, session
+    return _app_capabilities.setdefault((session.subject_id, app_id), secrets.token_urlsafe(32))
 
 
-def _enforce_app_state_access(request: Request, app_id: str) -> None:
+def _require_app_access(session: Session, app_id: str) -> None:
+    """An app a player was not invited to does not exist for them."""
+    if not session.may_open(app_id):
+        raise HTTPException(404)
+
+
+def _enforce_app_state_access(request: Request, app_id: str) -> Session:
+    session = _session(request)
+    _require_app_access(session, app_id)
     host_app = _app_host_id(request)
     supplied = request.headers.get("x-app-state-token", "")
-    expected = _app_capability(app_id)
+    expected = _app_capability(session, app_id)
     if host_app != app_id or not secrets.compare_digest(supplied, expected):
         raise HTTPException(403, "app-state capability denied")
+    return session
 
 
 def _deny_app_iframe(request: Request) -> None:
@@ -305,8 +360,8 @@ def _deny_public_local_ai() -> None:
 
 @app.get("/api/app-state/{app_id}")
 async def get_app_state(app_id: str, request: Request) -> JSONResponse:
-    _enforce_app_state_access(request, app_id)
-    f = _state_file(app_id)
+    session = _enforce_app_state_access(request, app_id)
+    f = _state_file(session, app_id)
     if not f.is_file():
         return JSONResponse({})
     try:
@@ -317,7 +372,7 @@ async def get_app_state(app_id: str, request: Request) -> JSONResponse:
 
 @app.put("/api/app-state/{app_id}")
 async def put_app_state(app_id: str, request: Request) -> JSONResponse:
-    _enforce_app_state_access(request, app_id)
+    session = _enforce_app_state_access(request, app_id)
     raw = await request.body()
     if len(raw) > MAX_STATE_BYTES:
         raise HTTPException(413, "state too large")
@@ -327,8 +382,9 @@ async def put_app_state(app_id: str, request: Request) -> JSONResponse:
         raise HTTPException(400, "invalid JSON")
     if not isinstance(data, (dict, list)):
         raise HTTPException(400, "state must be object or array")
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    _state_file(app_id).write_text(json.dumps(data), encoding="utf-8")
+    target = _state_file(session, app_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data), encoding="utf-8")
     return JSONResponse({"ok": True})
 
 
@@ -383,7 +439,8 @@ async def app_multiplayer_command(app_id: str, request: Request) -> JSONResponse
     base = await _multiplayer_base(request, app_id)
     if isinstance(base, JSONResponse):
         return base
-    status, result = await _multiplayer.relay(base, raw, request.headers.get("x-app-multiplayer-credential"))
+    session = _session(request)
+    status, result = await _multiplayer.relay(base, raw, request.headers.get("x-app-multiplayer-credential"), player=session.subject_id if session.role == "player" else None)
     return _multiplayer_reply(status, result)
 
 
@@ -399,9 +456,10 @@ async def app_multiplayer_health(app_id: str, request: Request) -> JSONResponse:
 # ── /state stub (single-user, no auth) ────────────────────────────────────────
 
 @app.get("/state")
-async def state() -> JSONResponse:
+async def state(request: Request) -> JSONResponse:
+    session = _session(request)
     return JSONResponse(
-        {"csrf_token": "", "session": {"username": "local", "role": "admin"}}
+        {"csrf_token": "", "session": {"username": session.name, "role": session.role}}
     )
 
 
@@ -654,6 +712,7 @@ async def _proxy_entry_point(app_obj: App, path: str, request: Request) -> Respo
 @app.api_route("/apps/{app_id}/", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"])
 @app.api_route("/apps/{app_id}/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"])
 async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
+    _require_app_access(_session(request), app_id)
     apps = discover()
     app_obj = apps.get(app_id)
     if not app_obj:
@@ -714,9 +773,12 @@ async def api_apps(
     """Launcher app list. ``q`` and ``category`` filter it and rank by relevance."""
     if not _is_launcher_host(request):
         raise HTTPException(403, "launcher origin required")
-    apps = search_apps(_app_listing(), q, category)
+    session = _session(request)
+    apps = [a for a in search_apps(_app_listing(), q, category) if session.may_open(a["id"])]
     for a in apps:
-        a["url"] = f"{_app_origin(request, a['id'])}/apps/{a['id']}/#atrium_state_token={_app_capability(a['id'])}"
+        a["url"] = f"{_app_origin(request, a['id'])}/apps/{a['id']}/#atrium_state_token={_app_capability(session, a['id'])}"
+        if _PUBLIC:
+            a["chat_enabled"] = False   # Local AI is not served publicly
     return JSONResponse(apps)
 
 
@@ -725,7 +787,8 @@ async def api_app_categories(request: Request) -> JSONResponse:
     """Category vocabulary with per-category app counts, for the filter control."""
     if not _is_launcher_host(request):
         raise HTTPException(403, "launcher origin required")
-    return JSONResponse(category_counts(_app_listing()))
+    session = _session(request)
+    return JSONResponse(category_counts([a for a in _app_listing() if session.may_open(a["id"])]))
 
 
 @app.get("/api/engine")
@@ -735,12 +798,13 @@ async def api_engine() -> JSONResponse:
 
 
 @app.get("/api/apps/rejected")
-async def api_apps_rejected() -> JSONResponse:
+async def api_apps_rejected(request: Request) -> JSONResponse:
     """Folders that look like an app but failed manifest validation.
 
     Surfaces malformed manifests for developers instead of silently dropping
     them. Empty in normal operation.
     """
+    _require_owner(request)
     accepted = {item.manifest.root.resolve() for item in
                 _app_runtime.catalog.snapshot(_app_runtime.catalog_key).apps}
     return JSONResponse([item for item in inspect_apps()[1]
@@ -751,22 +815,269 @@ async def api_apps_rejected() -> JSONResponse:
 async def launcher(request: Request) -> HTMLResponse:
     if not _is_launcher_host(request):
         raise HTTPException(403, "launcher origin required")
+    session = _session(request)
     html = (Path(__file__).parent / "launcher.html").read_text(encoding="utf-8")
-    html = html.replace("__APP_ENGINE_ADMIN_CAPABILITY__", _admin_capability)
-    return HTMLResponse(html, headers={"Content-Security-Policy": "frame-ancestors 'none'"})
+    # A player's page never carries the owner's capability: it cannot approve, install or configure.
+    html = html.replace("__APP_ENGINE_ADMIN_CAPABILITY__", _admin_capability if session.owner else "")
+    html = html.replace("__APP_ENGINE_ROLE__", "player" if session.role == "player" else ("owner" if _PUBLIC else "local"))
+    html = html.replace("__APP_ENGINE_USER__", session.name.replace("<", "").replace(">", "").replace("'", ""))
+    return HTMLResponse(html, headers={"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"})
 
 
-# ── Owner sign-in (public-origin mode only) ───────────────────────────────────
+# ── Owner sign-in and players (public-origin mode only) ───────────────────────
 
 def _require_public() -> None:
     if not _PUBLIC:
         raise HTTPException(404)
 
 
+def _require_owner(request: Request) -> Session:
+    session = _session(request)
+    if not session.owner:
+        raise HTTPException(404)
+    return session
+
+
+def _require_owner_action(request: Request) -> Session:
+    """A mutation from the owner's launcher: session cookie plus the launcher capability."""
+    session = _require_owner(request)
+    supplied = request.headers.get("x-app-engine-admin", "")
+    if not _is_launcher_host(request) or not secrets.compare_digest(supplied, _admin_capability):
+        raise HTTPException(403, "launcher capability required")
+    return session
+
+
+_NO_STORE = {"Cache-Control": "no-store", "Content-Security-Policy": "frame-ancestors 'none'"}
+
+
+@app.get("/join/{code}")
+async def join(code: str, request: Request) -> Response:
+    """A one-time invitation link: the player chooses a password, then is signed in here."""
+    _require_public()
+    player = _accounts.invited_player(code)
+    if player is None:
+        return HTMLResponse(JOIN_ERROR_PAGE, status_code=404, headers=_NO_STORE)
+    return HTMLResponse(join_page(code, player["username"]), headers=_NO_STORE)
+
+
+@app.post("/join/{code}")
+async def join_submit(code: str, request: Request) -> Response:
+    _require_public()
+    player = _accounts.invited_player(code)
+    if player is None:
+        return HTMLResponse(JOIN_ERROR_PAGE, status_code=404, headers=_NO_STORE)
+    form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
+    password, confirm = (form.get("password") or [""])[0], (form.get("confirm") or [""])[0]
+    if password != confirm:
+        return HTMLResponse(join_page(code, player["username"], "The two passwords differ."), status_code=400, headers=_NO_STORE)
+    try:
+        redeemed = _accounts.redeem_invite(code, password)
+    except ValueError as exc:
+        return HTMLResponse(join_page(code, player["username"], str(exc)), status_code=400, headers=_NO_STORE)
+    if redeemed is None:
+        return HTMLResponse(JOIN_ERROR_PAGE, status_code=404, headers=_NO_STORE)
+    session, token = redeemed
+    response = RedirectResponse("/", status_code=303)
+    set_session_cookie(response, token, _PUBLIC)
+    return response
+
+
+@app.get("/sign-in", response_class=HTMLResponse)
+async def player_sign_in(request: Request) -> Response:
+    _require_public()
+    if request.scope.get("state", {}).get("session"):
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(player_sign_in_page(), headers=_NO_STORE)
+
+
+@app.post("/sign-in")
+async def player_sign_in_submit(request: Request) -> Response:
+    _require_public()
+    address = request.client.host if request.client else ""
+    if not _sign_in_limiter.allow(address):
+        return HTMLResponse(player_sign_in_page("Too many attempts. Wait a minute."), status_code=429, headers=_NO_STORE)
+    form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
+    signed = _accounts.sign_in_player((form.get("username") or [""])[0], (form.get("password") or [""])[0])
+    if signed is None:
+        return HTMLResponse(player_sign_in_page("That username or password is not right."), status_code=403, headers=_NO_STORE)
+    response = RedirectResponse("/", status_code=303)
+    set_session_cookie(response, signed[1], _PUBLIC)
+    return response
+
+
+@app.post("/sign-out")
+async def player_sign_out(request: Request) -> Response:
+    _require_public()
+    _accounts.revoke_session(request.cookies.get(SESSION_COOKIE))
+    response = RedirectResponse("/sign-in", status_code=303)
+    clear_session_cookie(response, _PUBLIC)
+    return response
+
+
+# ── Remote player API: game clients on other machines, bearer tokens, CORS-open ──
+
+def _bearer_session(request: Request) -> Session:
+    """The player behind ``Authorization: Bearer``; never a cookie, so a foreign page cannot ride along."""
+    _require_public()
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    session = _accounts.resolve(token) if token else None
+    if session is None:
+        raise HTTPException(401, "sign in with a username and password")
+    return session
+
+
+def _player_json(session: Session) -> dict:
+    return {"id": session.subject_id, "username": session.username, "name": session.name, "apps": list(session.apps or [])}
+
+
+@app.post("/api/players/sign-in")
+async def api_player_sign_in(request: Request) -> JSONResponse:
+    """Username + password to a bearer token. The standard way a game connects to a server."""
+    _require_public()
+    address = request.client.host if request.client else ""
+    if not _sign_in_limiter.allow(address):
+        return JSONResponse({"ok": False, "error": {"code": "RATE_LIMITED", "message": "Too many attempts. Wait a minute."}}, status_code=429)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": {"code": "INVALID_REQUEST", "message": "Send a JSON object with username and password."}}, status_code=400)
+    signed = _accounts.sign_in_player(str(body.get("username", "")), body.get("password", ""))
+    if signed is None:
+        return JSONResponse({"ok": False, "error": {"code": "AUTH_REQUIRED", "message": "That username or password is not right."}}, status_code=403)
+    session, token = signed
+    return JSONResponse({"ok": True, "token": token, "player": _player_json(session), "server": {"name": "app-engine", "origin": _PUBLIC.origin, "version": ENGINE_VERSION}})
+
+
+@app.get("/api/players/me")
+async def api_player_me(request: Request) -> JSONResponse:
+    session = _bearer_session(request)
+    return JSONResponse({"ok": True, "player": _player_json(session)})
+
+
+@app.post("/api/players/sign-out")
+async def api_player_sign_out(request: Request) -> JSONResponse:
+    _bearer_session(request)
+    _accounts.revoke_session(request.headers.get("authorization", "")[7:].strip())
+    return JSONResponse({"ok": True})
+
+
+async def _remote_multiplayer_base(request: Request, app_id: str) -> str | JSONResponse:
+    session = _bearer_session(request)
+    if not session.may_open(app_id):
+        return _multiplayer_reply(404, multiplayer_failure("MULTIPLAYER_UNAVAILABLE", "You are not signed up for this game on this server."))
+    app_obj = _multiplayer_app(app_id)
+    if app_obj is None:
+        return _multiplayer_reply(503, multiplayer_failure("MULTIPLAYER_UNAVAILABLE", "This server does not host that game."))
+    try:
+        return await _multiplayer.ensure(app_id, Path(app_obj.root), app_obj.multiplayer)
+    except MultiplayerUnavailable as exc:
+        return _multiplayer_reply(503, multiplayer_failure("MULTIPLAYER_UNAVAILABLE", exc.message))
+
+
+@app.post("/api/players/{app_id}/command")
+async def api_player_command(app_id: str, request: Request) -> JSONResponse:
+    """A room command from a signed-in player's own game client, anywhere on the internet."""
+    if not _APP_ID_RE.match(app_id):
+        raise HTTPException(404)
+    raw = await request.body()
+    if len(raw) > MULTIPLAYER_MAX_BODY:
+        return _multiplayer_reply(413, multiplayer_failure("INVALID_REQUEST", "Request is too large."))
+    try:
+        body = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError):
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("op"), str):
+        return _multiplayer_reply(400, multiplayer_failure("INVALID_REQUEST", "A command operation is required."))
+    base = await _remote_multiplayer_base(request, app_id)
+    if isinstance(base, JSONResponse):
+        return base
+    session = _bearer_session(request)
+    status, result = await _multiplayer.relay(base, raw, request.headers.get("x-app-multiplayer-credential"), player=session.subject_id)
+    return _multiplayer_reply(status, result)
+
+
+@app.get("/api/players/{app_id}/health")
+async def api_player_health(app_id: str, request: Request) -> JSONResponse:
+    if not _APP_ID_RE.match(app_id):
+        raise HTTPException(404)
+    base = await _remote_multiplayer_base(request, app_id)
+    if isinstance(base, JSONResponse):
+        return base
+    status, result = await _multiplayer.health(base)
+    return _multiplayer_reply(status, result)
+
+
+@app.get("/admin/players")
+async def admin_players(request: Request) -> JSONResponse:
+    _require_public()
+    _require_owner(request)
+    return JSONResponse({"players": _accounts.players(), "apps": sorted(discover())})
+
+
+@app.post("/admin/players")
+async def admin_players_create(request: Request) -> JSONResponse:
+    _require_public()
+    _require_owner_action(request)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("expected an object")
+        unknown = [a for a in body.get("apps", []) if isinstance(a, str) and a not in discover()]
+        if unknown:
+            raise ValueError(f"unknown app: {', '.join(unknown)}")
+        player, code = _accounts.create_player(str(body.get("username", "")), body.get("apps", []), body.get("name"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return JSONResponse({"player": player, "invite": invite_link(_PUBLIC, code)}, status_code=201)
+
+
+@app.post("/admin/players/{player_id}/invite")
+async def admin_players_invite(player_id: str, request: Request) -> JSONResponse:
+    _require_public()
+    _require_owner_action(request)
+    code = _accounts.regenerate_invite(player_id)
+    if code is None:
+        raise HTTPException(404, "player not found")
+    return JSONResponse({"invite": invite_link(_PUBLIC, code)})
+
+
+@app.post("/admin/players/{player_id}")
+async def admin_players_update(player_id: str, request: Request) -> JSONResponse:
+    _require_public()
+    _require_owner_action(request)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("expected an object")
+        apps = body.get("apps")
+        if apps is not None:
+            unknown = [a for a in apps if isinstance(a, str) and a not in discover()]
+            if unknown:
+                raise ValueError(f"unknown app: {', '.join(unknown)}")
+        player = _accounts.update_player(player_id, disabled=body.get("disabled"), apps=apps, name=body.get("name"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if player is None:
+        raise HTTPException(404, "player not found")
+    return JSONResponse({"player": player})
+
+
+@app.delete("/admin/players/{player_id}", status_code=204)
+async def admin_players_delete(player_id: str, request: Request) -> Response:
+    _require_public()
+    _require_owner_action(request)
+    if not _accounts.remove_player(player_id):
+        raise HTTPException(404, "player not found")
+    return Response(status_code=204)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_sign_in(request: Request) -> Response:
     _require_public()
-    if request.scope.get("state", {}).get("owner"):
+    if request.scope.get("state", {}).get("session"):
         return RedirectResponse("/", status_code=303)
     return HTMLResponse(sign_in_page(), headers={"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"})
 

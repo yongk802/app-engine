@@ -264,7 +264,8 @@ def permissions_to_allow(perms: list[str]) -> str:
     return "; ".join(perms)
 
 
-MULTIPLAYER_FIELDS = frozenset({"rules", "ai", "protocol"})
+MULTIPLAYER_FIELDS = frozenset({"rules", "ai", "protocol", "servers"})
+MAX_SERVERS = 20
 MULTIPLAYER_PROTOCOL = 1
 
 
@@ -285,10 +286,48 @@ def multiplayer_problems(value: object) -> tuple[list[str], list[str]]:
     protocol = value.get("protocol", MULTIPLAYER_PROTOCOL)
     if isinstance(protocol, bool) or protocol != MULTIPLAYER_PROTOCOL:
         errors.append(f"multiplayer.protocol must be {MULTIPLAYER_PROTOCOL}")
+    servers = value.get("servers")
+    if servers is not None:
+        if not isinstance(servers, list) or len(servers) > MAX_SERVERS:
+            errors.append(f"multiplayer.servers must be a list of up to {MAX_SERVERS} servers")
+        else:
+            for index, server in enumerate(servers):
+                problem = _server_problem(server)
+                if problem:
+                    errors.append(f"multiplayer.servers[{index}]: {problem}")
     for key in value:
         if key not in MULTIPLAYER_FIELDS:
             warnings.append(f"unknown multiplayer field {key!r} (ignored — check for a typo)")
     return errors, warnings
+
+
+def _server_problem(server: object) -> str:
+    """A server entry is {name, url}: a short name and an https origin (http only for a plain host name, for a LAN)."""
+    if not isinstance(server, dict):
+        return "must be an object with name and url"
+    name, url = server.get("name"), server.get("url")
+    if not isinstance(name, str) or not name.strip() or len(name) > 40:
+        return "name must be 1 to 40 characters"
+    if not isinstance(url, str):
+        return "url must be a string"
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "url is not a valid origin"
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.username:
+        return "url must be an origin such as https://play.example.com"
+    if parsed.scheme == "http" and not _lan_host(parsed.hostname):
+        return "url must use https unless it names a LAN host"
+    return ""
+
+
+_PRIVATE_V4 = re.compile(r"^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)")
+
+
+def _lan_host(hostname: str) -> bool:
+    """Plain http is acceptable only where TLS is unusual: a bare host, a LAN suffix, a private address."""
+    host = hostname.lower()
+    return "." not in host or host.endswith((".lan", ".local", ".localhost", ".home", ".internal")) or bool(_PRIVATE_V4.match(host))
 
 
 def normalize_multiplayer(m: dict) -> dict | None:
@@ -297,14 +336,15 @@ def normalize_multiplayer(m: dict) -> dict | None:
     if not isinstance(value, dict) or not isinstance(value.get("rules"), str):
         return None
     ai = value.get("ai")
-    return {"rules": value["rules"], "ai": ai if isinstance(ai, str) and ai else None, "protocol": MULTIPLAYER_PROTOCOL}
+    servers = [{"name": s["name"].strip(), "url": s["url"].rstrip("/")} for s in value.get("servers", []) if isinstance(s, dict) and not _server_problem(s)] if isinstance(value.get("servers"), list) else []
+    return {"rules": value["rules"], "ai": ai if isinstance(ai, str) and ai else None, "protocol": MULTIPLAYER_PROTOCOL, "servers": servers}
 
 
 def _multiplayer_spec(normalized: dict) -> MultiplayerSpec | None:
     value = normalized.get("multiplayer")
     if not value:
         return None
-    return MultiplayerSpec(rules=value["rules"], ai=value["ai"], protocol=value["protocol"])
+    return MultiplayerSpec(rules=value["rules"], ai=value["ai"], protocol=value["protocol"], servers=tuple((s["name"], s["url"]) for s in value.get("servers", [])))
 
 
 def normalize(m: dict, dir_name: str) -> dict:

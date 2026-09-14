@@ -219,6 +219,7 @@ class MultiplayerSpec:
     rules: str
     ai: str | None = None
     protocol: int = 1
+    servers: tuple[tuple[str, str], ...] = ()   # (name, origin) of public app-engine servers players may join
 
 
 @dataclass(frozen=True)

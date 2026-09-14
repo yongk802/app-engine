@@ -58,7 +58,7 @@ test('friend codes add both players to each other, presence follows the heartbea
   assert.deepEqual((await roster(s,b)).friends.map(f=>f.name),['Casey'],'removal clears both rosters');
   const saved=JSON.parse(await readFile(join(storageDir,'friends.json'),'utf8'));
   assert.equal(saved.players.length,3);
-  assert.ok(saved.players.every(p=>!('token' in p)&&!('code' in p)&&/^[a-f0-9]{64}$/.test(p.tokenHash)),'only hashes are stored');
+  assert.ok(saved.players.every(p=>!('token' in p)&&!('code' in p)&&p.tokenHashes.every(h=>/^[a-f0-9]{64}$/.test(h))),'only hashes are stored');
  }finally{await rm(storageDir,{recursive:true,force:true});}
 });
 
@@ -136,3 +136,49 @@ test('declined, replaced, expired and withdrawn invitations disappear from the i
  }finally{await rm(storageDir,{recursive:true,force:true});}
 });
 
+
+test('a host-named player gets the same roster back from any device, and old tokens keep working',async()=>{
+ const {s,storageDir}=await service();
+ try{
+  const first=await s.dispatch('friendRegister',{name:'Rook',...compatibility},'','p_rook');
+  assert.equal(first.snapshot.account,'p_rook');
+  const blair=await register(s,'Blair');
+  await s.dispatch('friendAdd',{requestId:rid(),code:code(blair)},first.token);
+  const second=await s.dispatch('friendRegister',{name:'Rook on a laptop',...compatibility},'','p_rook');
+  assert.equal(second.playerId,first.playerId,'the identity is bound to the account');
+  assert.deepEqual(second.snapshot.friends.map(f=>f.name),['Blair'],'friends come along');
+  assert.notEqual(second.token,first.token);
+  assert.equal((await s.dispatch('friendSnapshot',{},first.token)).name,'Rook on a laptop','the first device still works');
+  const anonymous=await register(s,'Rook');
+  assert.notEqual(anonymous.playerId,first.playerId,'without a host player id a registration is a fresh identity');
+  const saved=JSON.parse(await readFile(join(storageDir,'friends.json'),'utf8'));
+  assert.ok(!saved.players.some(p=>'token' in p)&&saved.players.find(p=>p.id===first.playerId).tokenHashes.length===2);
+ }finally{await rm(storageDir,{recursive:true,force:true});}
+});
+
+test('two players in the random-match queue are seated at one table; leaving and expiry are honoured',async()=>{
+ let clock=1_900_000_000_000;
+ const {s,storageDir}=await service({now:()=>clock});
+ try{
+  const a=await register(s,'Alex'),b=await register(s,'Blair'),c=await register(s,'Casey');
+  const waiting=await s.dispatch('queueJoin',{requestId:rid(),turnTimer:'24h'},a.token);
+  assert.equal(waiting.match,null);assert.equal(waiting.waiting,true);assert.equal(waiting.waitingCount,1);
+  assert.equal((await s.dispatch('queueJoin',{requestId:rid()},a.token)).waitingCount,1,'joining twice does not queue twice');
+  await rejects(s.dispatch('queueJoin',{requestId:rid(),turnTimer:'2h'},b.token),'INVALID_REQUEST');
+  const paired=await s.dispatch('queueJoin',{requestId:rid()},b.token);
+  assert.ok(paired.match,'the second player is seated immediately');
+  assert.equal(paired.match.seat,1);assert.equal(paired.match.snapshot.randomMatch,true);
+  assert.deepEqual(paired.match.snapshot.players.map(p=>[p.name,p.accepted]),[['Alex',true],['Blair',true]]);
+  assert.equal(paired.match.snapshot.turnTimer,86400000,'the first player clock choice applies');
+  const collected=await s.dispatch('queueStatus',{},a.token);
+  assert.equal(collected.match.seat,0);assert.equal(collected.match.roomId,paired.match.roomId);assert.equal(collected.waiting,false);
+  assert.equal((await s.dispatch('queueStatus',{},a.token)).match,null,'a seat is handed over once');
+  assert.equal((await s.dispatch('snapshot',{roomId:paired.match.roomId},collected.match.token)).players[1].name,'Blair');
+  await s.dispatch('queueJoin',{requestId:rid()},c.token);
+  assert.equal((await s.dispatch('queueLeave',{requestId:rid()},c.token)).waiting,false);
+  await s.dispatch('queueJoin',{requestId:rid()},c.token);
+  clock+=600001;
+  assert.equal((await s.dispatch('queueStatus',{},c.token)).waiting,false,'a stale wait is dropped');
+  await rejects(s.dispatch('queueJoin',{requestId:rid()}),'AUTH_REQUIRED');
+ }finally{await rm(storageDir,{recursive:true,force:true});}
+});

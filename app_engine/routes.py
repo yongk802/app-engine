@@ -78,13 +78,27 @@ def _catalog_app(item) -> dict[str, object]:
     }
 
 
+AuthorizeApp = Callable[[HostSubject, str], bool]
+StandingApproval = Callable[[str], bool]
+RecordApproval = Callable[[str], None]
+
+
 def create_app_engine_router(
     runtime: DefaultAppEngineRuntime,
     *,
     authenticate: Authenticate,
     prefix: str = "/api/app-engine",
+    authorize_app: AuthorizeApp | None = None,
+    standing_approval: StandingApproval | None = None,
+    record_approval: RecordApproval | None = None,
 ) -> APIRouter:
-    """Build a host-authenticated router without starting another server."""
+    """Build a host-authenticated router without starting another server.
+
+    ``authorize_app`` decides whether a subject may open an app at all (a host with
+    player accounts answers from its allow-lists; absent, every subject may).
+    ``standing_approval``/``record_approval`` let a host keep the owner's launch-plan
+    approvals across opens and subjects; absent, approvals stay single-use per subject.
+    """
 
     router = APIRouter(prefix=prefix, tags=["app-engine"])
     sessions: dict[AppSessionId, tuple[str, AppSession]] = {}
@@ -178,6 +192,8 @@ def create_app_engine_router(
         if owner is None or owner[0] != subject.subject_id:
             raise HTTPException(404, "previewed plan not found")
         approved.add((subject.subject_id, typed))
+        if record_approval is not None:
+            record_approval(str(typed))
         return Response(status_code=204)
 
     @router.post("/apps/{app_id}/open")
@@ -185,12 +201,15 @@ def create_app_engine_router(
         body = await request.body()
         payload = await request.json() if body else {}
         launch = _launch_request(app_id, subject, payload)
+        if authorize_app is not None and not authorize_app(subject, app_id):
+            raise HTTPException(404, "app not found")
         try:
             plan = await runtime.lifecycle.preview(launch) if _managed_target(launch) else None
             receipt = None
             if plan is not None and plan.approval_required:
                 key = (subject.subject_id, plan.fingerprint)
-                if key not in approved:
+                standing = standing_approval is not None and standing_approval(str(plan.fingerprint))
+                if key not in approved and not standing:
                     previewed[plan.fingerprint] = (subject.subject_id, launch)
                     raise HTTPException(
                         409,

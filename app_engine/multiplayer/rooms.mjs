@@ -121,6 +121,7 @@ export class RoomService extends RoomServiceContract {
     const webhook = w => w == null || (object(w) && typeof w.url === 'string' && w.url.length <= 2048 && typeof w.token === 'string' && w.token.length <= 4096);
     const seat = s => object(s) && typeof s.name === 'string' && s.name.length <= 80 && hash(s.tokenHash) && typeof s.ready === 'boolean' && Array.isArray(s.requests) && s.requests.length <= MAX_REQUESTS && s.requests.every(r => object(r) && typeof r.id === 'string' && hash(r.fingerprint)) && webhook(s.webhook) && (s.ai === undefined || typeof s.ai === 'boolean');
     if (room.tournament != null && (!object(room.tournament) || typeof room.tournament.id !== 'string' || typeof room.tournament.matchId !== 'string')) throw new Error('Invalid room.');
+    if (room.randomMatch !== undefined && typeof room.randomMatch !== 'boolean') throw new Error('Invalid room.');
     if (room.friendInvite != null && (!object(room.friendInvite) || typeof room.friendInvite.from !== 'string' || typeof room.friendInvite.to !== 'string' || !Number.isFinite(room.friendInvite.at) || (room.friendInvite.declined !== undefined && typeof room.friendInvite.declined !== 'boolean'))) throw new Error('Invalid room.');
     if (room.turnTimer != null && !Object.values(TURN_TIMERS).includes(room.turnTimer)) throw new Error('Invalid room.');
     if (room.turnDeadline != null && !Number.isFinite(room.turnDeadline)) throw new Error('Invalid room.');
@@ -202,7 +203,7 @@ export class RoomService extends RoomServiceContract {
     this.dailyDays = days;
   }
 
-  dispatch(op, payload, token = '') {
+  dispatch(op, payload, token = '', player = '') {
     // Capture at call time so queued callers cannot change a pending command.
     let frozen;
     try {
@@ -211,7 +212,7 @@ export class RoomService extends RoomServiceContract {
       frozen = copy(payload);
       if (typeof token !== 'string' || token.length > 256) fail('AUTH_REQUIRED', 'A valid seat credential is required.', 401);
     } catch (error) { return Promise.reject(error instanceof RoomError ? error : new RoomError('INVALID_REQUEST', 'Invalid command.')); }
-    const run = this.tail.then(() => this.run(op, frozen, token)).catch(error => {
+    const run = this.tail.then(() => this.run(op, frozen, token, player)).catch(error => {
       if (error instanceof RoomError) throw error;
       throw new RoomError('INTERNAL_ERROR', 'The room service could not process this command.', 500);
     });
@@ -225,11 +226,11 @@ export class RoomService extends RoomServiceContract {
 
   newSeat(name, token) { return {name, tokenHash: digest(token), ready: false, deck: null, lastSeen: this.now(), requests: [], left: false}; }
 
-  async run(op, p, token) {
+  async run(op, p, token, player = '') {
     if (!this.initialized) fail('STORAGE_FAILURE', 'Room service is not initialized.', 503);
     if (op === 'dailySubmit' || op === 'dailyBoard') return this.daily(op, p);
     if (op.startsWith('tourney')) return this.tourney(op, p, token);
-    if (op.startsWith('friend')) return this.friend(op, p, token);
+    if (op.startsWith('friend') || op.startsWith('queue')) return this.friend(op, p, token, player);
     if (op === 'create') {
       this.compatible(p);
       const name = text(p.name, 'player name', 80).trim();
@@ -462,7 +463,7 @@ export class RoomService extends RoomServiceContract {
       actions = room.status === 'playing' && !room.seats[self].left ? this.engine.legalActions(copy(room.game), self) : [];
     }
     const yourMove = !pending && room.status === 'playing' && !!room.game && room.game.actor === self;
-    return copy({roomId: room.id, revision: room.revision, gameRevision: room.gameRevision, status: room.status, self, players, pendingJoin: room.pending && self === 0 ? {id: room.pending.id, name: room.pending.name} : null, view, actions, messages: pending ? [] : room.messages, signals: pending ? [] : room.signals.filter(s => s.sender !== self), protocol: PROTOCOL_VERSION, rulesVersion: this.rulesVersion, catalogDigest: this.catalogDigest, yourMove, turnTimer: room.turnTimer ?? null, turnDeadline: room.status === 'playing' ? room.turnDeadline ?? null : null, timeout: room.timeout ? {seat: room.timeout.seat, at: room.timeout.at} : null, alerts: !pending && !!room.seats[self]?.webhook, friendInvite: this.friendInviteInfo(room), now: this.now()});
+    return copy({roomId: room.id, revision: room.revision, gameRevision: room.gameRevision, status: room.status, self, players, pendingJoin: room.pending && self === 0 ? {id: room.pending.id, name: room.pending.name} : null, view, actions, messages: pending ? [] : room.messages, signals: pending ? [] : room.signals.filter(s => s.sender !== self), protocol: PROTOCOL_VERSION, rulesVersion: this.rulesVersion, catalogDigest: this.catalogDigest, yourMove, turnTimer: room.turnTimer ?? null, turnDeadline: room.status === 'playing' ? room.turnDeadline ?? null : null, timeout: room.timeout ? {seat: room.timeout.seat, at: room.timeout.at} : null, alerts: !pending && !!room.seats[self]?.webhook, friendInvite: this.friendInviteInfo(room), randomMatch: !!room.randomMatch, now: this.now()});
   }
 
   async commit(room) {

@@ -50,7 +50,9 @@ export function createRoomServer(service) {
         token = match[1];
       }
       const {op, payload} = await readCommand(req);
-      const result = await service.dispatch(op, payload, token);
+      // A host with player accounts names the signed-in player; nothing else sets this.
+      const player = typeof req.headers['x-app-player'] === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(req.headers['x-app-player']) ? req.headers['x-app-player'] : '';
+      const result = await service.dispatch(op, payload, token, player);
       send(res, 200, {ok: true, result});
     } catch (error) {
       if (res.destroyed || res.headersSent) return;

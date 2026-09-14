@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 app-engine = "app_engine.__main__:main"
 app-engine-manifest = "app_engine.__main__:manifest_main"
+app-engine-players = "app_engine.__main__:players_main"
 
 [tool.setuptools]
 include-package-data = true

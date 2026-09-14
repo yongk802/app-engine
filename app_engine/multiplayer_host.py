@@ -248,9 +248,12 @@ class MultiplayerHost:
 
     # ── relay ────────────────────────────────────────────────────────────────
 
-    async def relay(self, base_url: str, body: bytes, credential: str | None) -> tuple[int, dict]:
-        """POST one command to the service. Only the credential header crosses; never cookies."""
+    async def relay(self, base_url: str, body: bytes, credential: str | None, player: str | None = None) -> tuple[int, dict]:
+        """POST one command to the service. Only the credential header crosses; never cookies.
+        ``player`` names the signed-in player (a host with accounts) so a roster can bind to it."""
         headers = {"Content-Type": "application/json"}
+        if player:
+            headers["X-App-Player"] = player
         if credential:
             if len(credential) > 256 or not re.fullmatch(r"[A-Za-z0-9_-]+", credential):
                 return 401, failure("AUTH_REQUIRED", "Invalid credential.")

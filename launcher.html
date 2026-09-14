@@ -522,9 +522,18 @@ async function renderPlayers(){
     const email=element('button'); email.textContent='Email invitation'; email.onclick=async()=>{
       const to=prompt(`Email a fresh invitation for ${player.name} to:`); if(!to)return;
       try{ const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/email`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,from_name:ENGINE_USER==='owner'?'':ENGINE_USER})});
-        const box=$('#invite-link'); box.hidden=false;
+        const box=$('#invite-link'); box.hidden=false; box.replaceChildren();
         if(r.sent){ box.textContent=`Sent to ${r.to}: "${r.subject}". Each address gets at most three invitations a day.`; }
-        else { box.textContent=`No mail server is configured, so your own mail program opens with the invitation for ${r.to}. The text is also copied.`; navigator.clipboard?.writeText(`${r.subject}\n\n${r.body}`).catch(()=>{}); window.open(r.mailto,'_blank'); }
+        else {
+          // No mail server: the owner sends the draft from their own mail program.
+          const note=element('div'); note.textContent=`Not sent — this server has no mail settings (APP_ENGINE_SMTP_URL). Send the draft yourself:`;
+          const actions=element('div'); actions.style.cssText='display:flex;gap:8px;margin:8px 0;flex-wrap:wrap';
+          const open=element('a'); open.href=r.mailto; open.textContent='Open in mail app'; open.className='primary'; open.style.cssText='padding:6px 10px;border-radius:8px;background:var(--blue);color:#fff;text-decoration:none;font-size:12px';
+          const copy=element('button'); copy.type='button'; copy.textContent='Copy email'; copy.onclick=async()=>{ try{ await navigator.clipboard.writeText(`To: ${r.to}\nSubject: ${r.subject}\n\n${r.body}`); copy.textContent='Copied'; }catch{ draft.select(); copy.textContent='Select and copy'; } };
+          actions.append(open,copy);
+          const draft=element('textarea'); draft.readOnly=true; draft.value=`To: ${r.to}\nSubject: ${r.subject}\n\n${r.body}`; draft.style.cssText='width:100%;min-height:220px;background:#0d1016;color:#e6e6e6;border:1px solid #2b323f;border-radius:8px;padding:8px;font:12px/1.4 monospace';
+          box.append(note,actions,draft);
+        }
         await renderPlayers();
       }catch(error){ const box=$('#invite-link'); box.hidden=false; box.textContent=error.message; } }; row.append(email);
     const toggle=element('button'); toggle.textContent=player.disabled?'Enable':'Disable'; toggle.onclick=async()=>{ await playersRequest(`/admin/players/${encodeURIComponent(player.id)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled:!player.disabled})}); renderPlayers(); }; row.append(toggle);

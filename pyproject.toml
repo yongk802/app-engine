@@ -33,6 +33,7 @@ app_engine = [
     "knowledge/**/*.json",
     "studio/**/*",
     "templates/**/*",
+    "multiplayer/*.mjs",
 ]
 
 [tool.setuptools.data-files]

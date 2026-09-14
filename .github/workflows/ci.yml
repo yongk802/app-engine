@@ -30,8 +30,14 @@ jobs:
           cache-dependency-path: app-engine/requirements*.txt
       - run: python -m pip install -r requirements-dev.txt
         working-directory: app-engine
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: python -m pytest tests/ -q
         working-directory: app-engine
         env:
           PERSONAL_APPS_DIR: ${{ github.workspace }}/personal-apps
+      - run: node --test "app_engine/multiplayer/test/*.test.mjs"
+        working-directory: app-engine
+        shell: bash
 

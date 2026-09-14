@@ -4,4 +4,5 @@ recursive-include knowledge *.json
 recursive-include app_engine *.json
 recursive-include app_engine/studio *
 recursive-include app_engine/templates *
+include app_engine/multiplayer/*.mjs
 global-exclude __pycache__ *.py[cod]

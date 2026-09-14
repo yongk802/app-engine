@@ -48,6 +48,7 @@ from app_engine.config import ConfigStore
 from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_declared_knowledge
 from app_engine import manifest as _manifest
 from app_engine.manifest import ENGINE_VERSION
+from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY, MultiplayerHost, MultiplayerUnavailable, failure as multiplayer_failure
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.routes import create_app_engine_router
@@ -95,6 +96,7 @@ async def lifespan(_: FastAPI):
     if _proxy and not _proxy.is_closed:
         await _proxy.aclose()
     await _ollama_manager.close()
+    await _multiplayer.close()
 
 
 app = FastAPI(title="app-engine", lifespan=lifespan)
@@ -281,6 +283,70 @@ async def put_app_state(app_id: str, request: Request) -> JSONResponse:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     _state_file(app_id).write_text(json.dumps(data), encoding="utf-8")
     return JSONResponse({"ok": True})
+
+
+# ── Multiplayer (host-run room service per app) ───────────────────────────────
+
+_multiplayer = MultiplayerHost(STATE_DIR)
+
+
+def _multiplayer_reply(status: int, value: dict) -> JSONResponse:
+    return JSONResponse(value, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+def _multiplayer_app(app_id: str) -> App | None:
+    app_obj = discover().get(app_id)
+    return app_obj if app_obj and app_obj.multiplayer else None
+
+
+async def _multiplayer_base(request: Request, app_id: str) -> str | JSONResponse:
+    """The app's room service URL, or the JSON error the client should show."""
+    _enforce_app_state_access(request, app_id)
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(403, "cross-site multiplayer requests are refused")
+    app_obj = _multiplayer_app(app_id)
+    if app_obj is None:
+        return _multiplayer_reply(503, multiplayer_failure("MULTIPLAYER_UNAVAILABLE", "This app does not play through the host."))
+    try:
+        return await _multiplayer.ensure(app_id, Path(app_obj.root), app_obj.multiplayer)
+    except MultiplayerUnavailable as exc:
+        return _multiplayer_reply(503, multiplayer_failure("MULTIPLAYER_UNAVAILABLE", exc.message))
+
+
+@app.post("/api/app-multiplayer/{app_id}/command")
+async def app_multiplayer_command(app_id: str, request: Request) -> JSONResponse:
+    """Relay one room command from the app to its room service.
+
+    Same origin and the app-state capability gate it like ``/api/app-state``; the
+    seat, tournament or friend credential rides in ``X-App-Multiplayer-Credential``
+    and becomes the service's bearer token. Bodies are bounded and must be JSON
+    commands (``{"op": ..., ...}``); the service validates everything else.
+    """
+    if not re.match(r"^application/json(?:\s*;|$)", request.headers.get("content-type", ""), re.I):
+        return _multiplayer_reply(415, multiplayer_failure("INVALID_REQUEST", "Commands require application/json."))
+    raw = await request.body()
+    if len(raw) > MULTIPLAYER_MAX_BODY:
+        return _multiplayer_reply(413, multiplayer_failure("INVALID_REQUEST", "Request is too large."))
+    try:
+        body = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError):
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("op"), str):
+        return _multiplayer_reply(400, multiplayer_failure("INVALID_REQUEST", "A command operation is required."))
+    base = await _multiplayer_base(request, app_id)
+    if isinstance(base, JSONResponse):
+        return base
+    status, result = await _multiplayer.relay(base, raw, request.headers.get("x-app-multiplayer-credential"))
+    return _multiplayer_reply(status, result)
+
+
+@app.get("/api/app-multiplayer/{app_id}/health")
+async def app_multiplayer_health(app_id: str, request: Request) -> JSONResponse:
+    base = await _multiplayer_base(request, app_id)
+    if isinstance(base, JSONResponse):
+        return base
+    status, result = await _multiplayer.health(base)
+    return _multiplayer_reply(status, result)
 
 
 # ── /state stub (single-user, no auth) ────────────────────────────────────────

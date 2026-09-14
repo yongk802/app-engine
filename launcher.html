@@ -33,7 +33,7 @@
   .dock-msgs { flex:1; min-height:120px; max-height:32vh; overflow-y:auto; padding:8px 12px; display:flex; flex-direction:column; gap:4px; font-size:13px; }
   .dock-msgs p { margin:0; line-height:1.4; word-break:break-word; } .dock-msgs .who { color:#9db4e0; margin-right:6px; } .dock-msgs .who.owner { color:#f0b47a; } .dock-msgs .when { color:var(--muted); font-size:11px; margin-left:6px; }
   .dock-msgs .sys { color:var(--muted); font-style:italic; }
-  .dock-in { display:flex; gap:6px; padding:8px 12px; border-top:1px solid var(--line); }
+  .dock-in { display:flex; gap:6px; padding:8px 12px; border-top:1px solid var(--line); } .dock-in[hidden] { display:none; }
   .dock-in input, .dock-in select { flex:1; min-width:0; background:#0d1016; color:#e6e6e6; border:1px solid #2b323f; border-radius:8px; padding:8px; font-size:13px; }
   .dock-in button { background:var(--blue); color:#fff; border:0; border-radius:8px; padding:0 14px; cursor:pointer; }
   .dock-in button.secondary { background:#222936; border:1px solid #3a4454; }

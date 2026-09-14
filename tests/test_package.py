@@ -5,11 +5,18 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _version() -> str:
+    """The package version as declared in pyproject.toml (source of truth)."""
+    with open(ROOT / "pyproject.toml", "rb") as fh:
+        return tomllib.load(fh)["project"]["version"]
 
 
 def _build_wheel(destination: Path) -> Path:
@@ -156,8 +163,8 @@ def test_clean_venv_install_resolves_assets_and_console_manifest_entrypoint(tmp_
                 "assert data == Path(sys.prefix); "
                 "assert all((data / name).is_file() for name in "
                 "('launcher.html', 'app.schema.json', 'model-registry.json')); "
-                "assert (data / 'knowledge' / 'tutors.json').is_file(); "
-                "assert app_engine.__version__ == '0.1.0'"
+                f"assert (data / 'knowledge' / 'tutors.json').is_file(); "
+                f"assert app_engine.__version__ == '{_version()}'"
             ),
         ],
         cwd=outside,

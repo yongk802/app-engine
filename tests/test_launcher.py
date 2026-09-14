@@ -43,7 +43,7 @@ def test_mobile_layout_uses_drawer_and_collapsible_chat():
     assert "@media (max-width: 700px)" in HTML
     assert "#sidebar.open" in HTML
     assert ".chat.mobile-hidden" in HTML
-    assert "aria-label=\"Open apps\"" in HTML
+    assert "aria-label=\"Show the apps panel\"" in HTML
 
 
 def test_icon_only_controls_have_accessible_labels():

@@ -124,11 +124,12 @@ _app_runtime = DefaultAppEngineRuntime(
 async def lifespan(_: FastAPI):
     if _PUBLIC:
         where = f"{_PUBLIC.origin}/apps/<id>/" if _PUBLIC.layout == "same" else f"<id>.{_PUBLIC.host}"
-        print(f"app-engine -> public origin {_PUBLIC.origin}; apps at {where}; owner sign-in at {_PUBLIC.origin}/admin")
+        # flush=True: under systemd stdout is a pipe, and the one-time secret must reach the journal now.
+        print(f"app-engine -> public origin {_PUBLIC.origin}; apps at {where}; owner sign-in at {_PUBLIC.origin}/admin", flush=True)
         if _minted_admin_secret:
-            print(f"            admin secret (shown once, kept only as a hash): {_minted_admin_secret}")
+            print(f"            admin secret (shown once, kept only as a hash): {_minted_admin_secret}", flush=True)
         for note in startup_warnings(os.environ.get("APP_ENGINE_HOST", "127.0.0.1"), _PUBLIC, _TRUST_PROXY):
-            print(f"            warning: {note}")
+            print(f"            warning: {note}", flush=True)
         _audit.record("engine.start", origin=_PUBLIC.origin, layout=_PUBLIC.layout)
     await _app_runtime.start()
     yield

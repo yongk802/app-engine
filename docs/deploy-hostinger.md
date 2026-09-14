@@ -62,6 +62,7 @@ WorkingDirectory=/home/appengine/app-engine
 Environment=APP_ENGINE_APPS_DIR=/home/appengine/personal-apps
 Environment=APP_ENGINE_STATE_DIR=/home/appengine/state
 Environment=APP_ENGINE_PUBLIC_ORIGIN=https://play.srv1242099.hstgr.cloud
+Environment=APP_ENGINE_PUBLIC_APPS=cyberpunk-tcg
 Environment=APP_ENGINE_TRUST_PROXY=1
 Environment=APP_ENGINE_HOST=127.0.0.1
 Environment=APP_ENGINE_PORT=8770
@@ -123,7 +124,8 @@ server {
 
 Certificates: one certificate listing the launcher name and every app name
 you host (HTTP-01, no DNS plugin; renewals are automatic through certbot's
-timer). Add `-d` entries and re-run with `--expand` whenever you add an app:
+timer). `APP_ENGINE_PUBLIC_APPS` and this list go together: when you host
+another app, add it to both and re-run certbot with `--expand`:
 
 ```bash
 certbot certonly --webroot -w /var/www/html --expand --cert-name play.srv1242099.hstgr.cloud \

@@ -406,3 +406,19 @@ def test_owner_and_player_open_a_managed_app_in_public_mode(tmp_path, monkeypatc
             assert guest.post(f"{LAUNCHER}/api/app-engine/apps/notes/open", json={}).status_code == 404
     finally:
         owner.close()
+
+
+def test_a_public_server_lists_and_serves_only_the_apps_it_hosts(tmp_path, monkeypatch):
+    make_app(tmp_path / "apps", "cards")
+    make_app(tmp_path / "apps", "dice")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer", APP_ENGINE_PUBLIC_APPS="cards, notes")
+    owner, admin = owner_client(module)
+    try:
+        assert sorted(a["id"] for a in owner.get(f"{LAUNCHER}/api/apps").json()) == ["cards", "notes"]
+        assert owner.get("https://dice.play.example.com/apps/dice/").status_code == 404, "an unhosted app does not exist on this server"
+        assert owner.post(f"{LAUNCHER}/api/app-engine/apps/dice/open", json={}).status_code == 404
+        assert owner.post(f"{LAUNCHER}/api/app-engine/apps/cards/open", json={}).status_code == 200
+        assert owner.get(f"{LAUNCHER}/admin/players").json()["apps"] == ["cards", "notes"]
+        assert owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["dice"]}, headers=admin).status_code == 400
+    finally:
+        owner.close()

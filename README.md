@@ -308,6 +308,7 @@ route and falls back to its own backend proxy on hosts without it.
 | `APP_ENGINE_APP_ORIGINS` | `subdomain` | where apps live on a public server: `subdomain` (`<id>.<host>`, isolated, needs wildcard DNS + certificate) or `same` (`<host>/apps/<id>/`, for a single host name) |
 | `APP_ENGINE_RATE_LIMIT` | `20,60` | requests per second and burst allowed per session or address on the player, multiplayer and app-state routes |
 | `APP_ENGINE_MAX_PLAYERS` | `50` | how many players the owner may invite |
+| `APP_ENGINE_PUBLIC_APPS` | *(unset: all, with a warning)* | comma-separated app ids a public server hosts; others are not listed, served or openable |
 | `APP_ENGINE_SMTP_URL`, `APP_ENGINE_MAIL_FROM` | *(unset: draft only)* | let the server email invitations itself |
 | `APP_ENGINE_SERVER_NAME` | the public host name | how the server introduces itself in invitations |
 | `APP_ENGINE_MAIL_PER_HOUR`, `APP_ENGINE_MAIL_PER_DAY` | `20`, `100` | invitation email caps (plus three per recipient per day) |

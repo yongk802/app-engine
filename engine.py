@@ -110,6 +110,9 @@ try:
 except ValueError as _exc:
     raise SystemExit(f"app-engine: {_exc}") from _exc
 _SERVER_NAME = os.environ.get("APP_ENGINE_SERVER_NAME", "").strip() or (_PUBLIC.hostname if _PUBLIC else "app-engine")
+# A public server hosts only the apps it is meant to: each needs its own name in the certificate,
+# and a closed beta should not list what nobody can open. Unset means everything, with a warning.
+_PUBLIC_APPS = frozenset(a.strip() for a in os.environ.get("APP_ENGINE_PUBLIC_APPS", "").split(",") if a.strip()) if _PUBLIC else None
 _minted_admin_secret = _accounts.ensure_admin_secret(os.environ.get("APP_ENGINE_ADMIN_SECRET")) if _accounts else None
 _sign_in_limiter = SignInLimiter()
 
@@ -136,6 +139,10 @@ async def lifespan(_: FastAPI):
             print(f"            admin secret (shown once, kept only as a hash): {_minted_admin_secret}", flush=True)
         for note in startup_warnings(os.environ.get("APP_ENGINE_HOST", "127.0.0.1"), _PUBLIC, _TRUST_PROXY):
             print(f"            warning: {note}", flush=True)
+        if _PUBLIC_APPS:
+            print(f"            hosting: {', '.join(sorted(_PUBLIC_APPS))}", flush=True)
+        else:
+            print("            warning: APP_ENGINE_PUBLIC_APPS is not set, so every app in the collection is listed; each one needs its own name in the certificate.", flush=True)
         _audit.record("engine.start", origin=_PUBLIC.origin, layout=_PUBLIC.layout)
     await _app_runtime.start()
     yield
@@ -174,8 +181,10 @@ async def _runtime_authenticate(request: Request) -> HostSubject:
     every player act as that subject once the session and allow-list checks pass.
     """
     session = _session(request)
+    match = _PLAYER_ROUTE.match(request.url.path)
+    if match and match.group("app") and _PUBLIC_APPS and match.group("app") not in _PUBLIC_APPS:
+        raise HTTPException(404)   # not hosted here, for anyone
     if session.role == "player":
-        match = _PLAYER_ROUTE.match(request.url.path)
         if not match or (match.group("app") and not session.may_open(match.group("app"))):
             raise HTTPException(404)
     return _runtime_subject
@@ -288,8 +297,12 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
 
 
 def discover() -> dict[str, App]:
-    """Scan APPS_DIR's immediate children for valid apps (app.json)."""
-    return inspect_apps()[0]
+    """Scan APPS_DIR's immediate children for valid apps (app.json); on a public server, only
+    the apps it hosts (APP_ENGINE_PUBLIC_APPS)."""
+    apps = inspect_apps()[0]
+    if _PUBLIC_APPS:
+        return {app_id: app for app_id, app in apps.items() if app_id in _PUBLIC_APPS}
+    return apps
 
 
 # ── App-state persistence (localStorage replacement) ──────────────────────────

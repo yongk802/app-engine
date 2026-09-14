@@ -58,6 +58,7 @@ def test_a_game_plays_through_the_host_and_storage_is_per_app(tmp_path, monkeypa
     with TestClient(module.app) as client:
         health = client.get("/api/app-multiplayer/cards/health", headers=headers(module, "cards"))
         assert health.status_code == 200 and health.json()["rulesVersion"] == "fake-rules-1"
+        assert health.json()["host"] == {"server": "app-engine", "public": False, "you": {"name": "local", "role": "admin"}}
 
         created = command(client, module, "cards", {"op": "create", "name": "Alex", **COMPAT})
         assert created.status_code == 200, created.text

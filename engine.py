@@ -482,6 +482,11 @@ async def app_multiplayer_health(app_id: str, request: Request) -> JSONResponse:
     if isinstance(base, JSONResponse):
         return base
     status, result = await _multiplayer.health(base)
+    if status == 200 and isinstance(result, dict):
+        # Who the host already knows this page as, so a game served by a public engine
+        # need not ask for a username and password it has no use for.
+        session = _session(request)
+        result["host"] = {"server": _SERVER_NAME, "public": bool(_PUBLIC), "you": {"name": session.name, "role": session.role}}
     return _multiplayer_reply(status, result)
 
 
@@ -1129,6 +1134,11 @@ async def api_player_health(app_id: str, request: Request) -> JSONResponse:
     if isinstance(base, JSONResponse):
         return base
     status, result = await _multiplayer.health(base)
+    if status == 200 and isinstance(result, dict):
+        # Who the host already knows this page as, so a game served by a public engine
+        # need not ask for a username and password it has no use for.
+        session = _session(request)
+        result["host"] = {"server": _SERVER_NAME, "public": bool(_PUBLIC), "you": {"name": session.name, "role": session.role}}
     return _multiplayer_reply(status, result)
 
 

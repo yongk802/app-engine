@@ -368,7 +368,10 @@ Node.js 18+ for multiplayer, clone your apps collection (Night City Table
 needs its card catalog imported on the server), and run the engine under a
 service manager with the variables above.
 
-**Only one host name?** A hosting provider's name such as
+A worked example for a Hostinger VPS, using the nginx already on the box and
+per-name certificates, is in [docs/deploy-hostinger.md](docs/deploy-hostinger.md).
+
+**Only one host name and no wildcard?** A hosting provider's name such as
 `srv1242099.hstgr.cloud` has no wildcard, so `<id>.<host>` cannot resolve. Set
 `APP_ENGINE_APP_ORIGINS=same`: apps are served under `https://<host>/apps/<id>/`
 on the launcher's origin (they then share one browser origin — no per-app

@@ -42,25 +42,24 @@ def clean_address(value: object) -> str | None:
 
 
 def invitation_email(*, server_name: str, origin: str, username: str, link: str, game: str, inviter: str, days: int = 7) -> tuple[str, str]:
-    """Subject and plain-text body for a closed-beta invitation. The player already owns the
-    game; the server only hosts the tables."""
+    """Subject and plain-text body for an invitation to play in the browser on this server."""
     subject = f"{inviter} invited you to play {game} online"
     body = f"""Hi,
 
-{inviter} set up a private table server for {game} and invited you to play there. It is a closed beta: you need your own copy of the game already installed; the server does not distribute it.
+{inviter} set up a private server for {game} and invited you to play there. Everything runs in your browser: nothing to install.
 
-Your username on {server_name}: {username}
+Your username: {username}
 
-1. Open this link once and choose a password (it expires in {days} days):
+1. Open this link once and choose a password (the link expires in {days} days):
    {link}
 
-2. In the game, open Play with a friend. Under Table server pick "{server_name}", enter your username and password, and sign in. From then on your tables, friends and matches are with the other players on that server while the game keeps running on your own computer.
+2. You land on {server_name}. Click {game} to play. Your decks and progress are saved to your account on the server.
 
-3. To play together: Set up friends and swap friend codes to invite each other straight to a seat, or press Find a random opponent to be paired with whoever is waiting. Tables wait for you, so a match can span days.
+3. To play people: inside the game open "Play with a friend". Set up friends and swap friend codes to invite each other straight to a seat, or press "Find a random opponent" to be paired with whoever is waiting. Tables wait for you, so a match can span days. There is a server chat at the bottom of the page.
 
-If the link has expired or you did not expect this, just ignore it or reply to {inviter}.
+Later, sign in at {origin}/sign-in with your username and password.
 
-Server: {origin}
+This is a closed beta: please keep the link and the server address to yourself. If you did not expect this, just ignore it.
 """
     return subject, body
 

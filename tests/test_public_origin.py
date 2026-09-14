@@ -422,3 +422,23 @@ def test_a_public_server_lists_and_serves_only_the_apps_it_hosts(tmp_path, monke
         assert owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["dice"]}, headers=admin).status_code == 400
     finally:
         owner.close()
+
+
+def test_a_player_reads_and_writes_their_own_save_from_their_own_game(tmp_path, monkeypatch):
+    make_app(tmp_path / "apps", "cards")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    owner, admin = owner_client(module)
+    invite = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["cards"]}, headers=admin).json()["invite"]
+    with public_client(module) as guest:
+        guest.post(invite, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
+        token = guest.get(f"{LAUNCHER}/api/apps").json()[0]["url"].split("atrium_state_token=")[1]
+        assert guest.put("https://cards.play.example.com/api/app-state/cards", json={"version": 1, "decks": [{"name": "browser crew"}]}, headers={"x-app-state-token": token}).status_code == 200
+    owner.close()
+    with TestClient(module.app, base_url="https://someones-laptop.example") as remote:
+        bearer = {"authorization": "Bearer " + remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).json()["token"]}
+        assert remote.get(f"{LAUNCHER}/api/players/state/cards").status_code == 401
+        assert remote.get(f"{LAUNCHER}/api/players/state/cards", headers=bearer).json() == {"version": 1, "decks": [{"name": "browser crew"}]}, "the same save the browser game uses"
+        assert remote.get(f"{LAUNCHER}/api/players/state/notes", headers=bearer).status_code == 404, "only allowed apps"
+        assert remote.put(f"{LAUNCHER}/api/players/state/cards", json={"version": 1, "decks": [{"name": "browser crew"}, {"name": "offline crew"}]}, headers=bearer).status_code == 200
+        assert remote.put(f"{LAUNCHER}/api/players/state/cards", content="x" * 200_000, headers={**bearer, "content-type": "application/json"}).status_code == 413
+    assert len(json.loads((tmp_path / "state" / "players").glob("*/cards.json").__next__().read_text())["decks"]) == 2

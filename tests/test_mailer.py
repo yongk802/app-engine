@@ -19,7 +19,7 @@ def test_addresses_are_plain_and_cannot_smuggle_headers():
 def test_the_email_says_what_a_closed_beta_player_needs():
     subject, body = invitation_email(server_name="Hostinger VPS", origin="https://play.example", username="rook", link="https://play.example/join/abc", game="Night City Table", inviter="Yong")
     assert subject == "Yong invited you to play Night City Table online"
-    for needle in ("closed beta", "already installed", "does not distribute", "rook", "https://play.example/join/abc", "Table server", "Hostinger VPS", "Find a random opponent", "expires in 7 days"):
+    for needle in ("closed beta", "nothing to install", "rook", "https://play.example/join/abc", "Hostinger VPS", "Find a random opponent", "expires in 7 days", "https://play.example/sign-in", "saved to your account"):
         assert needle in body, needle
     link = mailto_link("rook@example.com", subject, body)
     assert link.startswith("mailto:rook%40example.com?subject=Yong%20invited") and "join/abc" in link

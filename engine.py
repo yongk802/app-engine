@@ -1051,6 +1051,41 @@ async def api_player_sign_out(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/players/state/{app_id}")
+async def api_player_state_get(app_id: str, request: Request) -> JSONResponse:
+    """The player's save for an app, readable from their own game elsewhere (bearer token)."""
+    session = _bearer_session(request)
+    if not _APP_ID_RE.match(app_id) or not session.may_open(app_id):
+        raise HTTPException(404)
+    f = _state_file(session, app_id)
+    if not f.is_file():
+        return JSONResponse({})
+    try:
+        return JSONResponse(json.loads(f.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, UnicodeError, OSError):
+        return JSONResponse({})
+
+
+@app.put("/api/players/state/{app_id}")
+async def api_player_state_put(app_id: str, request: Request) -> JSONResponse:
+    session = _bearer_session(request)
+    if not _APP_ID_RE.match(app_id) or not session.may_open(app_id):
+        raise HTTPException(404)
+    raw = await request.body()
+    if len(raw) > MAX_STATE_BYTES:
+        raise HTTPException(413, "state too large")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "invalid JSON")
+    if not isinstance(data, (dict, list)):
+        raise HTTPException(400, "state must be object or array")
+    target = _state_file(session, app_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data), encoding="utf-8")
+    return JSONResponse({"ok": True})
+
+
 async def _remote_multiplayer_base(request: Request, app_id: str) -> str | JSONResponse:
     session = _bearer_session(request)
     if not session.may_open(app_id):

@@ -48,6 +48,7 @@ from app_engine.config import ConfigStore
 from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_declared_knowledge
 from app_engine import manifest as _manifest
 from app_engine.manifest import ENGINE_VERSION
+from app_engine.mailer import Mailer, SmtpSettings, clean_address, invitation_email, mailto_link
 from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY, MultiplayerHost, MultiplayerUnavailable, failure as multiplayer_failure
 from app_engine.public_origin import (
     JOIN_ERROR_PAGE,
@@ -104,6 +105,11 @@ except ValueError as _exc:
 _TRUST_PROXY = os.environ.get("APP_ENGINE_TRUST_PROXY", "") in {"1", "true", "yes"}
 _accounts = Accounts.load(STATE_DIR) if _PUBLIC else None
 _audit = Audit(STATE_DIR) if _PUBLIC else None
+try:
+    _mailer = Mailer(SmtpSettings.from_env()) if _PUBLIC else None
+except ValueError as _exc:
+    raise SystemExit(f"app-engine: {_exc}") from _exc
+_SERVER_NAME = os.environ.get("APP_ENGINE_SERVER_NAME", "").strip() or (_PUBLIC.hostname if _PUBLIC else "app-engine")
 _minted_admin_secret = _accounts.ensure_admin_secret(os.environ.get("APP_ENGINE_ADMIN_SECRET")) if _accounts else None
 _sign_in_limiter = SignInLimiter()
 
@@ -1061,6 +1067,48 @@ async def admin_players_invite(player_id: str, request: Request) -> JSONResponse
         raise HTTPException(404, "player not found")
     _audit.record("player.reinvited", player=player_id)
     return JSONResponse({"invite": invite_link(_PUBLIC, code)})
+
+
+@app.post("/admin/players/{player_id}/email")
+async def admin_players_email(player_id: str, request: Request) -> JSONResponse:
+    """Mint a fresh invitation and email it — or hand back the draft for the owner's own mail
+    program when the server has no SMTP. Owner only; metered; audited."""
+    _require_public()
+    _require_owner_action(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    to = clean_address(body.get("to")) if isinstance(body, dict) else None
+    if not to:
+        raise HTTPException(400, "give one plain email address")
+    player = next((p for p in _accounts.players() if p["id"] == player_id), None)
+    if player is None:
+        raise HTTPException(404, "player not found")
+    game_ids = [a for a in player["apps"] if a in discover()]
+    game = ", ".join(discover()[a].label for a in game_ids) or "the game"
+    inviter = str(body.get("from_name") or "").strip()[:60] or "Your friend"
+    if _mailer.configured:
+        refusal = _mailer.budget.reason_to_refuse(to)
+        if refusal:
+            _audit.record("invitation.email.refused", player=player_id, to=to, reason=refusal)
+            return JSONResponse({"detail": refusal}, status_code=429, headers={"Retry-After": "3600"})
+    code = _accounts.regenerate_invite(player_id)
+    link = invite_link(_PUBLIC, code)
+    subject, text = invitation_email(server_name=_SERVER_NAME, origin=_PUBLIC.origin, username=player["username"], link=link, game=game, inviter=inviter)
+    if not _mailer.configured:
+        _audit.record("invitation.email.drafted", player=player_id, to=to)
+        return JSONResponse({"sent": False, "to": to, "subject": subject, "body": text, "mailto": mailto_link(to, subject, text)})
+    try:
+        await _mailer.send(to, subject, text, _SERVER_NAME)
+    except PermissionError as exc:
+        _audit.record("invitation.email.refused", player=player_id, to=to, reason=str(exc))
+        return JSONResponse({"detail": str(exc)}, status_code=429, headers={"Retry-After": "3600"})
+    except Exception as exc:  # smtplib and socket errors: report, never crash
+        _audit.record("invitation.email.failed", player=player_id, to=to, error=type(exc).__name__)
+        return JSONResponse({"detail": f"The mail server refused the message ({type(exc).__name__}). The invitation link is still valid: {link}", "mailto": mailto_link(to, subject, text)}, status_code=502)
+    _audit.record("invitation.email.sent", player=player_id, to=to)
+    return JSONResponse({"sent": True, "to": to, "subject": subject})
 
 
 @app.post("/admin/players/{player_id}")

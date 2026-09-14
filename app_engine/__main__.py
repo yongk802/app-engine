@@ -68,6 +68,11 @@ def players_main(argv: list[str] | None = None) -> int:
     invite.add_argument("--apps", default="", help="comma-separated app ids the player may open")
     reinvite = commands.add_parser("reinvite", help="print a fresh invitation link for an existing player (lets them set a new password)")
     reinvite.add_argument("username")
+    email = commands.add_parser("email", help="print the invitation email for a player (a fresh link inside), ready to paste into your mail program")
+    email.add_argument("username")
+    email.add_argument("--game", default="the game", help="game name to mention")
+    email.add_argument("--from-name", default="Your friend", help="who the invitation is from")
+    email.add_argument("--server-name", default=None, help="how the server is named in the game's server list")
     for name, text in (("disable", "stop a player signing in"), ("enable", "let a disabled player sign in again"), ("remove", "delete a player")):
         sub = commands.add_parser(name, help=text)
         sub.add_argument("username")
@@ -98,6 +103,14 @@ def players_main(argv: list[str] | None = None) -> int:
         elif args.command == "reinvite":
             code = accounts.regenerate_invite(find(args.username)["id"])
             print(f"send this link once (valid 7 days): {link(code)}")
+        elif args.command == "email":
+            from .mailer import invitation_email
+
+            player = find(args.username)
+            code = accounts.regenerate_invite(player["id"])
+            server_name = args.server_name or (public.hostname if public else "the server")
+            subject, body = invitation_email(server_name=server_name, origin=public.origin if public else "<origin>", username=player["username"], link=link(code), game=args.game, inviter=args.from_name)
+            print(f"Subject: {subject}\n\n{body}")
         elif args.command in {"disable", "enable"}:
             accounts.update_player(find(args.username)["id"], disabled=args.command == "disable")
             print(f"{args.username} {args.command}d")

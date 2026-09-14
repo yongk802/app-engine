@@ -519,6 +519,14 @@ async function renderPlayers(){
     const status=element('small'); status.textContent=player.disabled?'disabled':player.invite_pending?'invitation pending':player.has_password?(player.signed_in?'signed in':'has not signed in yet'):'invitation expired'; row.append(status);
     for(const appId of player.apps){ const tag=element('span','tag'); tag.textContent=appId; row.append(tag); }
     const invite=element('button'); invite.textContent='New invitation'; invite.onclick=async()=>{ const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/invite`,{method:'POST'}); showInviteLink(r.invite); }; row.append(invite);
+    const email=element('button'); email.textContent='Email invitation'; email.onclick=async()=>{
+      const to=prompt(`Email a fresh invitation for ${player.name} to:`); if(!to)return;
+      try{ const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/email`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,from_name:ENGINE_USER==='owner'?'':ENGINE_USER})});
+        const box=$('#invite-link'); box.hidden=false;
+        if(r.sent){ box.textContent=`Sent to ${r.to}: "${r.subject}". Each address gets at most three invitations a day.`; }
+        else { box.textContent=`No mail server is configured, so your own mail program opens with the invitation for ${r.to}. The text is also copied.`; navigator.clipboard?.writeText(`${r.subject}\n\n${r.body}`).catch(()=>{}); window.open(r.mailto,'_blank'); }
+        await renderPlayers();
+      }catch(error){ const box=$('#invite-link'); box.hidden=false; box.textContent=error.message; } }; row.append(email);
     const toggle=element('button'); toggle.textContent=player.disabled?'Enable':'Disable'; toggle.onclick=async()=>{ await playersRequest(`/admin/players/${encodeURIComponent(player.id)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled:!player.disabled})}); renderPlayers(); }; row.append(toggle);
     const remove=element('button'); remove.textContent='Remove'; remove.onclick=async()=>{ if(!confirm(`Remove ${player.name}? Their saves stay on disk; their sign-in stops working.`))return; await playersRequest(`/admin/players/${encodeURIComponent(player.id)}`,{method:'DELETE'}); renderPlayers(); }; row.append(remove);
     list.append(row);

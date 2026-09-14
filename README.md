@@ -308,6 +308,9 @@ route and falls back to its own backend proxy on hosts without it.
 | `APP_ENGINE_APP_ORIGINS` | `subdomain` | where apps live on a public server: `subdomain` (`<id>.<host>`, isolated, needs wildcard DNS + certificate) or `same` (`<host>/apps/<id>/`, for a single host name) |
 | `APP_ENGINE_RATE_LIMIT` | `20,60` | requests per second and burst allowed per session or address on the player, multiplayer and app-state routes |
 | `APP_ENGINE_MAX_PLAYERS` | `50` | how many players the owner may invite |
+| `APP_ENGINE_SMTP_URL`, `APP_ENGINE_MAIL_FROM` | *(unset: draft only)* | let the server email invitations itself |
+| `APP_ENGINE_SERVER_NAME` | the public host name | how the server introduces itself in invitations |
+| `APP_ENGINE_MAIL_PER_HOUR`, `APP_ENGINE_MAIL_PER_DAY` | `20`, `100` | invitation email caps (plus three per recipient per day) |
 
 The Ollama endpoint is stored in `local-ai.json` under the state directory and
 must resolve to loopback (`127.0.0.1`, `localhost`, or `::1`). Remote and cloud
@@ -422,6 +425,18 @@ and can open only the apps on their allow-list (everything else answers
 for them once the owner has approved the launch plan — an approval now stands
 until the plan changes. Disabling, removing or signing out ends sessions
 immediately; the engine re-reads `players.json` when the CLI changes it.
+
+**Inviting by email.** Beside each player, **Email invitation** mints a
+fresh one-time link and either sends it from the server or, when the server
+has no mail settings, opens your own mail program with the drafted message
+(`app-engine-players email rook --game "Night City Table" --from-name Yong`
+prints the same draft). To let the server send: `APP_ENGINE_SMTP_URL`
+(`smtp://user:pass@host:587` for STARTTLS or `smtps://…:465`) and
+`APP_ENGINE_MAIL_FROM`; `APP_ENGINE_SERVER_NAME` is how the server is
+introduced. Only the owner can cause mail to leave the server — players have
+no mail surface — and the owner is metered too: `APP_ENGINE_MAIL_PER_HOUR`
+(20), `APP_ENGINE_MAIL_PER_DAY` (100) and three messages per recipient per
+day, refused with `429`, every attempt in `audit.log`.
 
 On the room service, a signed-in player's friend roster is bound to their
 account (signing in on another device brings it back), and

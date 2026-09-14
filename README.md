@@ -300,10 +300,72 @@ route and falls back to its own backend proxy on hosts without it.
 | `APP_ENGINE_STATE_DIR` | `~/.config/app-engine/app-state` | per-app state storage |
 | `APP_ENGINE_HOST` / `APP_ENGINE_PORT` | `127.0.0.1` / `8770` | bind address |
 | `APP_ENGINE_MULTIPLAYER_SERVER` | *(unset: run one per app)* | relay room commands to a shared room service instead |
+| `APP_ENGINE_PUBLIC_ORIGIN` | *(unset: loopback product)* | the launcher's public origin, e.g. `https://play.example.com`; turns on [public-origin mode](#public-origin-mode-reaching-your-engine-from-anywhere) |
+| `APP_ENGINE_ADMIN_SECRET` | *(minted on first public start)* | the owner's sign-in secret; setting a new value rotates it and signs every session out |
+| `APP_ENGINE_TRUST_PROXY` | `0` | honour `X-Forwarded-Proto`/`X-Forwarded-For` from a loopback reverse proxy |
 
 The Ollama endpoint is stored in `local-ai.json` under the state directory and
 must resolve to loopback (`127.0.0.1`, `localhost`, or `::1`). Remote and cloud
 inference endpoints are deliberately rejected.
+
+### Public-origin mode: reaching your engine from anywhere
+
+By default app-engine is a single-user program on `127.0.0.1`: whoever reaches
+the port is the administrator, and apps run on `<id>.localhost` origins that
+only resolve on the same machine. Binding another address is refused for that
+reason. **Public-origin mode** changes both, so one engine on a server can be
+used by its owner from any browser — and, once player accounts land, by
+invited friends who meet at the multiplayer tables it hosts.
+
+```bash
+APP_ENGINE_PUBLIC_ORIGIN=https://play.example.com \
+APP_ENGINE_TRUST_PROXY=1 \
+APP_ENGINE_APPS_DIR=/srv/personal-apps \
+python engine.py
+```
+
+What changes when the variable is set:
+
+- Apps are served at `https://<id>.play.example.com`, and the launcher builds
+  app URLs from that origin, not from the request. Use the public names even on
+  the server itself: the session cookie belongs to the public domain, so
+  `127.0.0.1` and `<id>.localhost` are not signed in.
+- **Every request needs the owner's session.** The engine mints an admin
+  secret on first start (printed once, stored only as a hash in
+  `players.json` under the state directory) or adopts `APP_ENGINE_ADMIN_SECRET`.
+  Sign in at `https://play.example.com/admin`; the session cookie (`HttpOnly`,
+  `Secure`, `SameSite=Lax`, domain-wide so app subdomains carry it) lasts 90
+  days and is revoked by **Sign out** or by rotating the secret. HTML
+  navigations without it are sent to `/admin`; API calls get `401`. Only
+  `/api/engine` and the sign-in page are open. Wrong secrets are limited to
+  five attempts per minute per address.
+- App responses may be framed only by the public launcher
+  (`frame-ancestors https://play.example.com`).
+- **Local AI is off.** `/api/app-chat` and `/api/local-ai/*` answer `403`: the
+  owner's models never leave the owner's computer.
+- `APP_ENGINE_HOST` may now be a public address, but the intended layout is a
+  TLS proxy on the same machine forwarding to loopback, with
+  `APP_ENGINE_TRUST_PROXY=1` so the engine sees `https` and the real client
+  address. Reference Caddy configuration (wildcard certificates need Caddy's
+  DNS-challenge plugin for your DNS provider):
+
+```caddyfile
+play.example.com, *.play.example.com {
+    tls you@example.com {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+    reverse_proxy 127.0.0.1:8770
+}
+```
+
+DNS: `A play.example.com` and `A *.play.example.com` to the server. Install
+Node.js 18+ for multiplayer, clone your apps collection (Night City Table
+needs its card catalog imported on the server), and run the engine under a
+service manager with the variables above. Multiplayer tables, tournaments and
+the friend roster work exactly as on loopback; a friend joining today does so
+with the owner's session, which is why the next phase of the
+[public-origin design](docs/specs/2026-09-13-public-origin-mode-design.md) adds
+invitation-only player accounts.
 
 ### Per-app state isolation
 

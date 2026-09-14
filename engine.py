@@ -35,12 +35,12 @@ import subprocess
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from app_engine.chat import ChatRuntime
 from app_engine.media_types import asset_media_type
@@ -49,6 +49,17 @@ from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_
 from app_engine import manifest as _manifest
 from app_engine.manifest import ENGINE_VERSION
 from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY, MultiplayerHost, MultiplayerUnavailable, failure as multiplayer_failure
+from app_engine.public_origin import (
+    SESSION_COOKIE,
+    Accounts,
+    OwnerGate,
+    PublicOrigin,
+    SignInLimiter,
+    bind_is_allowed,
+    clear_session_cookie,
+    set_session_cookie,
+    sign_in_page,
+)
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.routes import create_app_engine_router
@@ -75,6 +86,17 @@ _admin_capability = secrets.token_urlsafe(32)
 
 _proxy: httpx.AsyncClient | None = None
 
+# Public-origin mode: apps at <id>.<public host>, owner sign-in required on every
+# request, TLS terminated by a loopback proxy. Absent, this is the loopback product.
+try:
+    _PUBLIC = PublicOrigin.parse(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN"))
+except ValueError as _exc:
+    raise SystemExit(f"app-engine: {_exc}") from _exc
+_TRUST_PROXY = os.environ.get("APP_ENGINE_TRUST_PROXY", "") in {"1", "true", "yes"}
+_accounts = Accounts.load(STATE_DIR) if _PUBLIC else None
+_minted_admin_secret = _accounts.ensure_admin_secret(os.environ.get("APP_ENGINE_ADMIN_SECRET")) if _accounts else None
+_sign_in_limiter = SignInLimiter()
+
 _runtime_subject = HostSubject("local", "admin")
 _runtime_host = LocalHostAdapter(
     apps_roots=(APPS_DIR,),
@@ -90,6 +112,10 @@ _app_runtime = DefaultAppEngineRuntime(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if _PUBLIC:
+        print(f"app-engine -> public origin {_PUBLIC.origin}; apps at <id>.{_PUBLIC.host}; owner sign-in at {_PUBLIC.origin}/admin")
+        if _minted_admin_secret:
+            print(f"            admin secret (shown once, kept only as a hash): {_minted_admin_secret}")
     await _app_runtime.start()
     yield
     await _app_runtime.close(5.0)
@@ -100,6 +126,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="app-engine", lifespan=lifespan)
+if _PUBLIC:
+    app.add_middleware(OwnerGate, accounts=_accounts, enabled=True)
 
 
 async def _runtime_authenticate() -> HostSubject:
@@ -227,14 +255,26 @@ def _hostname(request: Request) -> str:
 
 def _app_host_id(request: Request) -> str | None:
     host = _hostname(request)
-    if not host.endswith(".localhost"):
+    # The public authority first: a rehearsal origin such as play.localhost also ends in .localhost.
+    candidate = _PUBLIC.app_id_for(host) if _PUBLIC else None
+    if candidate is None and host.endswith(".localhost"):
+        candidate = host[:-len(".localhost")]
+    if candidate is None:
         return None
-    candidate = host[:-len(".localhost")]
     return candidate if _APP_ID_RE.fullmatch(candidate) else None
 
 
 def _is_launcher_host(request: Request) -> bool:
-    return _hostname(request) in {"127.0.0.1", "localhost", "::1", "testserver"}
+    host = _hostname(request)
+    return host in {"127.0.0.1", "localhost", "::1", "testserver"} or bool(_PUBLIC and host == _PUBLIC.hostname)
+
+
+def _app_origin(request: Request, app_id: str) -> str:
+    """Where the launcher must open the app: its public authority, or ``<id>.localhost``."""
+    if _PUBLIC:
+        return f"{_PUBLIC.scheme}://{_PUBLIC.app_authority(app_id)}"
+    port = request.url.port
+    return f"{request.url.scheme}://{app_id}.localhost" + (f":{port}" if port else "")
 
 
 def _app_capability(app_id: str) -> str:
@@ -251,9 +291,16 @@ def _enforce_app_state_access(request: Request, app_id: str) -> None:
 
 def _deny_app_iframe(request: Request) -> None:
     """Require the launcher-only capability for local-AI mutations."""
+    _deny_public_local_ai()
     supplied = request.headers.get("x-app-engine-admin", "")
     if not _is_launcher_host(request) or not secrets.compare_digest(supplied, _admin_capability):
         raise HTTPException(403, "launcher capability required")
+
+
+def _deny_public_local_ai() -> None:
+    """Local AI never leaves the owner's own computer: a public engine has none."""
+    if _PUBLIC:
+        raise HTTPException(403, "Local AI is not available in public-origin mode")
 
 
 @app.get("/api/app-state/{app_id}")
@@ -362,6 +409,7 @@ async def state() -> JSONResponse:
 
 @app.post("/api/app-chat")
 async def app_chat(request: Request):
+    _deny_public_local_ai()
     try:
         body = await request.json()
     except Exception:
@@ -408,6 +456,7 @@ async def app_chat(request: Request):
 
 @app.get("/api/local-ai/status")
 async def local_ai_status() -> JSONResponse:
+    _deny_public_local_ai()
     config = _config.load()
     capabilities = _probe.inspect(STATE_DIR, config.ollama_endpoint)
     recommendation = _registry.recommend(capabilities)
@@ -530,6 +579,7 @@ async def verify_local_ai_model(model_id: str, request: Request) -> JSONResponse
 
 @app.get("/api/local-ai/diagnostics")
 async def local_ai_diagnostics() -> JSONResponse:
+    _deny_public_local_ai()
     config = _config.load()
     status = await _ollama_manager.status()
     return JSONResponse({
@@ -548,7 +598,8 @@ async def local_ai_diagnostics() -> JSONResponse:
 
 _SEC_HEADERS = {
     "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": "frame-ancestors *",
+    # Apps are framed by the launcher; in public mode only by the public launcher.
+    "Content-Security-Policy": f"frame-ancestors {_PUBLIC.origin}" if _PUBLIC else "frame-ancestors *",
 }
 
 
@@ -665,9 +716,7 @@ async def api_apps(
         raise HTTPException(403, "launcher origin required")
     apps = search_apps(_app_listing(), q, category)
     for a in apps:
-        port = request.url.port
-        authority = f"{a['id']}.localhost" + (f":{port}" if port else "")
-        a["url"] = f"{request.url.scheme}://{authority}/apps/{a['id']}/#atrium_state_token={_app_capability(a['id'])}"
+        a["url"] = f"{_app_origin(request, a['id'])}/apps/{a['id']}/#atrium_state_token={_app_capability(a['id'])}"
     return JSONResponse(apps)
 
 
@@ -707,12 +756,58 @@ async def launcher(request: Request) -> HTMLResponse:
     return HTMLResponse(html, headers={"Content-Security-Policy": "frame-ancestors 'none'"})
 
 
+# ── Owner sign-in (public-origin mode only) ───────────────────────────────────
+
+def _require_public() -> None:
+    if not _PUBLIC:
+        raise HTTPException(404)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_sign_in(request: Request) -> Response:
+    _require_public()
+    if request.scope.get("state", {}).get("owner"):
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(sign_in_page(), headers={"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"})
+
+
+@app.post("/admin/sign-in")
+async def admin_sign_in_submit(request: Request) -> Response:
+    _require_public()
+    address = request.client.host if request.client else ""
+    if not _sign_in_limiter.allow(address):
+        return HTMLResponse(sign_in_page("Too many attempts. Wait a minute."), status_code=429)
+    form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
+    secret = (form.get("secret") or [""])[0]
+    if not _accounts.verify_admin_secret(secret):
+        return HTMLResponse(sign_in_page("That secret is not right."), status_code=403)
+    response = RedirectResponse("/", status_code=303)
+    set_session_cookie(response, _accounts.create_admin_session(), _PUBLIC)
+    return response
+
+
+@app.post("/admin/sign-out")
+async def admin_sign_out(request: Request) -> Response:
+    _require_public()
+    _accounts.revoke_session(request.cookies.get(SESSION_COOKIE))
+    response = RedirectResponse("/admin", status_code=303)
+    clear_session_cookie(response, _PUBLIC)
+    return response
+
+
 if __name__ == "__main__":
+    bind_host = os.environ.get("APP_ENGINE_HOST", "127.0.0.1")
+    refusal = bind_is_allowed(bind_host, _PUBLIC, _accounts)
+    if refusal:
+        raise SystemExit(f"app-engine: {refusal}")
     print(f"app-engine -> apps from {APPS_DIR}")
     print(f"            state in {STATE_DIR}")
     print(f"            Local AI at {_config.load().ollama_endpoint} ({_config.load().selected_profile})")
     uvicorn.run(
         app,
-        host=os.environ.get("APP_ENGINE_HOST", "127.0.0.1"),
+        host=bind_host,
         port=int(os.environ.get("APP_ENGINE_PORT", "8770")),
+        # A loopback reverse proxy may report the real scheme and client; nobody else.
+        proxy_headers=_TRUST_PROXY,
+        forwarded_allow_ips="127.0.0.1,::1" if _TRUST_PROXY else None,
     )

@@ -1,7 +1,7 @@
 # Public-Origin Mode Design
 
 **Date:** 2026-09-13  
-**Status:** Proposed design  
+**Status:** Phases 1–2 implemented 2026-09-13 (`app_engine/public_origin.py`: `APP_ENGINE_PUBLIC_ORIGIN`, `APP_ENGINE_TRUST_PROXY`, `APP_ENGINE_ADMIN_SECRET`, owner sign-in at `/admin`, gate middleware, bind guard); phases 3–4 proposed  
 **Scope:** Run one app-engine on a VPS so invited people can open the games it hosts and play each other; the owner keeps the single-user product they have today.  
 **Depends on:** [Multiplayer Host Design](2026-09-13-multiplayer-host-design.md) (implemented).
 

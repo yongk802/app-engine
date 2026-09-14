@@ -48,6 +48,7 @@ from app_engine.config import ConfigStore
 from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_declared_knowledge
 from app_engine import manifest as _manifest
 from app_engine.manifest import ENGINE_VERSION
+from app_engine.chat_room import ChatRoom
 from app_engine.mailer import Mailer, SmtpSettings, clean_address, invitation_email, mailto_link
 from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY, MultiplayerHost, MultiplayerUnavailable, failure as multiplayer_failure
 from app_engine.public_origin import (
@@ -110,6 +111,7 @@ try:
 except ValueError as _exc:
     raise SystemExit(f"app-engine: {_exc}") from _exc
 _SERVER_NAME = os.environ.get("APP_ENGINE_SERVER_NAME", "").strip() or (_PUBLIC.hostname if _PUBLIC else "app-engine")
+_chat = ChatRoom(STATE_DIR) if _PUBLIC else None
 # A public server hosts only the apps it is meant to: each needs its own name in the certificate,
 # and a closed beta should not list what nobody can open. Unset means everything, with a warning.
 _PUBLIC_APPS = frozenset(a.strip() for a in os.environ.get("APP_ENGINE_PUBLIC_APPS", "").split(",") if a.strip()) if _PUBLIC else None
@@ -809,6 +811,8 @@ async def api_apps(
         a["url"] = f"{_app_origin(request, a['id'])}/apps/{a['id']}/#atrium_state_token={_app_capability(session, a['id'])}"
         if _PUBLIC:
             a["chat_enabled"] = False   # Local AI is not served publicly
+        app_obj = discover().get(a["id"])
+        a["servers"] = list((app_obj.multiplayer or {}).get("servers", [])) if app_obj else []
     return JSONResponse(apps)
 
 
@@ -946,6 +950,53 @@ async def player_sign_out(request: Request) -> Response:
     response = RedirectResponse("/sign-in", status_code=303)
     clear_session_cookie(response, _PUBLIC)
     return response
+
+
+# ── Server chat: one channel for everyone signed in, from the launcher here or elsewhere ──
+
+def _chat_read(session: Session, request: Request) -> JSONResponse:
+    _chat.touch(session.subject_id, session.name, session.role)
+    try:
+        after = int(request.query_params.get("after", "0"))
+    except ValueError:
+        after = 0
+    return JSONResponse({"ok": True, "server": _SERVER_NAME, "you": {"id": session.subject_id, "name": session.name, "role": session.role}, "messages": _chat.since(after), "online": _chat.online()}, headers={"Cache-Control": "no-store"})
+
+
+async def _chat_post(session: Session, request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    try:
+        message = _chat.post(session.subject_id, session.name, session.role, body.get("text") if isinstance(body, dict) else None)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": {"code": "INVALID_REQUEST", "message": str(exc)}}, status_code=400)
+    except PermissionError as exc:
+        return JSONResponse({"ok": False, "error": {"code": "RATE_LIMITED", "message": str(exc)}}, status_code=429, headers={"Retry-After": "2"})
+    return JSONResponse({"ok": True, "message": message})
+
+
+@app.get("/api/chat")
+async def chat_read(request: Request) -> JSONResponse:
+    _require_public()
+    return _chat_read(_session(request), request)
+
+
+@app.post("/api/chat")
+async def chat_post(request: Request) -> JSONResponse:
+    _require_public()
+    return await _chat_post(_session(request), request)
+
+
+@app.get("/api/players/chat")
+async def api_player_chat_read(request: Request) -> JSONResponse:
+    return _chat_read(_bearer_session(request), request)
+
+
+@app.post("/api/players/chat")
+async def api_player_chat_post(request: Request) -> JSONResponse:
+    return await _chat_post(_bearer_session(request), request)
 
 
 # ── Remote player API: game clients on other machines, bearer tokens, CORS-open ──

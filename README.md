@@ -439,6 +439,15 @@ no mail surface — and the owner is metered too: `APP_ENGINE_MAIL_PER_HOUR`
 (20), `APP_ENGINE_MAIL_PER_DAY` (100) and three messages per recipient per
 day, refused with `429`, every attempt in `audit.log`.
 
+**Server chat.** A public engine has one text channel for everyone signed in,
+shown as a collapsible dock at the bottom of the launcher under whichever app
+is open. On the server itself it uses the session; on a player's own
+app-engine the dock lists the servers the installed games know and signs in
+with the player's username and password, then talks to
+`GET/POST /api/players/chat` with the bearer token. Messages are capped at
+500 characters, one per second and thirty a minute per person, the last 300
+are kept in `chat.json`, and the bar shows who polled in the last 45 seconds.
+
 On the room service, a signed-in player's friend roster is bound to their
 account (signing in on another device brings it back), and
 `queueJoin`/`queueStatus`/`queueLeave` pair two waiting players into a random

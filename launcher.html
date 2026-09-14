@@ -20,8 +20,24 @@
   .app-btn:hover { background:#1d2230; } .app-btn.active { background:#263041; color:#fff; }
   .app-btn .ico { font-size:18px; width:22px; text-align:center; } .app-btn .label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .chat-dot { margin-left:auto; opacity:.55; }
-  #main { flex:1; min-width:0; position:relative; }
+  #main { flex:1; min-width:0; position:relative; display:flex; flex-direction:column; }
+  #stage { flex:1; min-height:0; position:relative; }
   .instance { position:absolute; inset:0; display:none; min-width:0; }
+  /* Server chat dock: one channel for everyone on the server, under whichever app is open. */
+  #chat-dock { flex:0 0 auto; border-top:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; max-height:44vh; }
+  #chat-dock[hidden] { display:none; }
+  .dock-bar { display:flex; align-items:center; gap:10px; padding:6px 12px; font-size:12px; color:var(--muted); cursor:pointer; user-select:none; }
+  .dock-bar strong { color:#e6e6e6; } .dock-bar .online { margin-left:auto; } .dock-bar .unread { background:var(--blue); color:#fff; border-radius:10px; padding:0 7px; font-size:11px; }
+  .dock-body { display:flex; flex-direction:column; min-height:0; border-top:1px solid var(--line); }
+  body.chat-collapsed .dock-body { display:none; }
+  .dock-msgs { flex:1; min-height:120px; max-height:32vh; overflow-y:auto; padding:8px 12px; display:flex; flex-direction:column; gap:4px; font-size:13px; }
+  .dock-msgs p { margin:0; line-height:1.4; word-break:break-word; } .dock-msgs .who { color:#9db4e0; margin-right:6px; } .dock-msgs .who.owner { color:#f0b47a; } .dock-msgs .when { color:var(--muted); font-size:11px; margin-left:6px; }
+  .dock-msgs .sys { color:var(--muted); font-style:italic; }
+  .dock-in { display:flex; gap:6px; padding:8px 12px; border-top:1px solid var(--line); }
+  .dock-in input, .dock-in select { flex:1; min-width:0; background:#0d1016; color:#e6e6e6; border:1px solid #2b323f; border-radius:8px; padding:8px; font-size:13px; }
+  .dock-in button { background:var(--blue); color:#fff; border:0; border-radius:8px; padding:0 14px; cursor:pointer; }
+  .dock-in button.secondary { background:#222936; border:1px solid #3a4454; }
+  body.night-city-playing #chat-dock { display:none !important; }
   .instance.active { display:flex; } .instance iframe { min-width:0; flex:1; border:0; background:#fff; height:100%; }
   #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#667085; }
   #mobile-apps,#mobile-chat { display:none; position:fixed; z-index:8; top:8px; border:1px solid var(--line); background:#1d2230; color:white; border-radius:8px; padding:8px 10px; }
@@ -117,7 +133,17 @@
   </nav>
   <button id="mobile-apps" aria-label="Show the apps panel" aria-expanded="true" title="Show the apps panel (Ctrl+B)">☰<span class="txt"> Apps</span></button>
   <button id="mobile-chat" aria-label="Show or hide tutor chat" hidden>💬 Tutor</button>
-  <main id="main"><div id="empty">Select an app →</div></main>
+  <main id="main">
+    <div id="stage"><div id="empty">Select an app →</div></div>
+    <footer id="chat-dock" hidden aria-label="Server chat">
+      <div class="dock-bar" id="dock-bar"><span id="dock-toggle">▾</span><strong id="dock-title">Server chat</strong><span id="dock-status"></span><span class="unread" id="dock-unread" hidden></span><span class="online" id="dock-online"></span></div>
+      <div class="dock-body">
+        <div class="dock-msgs" id="dock-msgs"></div>
+        <form class="dock-in" id="dock-form"><input id="dock-text" maxlength="500" placeholder="Message everyone on the server…" autocomplete="off"><button type="submit">Send</button></form>
+        <form class="dock-in" id="dock-connect" hidden><select id="dock-server"></select><input id="dock-user" placeholder="username" autocomplete="username"><input id="dock-pass" type="password" placeholder="password" autocomplete="current-password"><button type="submit">Sign in</button></form>
+      </div>
+    </footer>
+  </main>
 
   <dialog id="info-dialog" class="app-info" aria-labelledby="info-title">
     <div class="modal-head"><h2 id="info-title"></h2><button class="icon-btn" id="close-info" aria-label="Close">✕</button></div>
@@ -203,6 +229,7 @@ async function boot() {
     if (catRes && catRes.ok) state.categories = await catRes.json();
     renderRejected();
     renderCategories();
+    setupChatDock();
     renderList();
     if (!state.apps.length && !state.rejected.length) $('#empty').textContent='No apps found. Point APP_ENGINE_APPS_DIR at your apps folder.';
   } catch (error) { $('#empty').textContent=`Could not load apps: ${error.message}`; }
@@ -395,7 +422,7 @@ async function openApp(app,btn) {
   iframe.addEventListener('load',()=>{ if(state.active===app.id) signalLifecycle(app.id,'visible'); });
   inst.append(iframe);
   if(app.chat_enabled) { inst.append(buildChat(app)); $('#mobile-chat').hidden=false; } else $('#mobile-chat').hidden=true;
-  $('#main').append(inst); state.instances[app.id]=inst;
+  $('#stage').append(inst); state.instances[app.id]=inst;
 }
 
 document.addEventListener('visibilitychange',()=>{ if(state.active) signalLifecycle(state.active, document.hidden?'hidden':'visible'); });
@@ -507,6 +534,68 @@ $('#mobile-chat').onclick=()=>{ const chat=document.querySelector('.instance.act
 $('#app-search').oninput=e=>{ state.query=e.target.value; scheduleSearch(); };
 $('#app-category').onchange=e=>{ state.category=e.target.value; scheduleSearch(0); };
 $('#close-info').onclick=()=>$('#info-dialog').close();
+// ── Server chat dock ─────────────────────────────────────────────────────────
+// On a public server the dock uses the session cookie. On a local launcher it signs in to a
+// server that one of the installed apps lists (a player account there) and uses the bearer API.
+const chat={ base:'', bearer:'', after:0, unread:0, timer:null, seen:new Set(), remote:null };
+const REMOTE_KEY='app-engine:chat-server';
+function chatHeaders(){ return chat.bearer?{'Authorization':'Bearer '+chat.bearer,'Content-Type':'application/json'}:{'Content-Type':'application/json'}; }
+function chatUrl(){ return chat.bearer?`${chat.base}/api/players/chat`:'/api/chat'; }
+function chatCollapsed(){ return document.body.classList.contains('chat-collapsed'); }
+function setChatCollapsed(on){ document.body.classList.toggle('chat-collapsed',on); $('#dock-toggle').textContent=on?'▸':'▾'; try{localStorage.setItem('app-engine:chat-collapsed',on?'1':'0');}catch{} if(!on){ chat.unread=0; renderUnread(); scheduleChat(0); } }
+function renderUnread(){ const badge=$('#dock-unread'); badge.hidden=!chat.unread; badge.textContent=chat.unread; }
+function addChatLine(m){
+  const list=$('#dock-msgs'); const p=element('p');
+  if(m.sys){ p.className='sys'; p.textContent=m.sys; }
+  else { const who=element('span','who'+(m.from.role==='admin'?' owner':'')); who.textContent=m.from.name+':'; const when=element('span','when'); when.textContent=new Date(m.at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); p.append(who,document.createTextNode(m.text),when); }
+  const atBottom=list.scrollHeight-list.scrollTop-list.clientHeight<40; list.append(p); if(atBottom) list.scrollTop=list.scrollHeight;
+}
+async function pollChat(){
+  if(!chat.base&&!chat.bearer&&ENGINE_ROLE==='local') return;
+  try{
+    const response=await fetch(`${chatUrl()}?after=${chat.after}`,{headers:chatHeaders(),credentials:chat.bearer?'omit':'same-origin'});
+    if(response.status===401&&chat.bearer){ forgetRemoteChat('Signed out of the server chat. Sign in again.'); return; }
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data=await response.json();
+    $('#dock-title').textContent=`Server chat · ${data.server}`; $('#dock-status').textContent='';
+    $('#dock-online').textContent=`${data.online.length} online: ${data.online.map(p=>p.name).join(', ')}`;
+    for(const m of data.messages){ if(chat.seen.has(m.id)) continue; chat.seen.add(m.id); chat.after=Math.max(chat.after,m.id); addChatLine(m); if(chatCollapsed()&&m.from.id!==data.you.id){ chat.unread++; } }
+    renderUnread();
+  }catch(error){ $('#dock-status').textContent='· reconnecting'; }
+  scheduleChat(chatCollapsed()?15000:3000);
+}
+function scheduleChat(ms){ clearTimeout(chat.timer); chat.timer=setTimeout(pollChat,ms); }
+async function sendChat(text){
+  const response=await fetch(chatUrl(),{method:'POST',headers:chatHeaders(),credentials:chat.bearer?'omit':'same-origin',body:JSON.stringify({text})});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok||!data.ok){ addChatLine({sys:data.error?.message||`Could not send (HTTP ${response.status}).`}); return false; }
+  chat.seen.add(data.message.id); chat.after=Math.max(chat.after,data.message.id); addChatLine(data.message); return true;
+}
+function forgetRemoteChat(note){ chat.bearer=''; chat.base=''; chat.remote=null; try{localStorage.removeItem(REMOTE_KEY);}catch{} $('#dock-form').hidden=true; $('#dock-connect').hidden=false; $('#dock-title').textContent='Server chat'; $('#dock-online').textContent=''; if(note) addChatLine({sys:note}); }
+function setupChatDock(){
+  const dock=$('#chat-dock');
+  const servers=[]; for(const app of state.apps) for(const s of (app.servers||[])) if(!servers.some(x=>x.url===s.url)) servers.push(s);
+  const isPublic=ENGINE_ROLE!=='local';
+  if(!isPublic&&!servers.length){ dock.hidden=true; return; }          // nobody to talk to
+  dock.hidden=false;
+  let collapsed=true; try{ collapsed=localStorage.getItem('app-engine:chat-collapsed')!=='0'; }catch{}
+  setChatCollapsed(collapsed);
+  $('#dock-bar').onclick=()=>setChatCollapsed(!chatCollapsed());
+  $('#dock-form').onsubmit=async event=>{ event.preventDefault(); const input=$('#dock-text'); const text=input.value.trim(); if(!text) return; if(await sendChat(text)) input.value=''; };
+  if(isPublic){ $('#dock-connect').hidden=true; scheduleChat(0); return; }
+  // Local launcher: chat lives on a server one of the apps lists.
+  const select=$('#dock-server'); select.replaceChildren(...servers.map(s=>{ const o=element('option'); o.value=s.url; o.textContent=s.name; return o; }));
+  try{ chat.remote=JSON.parse(localStorage.getItem(REMOTE_KEY)||'null'); }catch{}
+  if(chat.remote?.token){ chat.base=chat.remote.url; chat.bearer=chat.remote.token; $('#dock-form').hidden=false; $('#dock-connect').hidden=true; scheduleChat(0); }
+  else { $('#dock-form').hidden=true; $('#dock-connect').hidden=false; addChatLine({sys:'Sign in to a server to chat with the players there.'}); }
+  $('#dock-connect').onsubmit=async event=>{ event.preventDefault();
+    const url=select.value, username=$('#dock-user').value.trim(), password=$('#dock-pass').value;
+    try{ const response=await fetch(`${url}/api/players/sign-in`,{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})}); const data=await response.json();
+      if(!response.ok||!data.ok) throw new Error(data.error?.message||'Sign-in failed.');
+      chat.remote={url,token:data.token,name:data.player.name}; try{localStorage.setItem(REMOTE_KEY,JSON.stringify(chat.remote));}catch{}
+      chat.base=url; chat.bearer=data.token; $('#dock-pass').value=''; $('#dock-connect').hidden=true; $('#dock-form').hidden=false; addChatLine({sys:`Signed in to ${data.server?.name||url} as ${data.player.name}.`}); scheduleChat(0);
+    }catch(error){ addChatLine({sys:error.message}); } };
+}
 // ── Players (owner of a public-origin engine) ─────────────────────────────
 async function playersRequest(path,options){ const response=await fetch(path,adminOptions(options)); if(!response.ok){ let message=`HTTP ${response.status}`; try{ message=(await response.json()).detail||message; }catch{} throw new Error(message); } return response.status===204?null:response.json(); }
 async function renderPlayers(){

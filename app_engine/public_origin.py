@@ -535,7 +535,7 @@ class OwnerGate:
     # Invitations, and the token-authenticated API that game clients on other machines use.
     OPEN_PREFIXES = ("/join/", "/api/players/")
     # The busy, per-player surfaces; the launcher and static apps are not worth metering.
-    LIMITED_PREFIXES = ("/api/players/", "/api/app-multiplayer/", "/api/app-state/")
+    LIMITED_PREFIXES = ("/api/players/", "/api/app-multiplayer/", "/api/app-state/", "/api/chat")
 
     def __init__(self, app: ASGIApp, accounts: Accounts, enabled: bool, limiter: RateLimiter | None = None):
         self.app, self.accounts, self.enabled = app, accounts, enabled

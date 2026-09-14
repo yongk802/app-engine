@@ -265,6 +265,7 @@ def test_remote_game_clients_sign_in_with_a_password_and_use_bearer_tokens(tmp_p
         preflight = remote.options(f"{LAUNCHER}/api/players/sign-in", headers={"origin": "http://cyberpunk-tcg.localhost:8770", "access-control-request-method": "POST"})
         assert preflight.status_code == 204 and preflight.headers["access-control-allow-origin"] == "*"
         assert "authorization" in preflight.headers["access-control-allow-headers"].lower()
+        assert "PUT" in preflight.headers["access-control-allow-methods"], "a player's game can write their save"
         assert remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "nope"}).status_code == 403
         assert remote.post(f"{LAUNCHER}/api/players/sign-in", content="not json", headers={"content-type": "application/json"}).status_code == 400
         signed = remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}, headers={"origin": "http://cyberpunk-tcg.localhost:8770"})

@@ -602,7 +602,7 @@ class RemoteApiCors:
     PREFIX = "/api/players/"
     HEADERS = {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
         "Access-Control-Allow-Headers": "Authorization, Content-Type, X-App-Multiplayer-Credential",
         "Access-Control-Max-Age": "600",
         "Vary": "Origin",

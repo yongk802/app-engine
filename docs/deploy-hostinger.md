@@ -34,10 +34,15 @@ sudo -u appengine -H bash -c '
   git config --global --add safe.directory /home/deploy/git/app-engine.git
   git config --global --add safe.directory /home/deploy/git/personal-apps.git
   cd ~ && git clone /home/deploy/git/app-engine.git && git clone /home/deploy/git/personal-apps.git
-  cd app-engine && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e .
+  cd app-engine && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e . uv
   cd ../personal-apps/cyberpunk-tcg && python3 scripts/import_cards.py && python3 scripts/import_printing_art.py'
+ln -s /home/appengine/app-engine/.venv/bin/uv /usr/local/bin/uv   # Night City's backend starts with `uv run`
 node --version   # Debian 13 ships 20.x
 ```
+
+Run `pip` from the service user's home (`sudo -u appengine -H bash -c 'cd ~ && …'`):
+an unreadable working directory such as `/root` breaks the editable install's
+import hook with a misleading `PermissionError`.
 
 `pip install -e .` provides `.venv/bin/app-engine-players`. Updating later is
 `git push vps main` here and `sudo -u appengine git -C ~/app-engine pull && systemctl restart app-engine` there.

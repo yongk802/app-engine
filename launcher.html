@@ -37,7 +37,23 @@
   .dock-in input, .dock-in select { flex:1; min-width:0; background:#0d1016; color:#e6e6e6; border:1px solid #2b323f; border-radius:8px; padding:8px; font-size:13px; }
   .dock-in button { background:var(--blue); color:#fff; border:0; border-radius:8px; padding:0 14px; cursor:pointer; }
   .dock-in button.secondary { background:#222936; border:1px solid #3a4454; }
-  body.night-city-playing #chat-dock { display:none !important; }
+  /* Play mode / browser full screen: the dock leaves the layout and becomes a side panel that slides in from a tab on the
+     right edge (hover or click). Both are popovers so they sit in the top layer above a full-screen iframe. */
+  #chat-dock[popover] { display:none; }
+  #chat-dock:popover-open { display:flex; position:fixed; inset:0 0 0 auto; width:min(380px,92vw); height:100%; max-height:none; margin:0; padding:0; border:0; border-left:1px solid var(--line); background:var(--panel); color:#e6e6e6; box-shadow:-14px 0 40px #000a; overflow:visible; }
+  #chat-dock:popover-open .dock-body { display:flex; flex:1; min-height:0; }
+  #chat-dock:popover-open .dock-msgs { max-height:none; }
+  #chat-dock:popover-open .dock-bar { flex-wrap:wrap; row-gap:2px; } #chat-dock:popover-open #dock-toggle { display:none; }
+  #chat-dock:popover-open .dock-bar::after { content:'✕'; order:9; margin-left:auto; padding:0 2px; color:var(--muted); } #chat-dock:popover-open .dock-bar .online { order:10; margin-left:0; flex-basis:100%; font-size:11px; }
+  #chat-tab { display:none; }
+  #chat-tab:popover-open { display:flex; align-items:center; gap:8px; position:fixed; inset:auto 0 auto auto; top:50%; transform:translateY(-50%); margin:0; padding:0; border:0; background:transparent; color:#e6e6e6; overflow:visible; width:auto; height:auto; cursor:pointer; pointer-events:none; }
+  #chat-tab .pill { pointer-events:auto; }
+  #chat-tab .peek { max-width:min(46vw,420px); font-size:13px; background:#263041; border:1px solid #3b4a63; border-radius:9px; padding:8px 12px; box-shadow:0 8px 30px #0009; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; transform:translateX(12px); transition:opacity .25s, transform .25s; pointer-events:none; }
+  #chat-tab.peeking .peek { opacity:1; transform:none; }
+  #chat-tab .pill { display:flex; flex-direction:column; align-items:center; gap:4px; padding:12px 7px; background:var(--panel); border:1px solid var(--line); border-right:0; border-radius:9px 0 0 9px; font-size:15px; line-height:1; }
+  #chat-tab .pill .unread { display:none; } #chat-tab.has-unread .pill .unread { display:inline-block; }
+  #chat-tab .pill .unread { background:var(--blue); color:#fff; border-radius:9px; padding:1px 5px; font-size:10px; }
+  #dock-sound { margin-left:6px; background:transparent; border:0; color:var(--muted); padding:0 4px; font-size:13px; } #dock-sound[aria-pressed=true] { color:#e6e6e6; }
   .instance.active { display:flex; } .instance iframe { min-width:0; flex:1; border:0; background:#fff; height:100%; }
   #empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#667085; }
   #mobile-apps,#mobile-chat { display:none; position:fixed; z-index:8; top:8px; border:1px solid var(--line); background:#1d2230; color:white; border-radius:8px; padding:8px 10px; }
@@ -136,13 +152,14 @@
   <main id="main">
     <div id="stage"><div id="empty">Select an app →</div></div>
     <footer id="chat-dock" hidden aria-label="Server chat">
-      <div class="dock-bar" id="dock-bar"><span id="dock-toggle">▾</span><strong id="dock-title">Server chat</strong><span id="dock-status"></span><span class="unread" id="dock-unread" hidden></span><span class="online" id="dock-online"></span></div>
+      <div class="dock-bar" id="dock-bar"><span id="dock-toggle">▾</span><strong id="dock-title">Server chat</strong><span id="dock-status"></span><span class="unread" id="dock-unread" hidden></span><button type="button" id="dock-sound" aria-pressed="true" title="Play a sound when a message arrives">🔔</button><span class="online" id="dock-online"></span></div>
       <div class="dock-body">
         <div class="dock-msgs" id="dock-msgs"></div>
         <form class="dock-in" id="dock-form"><input id="dock-text" maxlength="500" placeholder="Message everyone on the server…" autocomplete="off"><button type="submit">Send</button></form>
         <form class="dock-in" id="dock-connect" hidden><select id="dock-server"></select><input id="dock-user" placeholder="username" autocomplete="username"><input id="dock-pass" type="password" placeholder="password" autocomplete="current-password"><button type="submit">Sign in</button></form>
       </div>
     </footer>
+    <div id="chat-tab" role="button" tabindex="0" aria-label="Show the server chat"><span class="peek" id="chat-peek"></span><span class="pill">💬<span class="unread" id="chat-tab-unread"></span></span></div>
   </main>
 
   <dialog id="info-dialog" class="app-info" aria-labelledby="info-title">
@@ -368,7 +385,11 @@ window.addEventListener('message',event=>{
   const frame=state.instances[state.active]?.querySelector('iframe');
   if(!frame || event.source!==frame.contentWindow || event.origin!==new URL(frame.src,location.href).origin) return;
   document.body.classList.toggle('night-city-playing',event.data.active);
+  unlockDing();   // the click that started play mode reached this page as user activation
+  syncChatOverlay();
 });
+// Any app that goes full screen (its iframe fills the screen) gets the chat tab too.
+document.addEventListener('fullscreenchange',syncChatOverlay);
 
 async function openManagedApp(app) {
   const endpoint='/api/app-engine/apps/'+encodeURIComponent(app.id);
@@ -392,7 +413,7 @@ async function openManagedApp(app) {
 
 async function openApp(app,btn) {
   if(app.compatible===false){ showInfo(app); return; }
-  document.body.classList.remove('night-city-playing');
+  document.body.classList.remove('night-city-playing'); syncChatOverlay();
   const previous=state.active;
   document.querySelectorAll('.app-btn').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active');
   $('#empty').hidden=true; document.querySelectorAll('.instance').forEach(i=>i.classList.remove('active'));
@@ -537,13 +558,62 @@ $('#close-info').onclick=()=>$('#info-dialog').close();
 // ── Server chat dock ─────────────────────────────────────────────────────────
 // On a public server the dock uses the session cookie. On a local launcher it signs in to a
 // server that one of the installed apps lists (a player account there) and uses the bearer API.
-const chat={ base:'', bearer:'', after:0, unread:0, timer:null, seen:new Set(), remote:null };
+const chat={ base:'', bearer:'', after:0, unread:0, timer:null, seen:new Set(), remote:null, primed:false, overlay:false, shown:false, hideTimer:null, showTimer:null, peekTimer:null, over:false };
 const REMOTE_KEY='app-engine:chat-server';
 function chatHeaders(){ return chat.bearer?{'Authorization':'Bearer '+chat.bearer,'Content-Type':'application/json'}:{'Content-Type':'application/json'}; }
 function chatUrl(){ return chat.bearer?`${chat.base}/api/players/chat`:'/api/chat'; }
 function chatCollapsed(){ return document.body.classList.contains('chat-collapsed'); }
+// Nobody is looking at the messages: collapsed in the layout, or an overlay that is slid away.
+function chatHidden(){ return chat.overlay?!chat.shown:chatCollapsed(); }
+// ── Message sound: a short two-note ding, synthesized (no download). Off with the bell in the dock bar. ──
+const ding={ context:null, enabled:true };
+try{ ding.enabled=localStorage.getItem('app-engine:chat-sound')!=='0'; }catch{}
+function unlockDing(){ try{ ding.context ||= new (window.AudioContext||window.webkitAudioContext)(); if(ding.context.state!=='running') ding.context.resume().catch(()=>{}); }catch{} }
+for(const type of ['pointerdown','keydown']) document.addEventListener(type,unlockDing,{capture:true,passive:true});
+function playDing(){
+  const context=ding.context; if(!ding.enabled||!context||context.state!=='running') return;
+  try{
+    const master=context.createGain(); master.gain.value=.2; master.connect(context.destination); const now=context.currentTime+.01;
+    for(const [at,frequency,length] of [[0,880,.16],[.11,1175,.3]]){ const osc=context.createOscillator(), gain=context.createGain(); osc.type='triangle'; osc.frequency.value=frequency;
+      gain.gain.setValueAtTime(0,now+at); gain.gain.linearRampToValueAtTime(.6,now+at+.01); gain.gain.exponentialRampToValueAtTime(.0001,now+at+length);
+      osc.connect(gain); gain.connect(master); osc.start(now+at); osc.stop(now+at+length+.02); }
+  }catch{}
+}
+function renderDing(){ const button=$('#dock-sound'); button.setAttribute('aria-pressed',String(ding.enabled)); button.textContent=ding.enabled?'🔔':'🔕'; button.title=ding.enabled?'Message sound on (click to mute)':'Message sound off (click to unmute)'; }
+// ── Overlay: play mode or browser full screen. The dock becomes a side panel behind a tab on the right edge. ──
+function syncChatOverlay(){ setChatOverlay(document.body.classList.contains('night-city-playing')||!!document.fullscreenElement); }
+function setChatOverlay(on){
+  const dock=$('#chat-dock'), tab=$('#chat-tab');
+  if(dock.hidden||typeof dock.showPopover!=='function') on=false;      // no chat here, or no popover support
+  if(on===chat.overlay){ if(on) raiseOverlay(); return; }
+  chat.overlay=on; document.body.classList.toggle('chat-overlay',on);
+  if(on){ dock.setAttribute('popover','manual'); tab.setAttribute('popover','manual'); chat.shown=false; raiseOverlay(); }
+  else { hideChatPanel(true); try{ tab.hidePopover(); }catch{} dock.removeAttribute('popover'); tab.removeAttribute('popover'); tab.classList.remove('peeking'); }
+  renderUnread(); scheduleChat(0);
+}
+// Popovers stack in the order they open: re-open ours after an iframe goes full screen so they stay on top of it.
+function raiseOverlay(){ const dock=$('#chat-dock'), tab=$('#chat-tab'); try{ tab.hidePopover(); tab.showPopover(); }catch{} if(chat.shown){ try{ dock.hidePopover(); dock.showPopover(); }catch{} } }
+function showChatPanel(){
+  clearTimeout(chat.showTimer); chat.showTimer=null; clearTimeout(chat.hideTimer);
+  if(!chat.overlay||chat.shown) return;
+  chat.shown=true; try{ $('#chat-dock').showPopover(); }catch{ chat.shown=false; return; }
+  $('#chat-tab').classList.remove('peeking'); chat.unread=0; renderUnread(); scheduleChat(0);
+  const list=$('#dock-msgs'); list.scrollTop=list.scrollHeight;
+}
+function hideChatPanel(force){
+  clearTimeout(chat.hideTimer);
+  if(!chat.shown) return;
+  if(!force&&(document.activeElement===$('#dock-text')||chat.over)) return;   // typing, or still over it
+  chat.shown=false; try{ $('#chat-dock').hidePopover(); }catch{} $('#dock-text').blur(); renderUnread(); scheduleChat(0);
+}
+function scheduleHide(ms){ clearTimeout(chat.hideTimer); chat.hideTimer=setTimeout(()=>hideChatPanel(false),ms); }
+function peekMessage(m){
+  if(!chat.overlay||chat.shown) return;
+  const tab=$('#chat-tab'); $('#chat-peek').textContent=`${m.from.name}: ${m.text}`; tab.classList.add('peeking');
+  clearTimeout(chat.peekTimer); chat.peekTimer=setTimeout(()=>tab.classList.remove('peeking'),8000);
+}
 function setChatCollapsed(on){ document.body.classList.toggle('chat-collapsed',on); $('#dock-toggle').textContent=on?'▸':'▾'; try{localStorage.setItem('app-engine:chat-collapsed',on?'1':'0');}catch{} if(!on){ chat.unread=0; renderUnread(); scheduleChat(0); } }
-function renderUnread(){ const badge=$('#dock-unread'); badge.hidden=!chat.unread; badge.textContent=chat.unread; }
+function renderUnread(){ const badge=$('#dock-unread'); badge.hidden=!chat.unread; badge.textContent=chat.unread; $('#chat-tab-unread').textContent=chat.unread; $('#chat-tab').classList.toggle('has-unread',chat.unread>0); }
 function addChatLine(m){
   const list=$('#dock-msgs'); const p=element('p');
   if(m.sys){ p.className='sys'; p.textContent=m.sys; }
@@ -559,10 +629,13 @@ async function pollChat(){
     const data=await response.json();
     $('#dock-title').textContent=`Server chat · ${data.server}`; $('#dock-status').textContent='';
     $('#dock-online').textContent=`${data.online.length} online: ${data.online.map(p=>p.name).join(', ')}`;
-    for(const m of data.messages){ if(chat.seen.has(m.id)) continue; chat.seen.add(m.id); chat.after=Math.max(chat.after,m.id); addChatLine(m); if(chatCollapsed()&&m.from.id!==data.you.id){ chat.unread++; } }
+    let fresh=null;
+    for(const m of data.messages){ if(chat.seen.has(m.id)) continue; chat.seen.add(m.id); chat.after=Math.max(chat.after,m.id); addChatLine(m); if(m.from.id!==data.you.id){ if(chatHidden()) chat.unread++; if(chat.primed) fresh=m; } }
     renderUnread();
+    if(fresh){ playDing(); peekMessage(fresh); }     // history on the first poll is not news
+    chat.primed=true;
   }catch(error){ $('#dock-status').textContent='· reconnecting'; }
-  scheduleChat(chatCollapsed()?15000:3000);
+  scheduleChat(chatHidden()?(chat.overlay?6000:15000):3000);
 }
 function scheduleChat(ms){ clearTimeout(chat.timer); chat.timer=setTimeout(pollChat,ms); }
 async function sendChat(text){
@@ -580,8 +653,23 @@ function setupChatDock(){
   dock.hidden=false;
   let collapsed=true; try{ collapsed=localStorage.getItem('app-engine:chat-collapsed')!=='0'; }catch{}
   setChatCollapsed(collapsed);
-  $('#dock-bar').onclick=()=>setChatCollapsed(!chatCollapsed());
-  $('#dock-form').onsubmit=async event=>{ event.preventDefault(); const input=$('#dock-text'); const text=input.value.trim(); if(!text) return; if(await sendChat(text)) input.value=''; };
+  $('#dock-bar').onclick=event=>{ if(event.target.closest('#dock-sound')) return; if(chat.overlay) hideChatPanel(true); else setChatCollapsed(!chatCollapsed()); };
+  renderDing(); $('#dock-sound').onclick=()=>{ ding.enabled=!ding.enabled; try{ localStorage.setItem('app-engine:chat-sound',ding.enabled?'1':'0'); }catch{} renderDing(); unlockDing(); if(ding.enabled) setTimeout(playDing,50); };
+  // The tab on the right edge: rest the pointer on it (or click / press Enter) and the panel slides in; it slides
+  // away when the pointer leaves, unless a message is being typed.
+  const tab=$('#chat-tab');
+  // pointermove, not pointerenter: browsers synthesize enter events when the layout under a resting pointer
+  // changes (the panel sliding away, the peek appearing), and those must not slide the panel back in.
+  tab.addEventListener('pointermove',()=>{ if(chat.shown||chat.showTimer) return; chat.showTimer=setTimeout(()=>{ chat.showTimer=null; showChatPanel(); },160); });
+  tab.addEventListener('pointerleave',()=>{ clearTimeout(chat.showTimer); chat.showTimer=null; });
+  tab.addEventListener('click',()=>{ if(chat.shown) hideChatPanel(true); else showChatPanel(); });
+  tab.addEventListener('keydown',event=>{ if(event.key==='Enter'||event.key===' '){ event.preventDefault(); showChatPanel(); $('#dock-text').focus(); } });
+  dock.addEventListener('pointerenter',()=>{ chat.over=true; clearTimeout(chat.hideTimer); });
+  dock.addEventListener('pointerleave',()=>{ chat.over=false; if(chat.overlay) scheduleHide(700); });
+  dock.addEventListener('focusout',()=>{ if(chat.overlay) scheduleHide(900); });
+  dock.addEventListener('keydown',event=>{ if(event.key==='Escape'&&chat.overlay){ event.preventDefault(); hideChatPanel(true); } });
+  syncChatOverlay();
+  $('#dock-form').onsubmit=async event=>{ event.preventDefault(); const input=$('#dock-text'); const text=input.value.trim(); if(!text) return; if(await sendChat(text)) input.value=''; input.focus(); };
   if(isPublic){ $('#dock-connect').hidden=true; scheduleChat(0); return; }
   // Local launcher: chat lives on a server one of the apps lists.
   const select=$('#dock-server'); select.replaceChildren(...servers.map(s=>{ const o=element('option'); o.value=s.url; o.textContent=s.name; return o; }));

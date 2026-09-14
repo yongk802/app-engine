@@ -404,8 +404,8 @@ an https origin without `APP_ENGINE_TRUST_PROXY`, and the shared-origin layout.
 
 #### Players
 
-The owner invites players; nobody signs up on their own. From the launcher's
-**Players** panel (👥) or the shell:
+The owner creates accounts; nobody signs up on their own. From the launcher's
+**Players** panel (👥, **Create account**) or the shell:
 
 ```bash
 app-engine-players invite --username rook --name "Rook" --apps cyberpunk-tcg

@@ -130,11 +130,11 @@
       <p class="status-line" style="margin-top:0">People you invite sign in to this server with a username and password, open the games you allow, and meet each other at the multiplayer tables. Games connect from their own computers too.</p>
       <div class="players-list" id="players-list"></div>
       <form class="invite-form" id="invite-form">
-        <strong>Invite a player</strong>
+        <strong>Create account</strong>
         <input type="text" id="invite-username" placeholder="username (letters, digits, - or _)" maxlength="24" required>
         <input type="text" id="invite-name" placeholder="display name (optional)" maxlength="40">
         <div class="apps" id="invite-apps"></div>
-        <div><button type="submit" class="primary">Create invitation</button></div>
+        <div><button type="submit" class="primary">Create account</button></div>
         <div class="invite-link" id="invite-link" hidden></div>
       </form>
     </div>
@@ -534,7 +534,7 @@ async function renderPlayers(){
   const apps=$('#invite-apps'); apps.replaceChildren();
   for(const appId of data.apps){ const label=element('label'); const box=element('input'); box.type='checkbox'; box.value=appId; box.checked=true; label.append(box,' '+appId); apps.append(label); }
 }
-function showInviteLink(link){ const box=$('#invite-link'); box.hidden=false; box.textContent=`Send this link once: ${link}  (valid 7 days; the player chooses a password)`; navigator.clipboard?.writeText(link).catch(()=>{}); }
+function showInviteLink(link){ const box=$('#invite-link'); box.hidden=false; box.textContent=`Account created. Send this link once so they can choose a password: ${link}  (valid 7 days) — or use Email invitation on their row.`; navigator.clipboard?.writeText(link).catch(()=>{}); }
 $('#players-settings').onclick=async()=>{ $('#invite-link').hidden=true; $('#players-dialog').showModal(); try{ await renderPlayers(); }catch(error){ $('#players-list').textContent=error.message; } };
 $('#close-players').onclick=()=>$('#players-dialog').close();
 $('#invite-form').onsubmit=async event=>{ event.preventDefault();

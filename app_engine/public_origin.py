@@ -250,12 +250,16 @@ class Accounts:
         return minted
 
     def verify_admin_secret(self, candidate: str) -> bool:
+        self.refresh()   # a secret rotated by the CLI counts from now, not from the next cookie
         stored = self.data["admin"].get("secret_hash")
         return bool(stored) and isinstance(candidate, str) and len(candidate) <= 256 and _same(candidate, stored)
 
     # ── sessions ───────────────────────────────────────────────────────────
 
     def create_admin_session(self) -> str:
+        # A cookie-less sign-in is the one mutation that reached here without resolve()
+        # refreshing first; saving a stale copy would undo whatever the CLI changed since.
+        self.refresh()
         token = secrets.token_urlsafe(32)
         now = int(time.time())
         sessions = [s for s in self.data["admin"]["sessions"] if now - s.get("last_seen", 0) < SESSION_LIFETIME]
@@ -551,8 +555,12 @@ class OwnerGate:
         scope["state"]["session"] = session
         path = request.url.path
         if path.startswith(self.LIMITED_PREFIXES) and request.method != "OPTIONS":
+            # Key on who the request resolved to, else the address: a made-up cookie or bearer
+            # must not hand out a fresh bucket per request, nor let a player escape their own.
             bearer = request.headers.get("authorization", "")
-            key = f"s:{_digest(request.cookies.get(SESSION_COOKIE) or bearer[7:])}" if (session or bearer) else f"a:{request.client.host if request.client else ''}"
+            token = bearer[7:].strip() if bearer.lower().startswith("bearer ") else ""
+            holder = session or (self.accounts.resolve(token) if token else None)
+            key = f"s:{holder.subject_id}" if holder else f"a:{request.client.host if request.client else ''}"
             wait = self.limiter.allow(key)
             if wait:
                 response = JSONResponse({"ok": False, "error": {"code": "RATE_LIMITED", "message": "Slow down: too many requests."}}, status_code=429, headers={"Retry-After": str(max(1, int(wait + 0.999)))})

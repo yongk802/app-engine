@@ -2,12 +2,16 @@
 
 import importlib
 import json
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app_engine.public_origin import Accounts, PublicOrigin, SignInLimiter, bind_is_allowed
+from app_engine.public_origin import SESSION_COOKIE, Accounts, PublicOrigin, SignInLimiter, bind_is_allowed
+
+FAKE_RULES = Path(__file__).resolve().parents[1] / "app_engine" / "multiplayer" / "test" / "fake-rules.mjs"
 
 PUBLIC = "https://play.example.com"
 
@@ -365,12 +369,9 @@ def test_player_cap_is_configurable(tmp_path, monkeypatch):
         accounts.create_player("two", [])
 
 
-def test_owner_and_player_open_a_managed_app_in_public_mode(tmp_path, monkeypatch):
-    """Night City runs a managed backend: opening it must work for the signed-in owner and,
-    once the owner approved its plan, for a player. (The runtime is single-subject.)"""
-    import sys
-
-    root = tmp_path / "apps" / "game"
+def make_managed_game(apps: Path, app_id: str = "game") -> Path:
+    """An app with a managed backend: a tiny HTTP server the runtime starts and health-checks."""
+    root = apps / app_id
     root.mkdir(parents=True)
     (root / "index.html").write_text("<!doctype html><title>game</title>")
     (root / "server.py").write_text(
@@ -384,6 +385,13 @@ def test_owner_and_player_open_a_managed_app_in_public_mode(tmp_path, monkeypatc
         "targets": {"web": {"kind": "web", "runtime": {"driver": "process", "scope": "shared",
                     "start": {"argv": [sys.executable, "server.py"]}, "health": {"kind": "http", "path": "/"}}}},
     }))
+    return root
+
+
+def test_owner_and_player_open_a_managed_app_in_public_mode(tmp_path, monkeypatch):
+    """Night City runs a managed backend: opening it must work for the signed-in owner and,
+    once the owner approved its plan, for a player. (The runtime is single-subject.)"""
+    make_managed_game(tmp_path / "apps")
     module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
     owner, admin = owner_client(module)
     try:
@@ -443,3 +451,112 @@ def test_a_player_reads_and_writes_their_own_save_from_their_own_game(tmp_path, 
         assert remote.put(f"{LAUNCHER}/api/players/state/cards", json={"version": 1, "decks": [{"name": "browser crew"}, {"name": "offline crew"}]}, headers=bearer).status_code == 200
         assert remote.put(f"{LAUNCHER}/api/players/state/cards", content="x" * 200_000, headers={**bearer, "content-type": "application/json"}).status_code == 413
     assert len(json.loads((tmp_path / "state" / "players").glob("*/cards.json").__next__().read_text())["decks"]) == 2
+
+
+def invite_and_join(module, username="rook", apps=("cards",), password="correct horse battery"):
+    """The owner invites a player who then sets a password; returns the owner client and headers."""
+    owner, admin = owner_client(module)
+    invite = owner.post(f"{LAUNCHER}/admin/players", json={"username": username, "apps": list(apps)}, headers=admin).json()["invite"]
+    with public_client(module) as guest:
+        assert guest.post(invite, data={"password": password, "confirm": password}, follow_redirects=False).status_code == 303
+    return owner, admin
+
+
+def test_owner_sign_in_keeps_what_the_cli_changed_meanwhile(tmp_path, monkeypatch, capsys):
+    """A cookie-less sign-in used to save the engine's stale copy of players.json over a
+    change the CLI made since, quietly re-enabling a player the operator had disabled."""
+    from app_engine.__main__ import players_main
+
+    make_app(tmp_path / "apps", "cards")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    state = str(tmp_path / "state")
+    assert players_main(["--state-dir", state, "--origin", PUBLIC, "invite", "--username", "rook", "--apps", "cards"]) == 0
+    link = capsys.readouterr().out.split("send this link once (valid 7 days): ")[1].strip()
+    with public_client(module) as player, public_client(module) as owner:
+        assert player.post(link, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False).status_code == 303
+        assert player.get(f"{LAUNCHER}/api/apps").status_code == 200
+        assert players_main(["--state-dir", state, "disable", "rook"]) == 0
+        # No request carrying a token reaches the engine between the CLI write and this sign-in.
+        assert sign_in(owner).status_code == 303
+        saved = json.loads((tmp_path / "state" / "players.json").read_text())
+        assert saved["players"][0]["disabled"] is True, "the sign-in saved a stale copy over the CLI's change"
+        assert player.get(f"{LAUNCHER}/api/apps").status_code == 401, "the disabled player's session stays dead"
+        assert owner.get(f"{LAUNCHER}/api/apps").status_code == 200
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="multiplayer needs Node.js")
+def test_a_remote_game_client_reads_health_with_its_bearer_token(tmp_path, monkeypatch):
+    """The documented remote path is bearer-only; the health route used to demand the cookie
+    session after the bearer had already been accepted, so it answered 401 to every client."""
+    monkeypatch.delenv("APP_ENGINE_MULTIPLAYER_SERVER", raising=False)
+    root = tmp_path / "apps" / "cards"
+    root.mkdir(parents=True)
+    (root / "index.html").write_text("<!doctype html><title>cards</title>")
+    (root / "rules.mjs").write_text(f"export {{default}} from '{FAKE_RULES.as_posix()}';\n")
+    (root / "app.json").write_text(json.dumps({"label": "cards", "icon": "c", "multiplayer": {"rules": "rules.mjs"}}))
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    invite_and_join(module)[0].close()
+    with TestClient(module.app, base_url="https://someones-laptop.example") as remote:
+        token = remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).json()["token"]
+        assert remote.get(f"{LAUNCHER}/api/players/cards/health").status_code == 401, "no bearer, no answer"
+        health = remote.get(f"{LAUNCHER}/api/players/cards/health", headers={"authorization": f"Bearer {token}"})
+        assert health.status_code == 200, health.text
+        assert health.json()["rulesVersion"] == "fake-rules-1"
+        assert health.json()["host"] == {"server": "play.example.com", "public": True, "you": {"name": "rook", "role": "player"}}
+
+
+def test_rate_limits_key_on_the_person_the_request_resolved_to(tmp_path, monkeypatch):
+    """A made-up cookie or bearer used to get its own bucket, so a stranger varying the header
+    was never limited and a player could escape their own bucket with a junk cookie."""
+    make_app(tmp_path / "apps", "cards")
+    monkeypatch.setenv("APP_ENGINE_RATE_LIMIT", "0.001,6")
+    import app_engine.public_origin as public_origin
+    importlib.reload(public_origin)
+    try:
+        module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+        invite_and_join(module)[0].close()
+        with TestClient(module.app, base_url="https://someones-laptop.example") as remote:
+            token = remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).json()["token"]
+            # A signed-in player is one bucket however many junk cookies ride along.
+            codes = [remote.get(f"{LAUNCHER}/api/players/me", headers={"authorization": f"Bearer {token}", "cookie": f"{SESSION_COOKIE}=junk{i}"}).status_code for i in range(7)]
+            assert codes == [200] * 6 + [429], codes
+            # A stranger with a different made-up bearer each time shares the address bucket (the sign-in above spent one).
+            codes = [remote.get(f"{LAUNCHER}/api/players/me", headers={"authorization": f"Bearer nobody-{i}"}).status_code for i in range(6)]
+            assert codes == [401] * 5 + [429], codes
+    finally:
+        monkeypatch.delenv("APP_ENGINE_RATE_LIMIT")
+        importlib.reload(public_origin)
+
+
+def test_only_the_owner_may_force_a_rebuild_of_the_shared_backend(tmp_path, monkeypatch):
+    """Players share one managed backend; ``force_rebuild`` restarts it for everyone, so a
+    player's request drops the flag while the owner's keeps it."""
+    make_managed_game(tmp_path / "apps")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    seen: list[bool] = []
+    lifecycle = module._app_runtime.lifecycle
+    original = lifecycle.preview
+
+    async def spy(launch):
+        seen.append(launch.force_rebuild)
+        return await original(launch)
+
+    monkeypatch.setattr(lifecycle, "preview", spy)
+    owner, admin = owner_client(module)
+    try:
+        plan = owner.post(f"{LAUNCHER}/api/app-engine/apps/game/preview", json={}, headers=admin).json()
+        assert owner.post(f"{LAUNCHER}/api/app-engine/plans/{plan['fingerprint']}/approve", headers=admin).status_code == 204
+        assert owner.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={}).status_code == 200
+        seen.clear()
+        assert owner.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={"force_rebuild": True}).status_code == 200
+        assert seen and all(seen), "the owner may rebuild (the open previews the plan more than once)"
+        invite = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["game"]}, headers=admin).json()["invite"]
+        with public_client(module) as guest:
+            guest.post(invite, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
+            seen.clear()
+            opened = guest.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={"force_rebuild": True})
+            assert opened.status_code == 200, opened.text
+            assert seen and not any(seen), "a player's open never restarts the backend everyone shares"
+            assert guest.post(f"{LAUNCHER}/api/app-engine/apps/game/open", content="[]", headers={"content-type": "application/json"}).status_code == 400
+    finally:
+        owner.close()

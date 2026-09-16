@@ -196,6 +196,7 @@ app.include_router(
     create_app_engine_router(
         _app_runtime,
         authenticate=_runtime_authenticate,
+        may_rebuild=lambda request: _session(request).role != "player",
         standing_approval=(lambda fingerprint: _accounts.plan_approved(fingerprint)) if _accounts else None,
         record_approval=(lambda fingerprint: (_accounts.approve_plan(fingerprint), _audit.record("plan.approved", fingerprint=fingerprint))) if _accounts else None,
     )
@@ -1137,7 +1138,8 @@ async def api_player_health(app_id: str, request: Request) -> JSONResponse:
     if status == 200 and isinstance(result, dict):
         # Who the host already knows this page as, so a game served by a public engine
         # need not ask for a username and password it has no use for.
-        session = _session(request)
+        # Bearer, never the cookie: a remote game client has none.
+        session = _bearer_session(request)
         result["host"] = {"server": _SERVER_NAME, "public": bool(_PUBLIC), "you": {"name": session.name, "role": session.role}}
     return _multiplayer_reply(status, result)
 

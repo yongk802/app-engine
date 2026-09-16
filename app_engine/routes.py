@@ -81,6 +81,7 @@ def _catalog_app(item) -> dict[str, object]:
 AuthorizeApp = Callable[[HostSubject, str], bool]
 StandingApproval = Callable[[str], bool]
 RecordApproval = Callable[[str], None]
+MayRebuild = Callable[[Request], bool]
 
 
 def create_app_engine_router(
@@ -91,6 +92,7 @@ def create_app_engine_router(
     authorize_app: AuthorizeApp | None = None,
     standing_approval: StandingApproval | None = None,
     record_approval: RecordApproval | None = None,
+    may_rebuild: MayRebuild | None = None,
 ) -> APIRouter:
     """Build a host-authenticated router without starting another server.
 
@@ -98,6 +100,8 @@ def create_app_engine_router(
     player accounts answers from its allow-lists; absent, every subject may).
     ``standing_approval``/``record_approval`` let a host keep the owner's launch-plan
     approvals across opens and subjects; absent, approvals stay single-use per subject.
+    ``may_rebuild`` says whether this request may ask for ``force_rebuild`` (a host with
+    players reserves restarting the shared backend for the owner); absent, anyone may.
     """
 
     router = APIRouter(prefix=prefix, tags=["app-engine"])
@@ -200,6 +204,10 @@ def create_app_engine_router(
     async def open_app(app_id: str, request: Request, subject: HostSubject = Depends(authenticate)):
         body = await request.body()
         payload = await request.json() if body else {}
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "the request body must be a JSON object")
+        if payload.get("force_rebuild") and may_rebuild is not None and not may_rebuild(request):
+            payload = {**payload, "force_rebuild": False}
         launch = _launch_request(app_id, subject, payload)
         if authorize_app is not None and not authorize_app(subject, app_id):
             raise HTTPException(404, "app not found")

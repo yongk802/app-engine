@@ -10,3 +10,6 @@ build/
 *.egg-info/
 .claude/
 node_modules/
+
+# Atrium test-gate evidence records (the validation profile itself is committed)
+.atrium/evidence/

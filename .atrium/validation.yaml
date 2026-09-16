@@ -1,0 +1,26 @@
+# Validation profile for app-engine: the repo's declared test contract, read by
+# Atrium's Verify toggle and test gate (see Atrium's docs/validation-profiles.md).
+# Commands run from the repo root; the project venv lives at .venv.
+version: 1
+
+commands:
+  test: ".venv/bin/python -m pytest --tb=short -q --timeout=30 -x"
+  scoped_test: ".venv/bin/python -m pytest {files} -q"
+  typecheck: ".venv/bin/python -m compileall -q ."
+
+discovery:
+  framework: pytest
+  test_globs:
+    - "tests/test_*.py"
+    - "tests/**/*_test.py"
+  # smoke: []       # always-run canaries (cheap, fast tests)
+  # quarantine: []  # known-flaky tests that must never gate
+
+# budgets:
+#   tier0_timeout_s: 120
+#   full_timeout_s: 3600
+# runtime:            # how to launch the app for feature-level tests
+#   start_cmd: ...
+#   health_url: ...
+# judging:
+#   acceptance_criteria: []

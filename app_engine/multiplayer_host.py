@@ -61,6 +61,7 @@ class RoomProcess:
     base_url: str = ""
     logs: deque = field(default_factory=lambda: deque(maxlen=200))
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    pump: asyncio.Task | None = None  # held: the loop keeps only a weak reference
 
     @property
     def alive(self) -> bool:
@@ -159,7 +160,7 @@ class MultiplayerHost:
             raise MultiplayerUnavailable("The room service could not be started.") from exc
         base = await self._await_listening(record)
         record.base_url = base
-        asyncio.create_task(self._pump(record))
+        record.pump = asyncio.create_task(self._pump(record))
         await self._await_health(record)
         # Local tooling (a terminal-driven second seat, a smoke test) finds the service here;
         # the file is private to the user and removed when the service stops.

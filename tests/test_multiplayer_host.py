@@ -1,5 +1,7 @@
 """The host's multiplayer route: a room service per app, reached only from the app's origin."""
 
+import asyncio
+import gc
 import importlib
 import json
 import shutil
@@ -155,3 +157,22 @@ def test_external_server_override_relays_instead_of_spawning(tmp_path, monkeypat
     assert mapped.external_url("cards") == "http://10.0.0.5:18791"
     assert mapped.external_url("dice") is None
     assert MultiplayerHost(tmp_path, external="{bad json").external is None
+
+
+@needs_node
+def test_the_log_pump_is_held_while_the_service_runs(tmp_path):
+    """The event loop keeps only a weak reference to a task. An unheld pump can be
+    collected mid-flight, and the room service then blocks on a full stdout pipe."""
+    root = make_game(tmp_path / "apps", "cards")
+    host = MultiplayerHost(tmp_path / "state")
+
+    async def run():
+        try:
+            await host.ensure("cards", root, {"rules": "rules.mjs"})
+            pump = host._processes["cards"].pump
+            gc.collect()
+            assert pump is not None and not pump.done()
+        finally:
+            await host.close()
+
+    asyncio.run(run())

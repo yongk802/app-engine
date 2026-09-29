@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -175,3 +176,32 @@ async def test_router_uses_host_authentication_dependency(tmp_path):
         assert response.status_code == 401
     finally:
         await runtime.close(1.0)
+
+
+@pytest.mark.asyncio
+async def test_studio_import_inspects_the_path_as_the_caller():
+    from app_engine.routes import create_app_engine_router
+
+    seen = {}
+
+    class Studio:
+        async def inspect_import(self, path, subject=None):
+            seen["path"], seen["subject"] = path, subject
+            return SimpleNamespace(
+                root=path, fingerprint="fp-1", suggested_template_id=None,
+                suggested_manifest=None, evidence=("pyproject.toml",),
+            )
+
+    caller = HostSubject("alice", "admin")
+    api = FastAPI()
+    api.include_router(create_app_engine_router(
+        SimpleNamespace(studio=Studio()), authenticate=lambda: caller,
+    ))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/app-engine/studio/import", json={"path": "/w/app"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["fingerprint"] == "fp-1"
+    assert seen == {"path": Path("/w/app"), "subject": caller}

@@ -407,7 +407,6 @@ def create_app_engine_router(
 
     @router.post("/studio/import")
     async def studio_import(request: Request, subject: HostSubject = Depends(authenticate)):
-        del subject
         payload = await request.json()
         try:
             proposal = await runtime.studio.inspect_import(

@@ -480,8 +480,8 @@ python -m pytest tests/ -q
 
 See [the three-platform release checklist](docs/release-testing.md) for clean
 install and real Ollama testing. CI runs Python 3.10–3.13 on macOS, Windows, and
-Linux and validates a sibling `personal-apps` checkout through
-`PERSONAL_APPS_DIR`.
+Linux. The cross-repo checks against `personal-apps` run locally, from a sibling
+clone or `PERSONAL_APPS_DIR`, and skip in CI.
 
 To compare permissively licensed local tutor models against every chat-enabled
 app, install the candidate Ollama models and run:

@@ -16,13 +16,12 @@ jobs:
         python: ['3.10', '3.11', '3.12', '3.13']
     runs-on: ${{ matrix.os }}
     steps:
+      # personal-apps is private, so CI can't check it out; the cross-repo tutor
+      # checks skip and the catalog tests use tests/fixtures (run them locally
+      # against a personal-apps clone before a release).
       - uses: actions/checkout@v4
         with:
           path: app-engine
-      - uses: actions/checkout@v4
-        with:
-          repository: yongk802/personal-apps
-          path: personal-apps
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -35,8 +34,6 @@ jobs:
           node-version: '22'
       - run: python -m pytest tests/ -q
         working-directory: app-engine
-        env:
-          PERSONAL_APPS_DIR: ${{ github.workspace }}/personal-apps
       - run: node --test "app_engine/multiplayer/test/*.test.mjs"
         working-directory: app-engine
         shell: bash

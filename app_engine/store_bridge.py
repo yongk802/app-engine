@@ -47,7 +47,7 @@ class StoreBridge:
             return tuple(stores)
         except FileNotFoundError:
             return ()
-        except (ValueError, TypeError, KeyError, AttributeError, OSError):
+        except (ValueError, TypeError, KeyError, AttributeError, OSError, RecursionError):
             raise StoreError('invalid_configuration', 'Store configuration is invalid; restore stores.json before continuing.') from None
 
     @staticmethod
@@ -121,7 +121,7 @@ class StoreBridge:
             if len({(item.id, item.version) for item in releases}) != len(releases):
                 raise ValueError()
             return raw['name'][:200], releases
-        except (ValueError, UnicodeError) as exc:
+        except (ValueError, UnicodeError, RecursionError) as exc:
             if isinstance(exc, StoreError):
                 raise
             raise StoreError('invalid_catalog', 'The store returned an invalid version-one catalog.') from None

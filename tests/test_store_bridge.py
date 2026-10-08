@@ -179,3 +179,32 @@ def test_invalid_release_rejected(tmp_path, kind):
         assert not (tmp_path / 'installed' / 'hello').exists()
         await client.aclose()
     asyncio.run(run())
+
+
+def test_recursive_catalog_does_not_hide_healthy_store(tmp_path):
+    async def run():
+        from app_engine.store_bridge import StoreBridge
+        body = package()
+        def handle(request):
+            if request.url.host == 'bad.test':
+                return httpx.Response(200, content='[' * 10000 + '0' + ']' * 10000)
+            return httpx.Response(200, json={'protocol_version': 1, 'name': 'Good', 'apps': [release(body)]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            service = StoreBridge(tmp_path / 'state', tmp_path / 'installed', client=client)
+            await service.add_store('http://bad.test')
+            await service.add_store('http://good.test')
+            result = await service.catalog()
+            assert len(result.apps) == 1
+            assert result.stores[0].error_code == 'invalid_catalog'
+    asyncio.run(run())
+
+
+def test_idna_equivalent_hosts_share_connection(tmp_path):
+    async def run():
+        service, client = bridge(tmp_path)
+        first = await service.add_store('http://例子.test')
+        second = await service.add_store('http://xn--fsqu00a.test')
+        assert first.id == second.id
+        assert len(service.stores()) == 1
+        await client.aclose()
+    asyncio.run(run())

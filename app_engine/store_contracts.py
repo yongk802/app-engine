@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from urllib.parse import unquote, urlsplit, urlunsplit
+import httpx
 
 MAX_PACKAGE_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
@@ -35,13 +36,13 @@ def canonical_url(value: str) -> str:
                 any(char.isspace() or ord(char) < 32 for char in value) or
                 (path and not safe_path(path.lstrip('/')))):
             raise ValueError()
-        host = parts.hostname.lower()
+        host = httpx.URL(value.strip()).raw_host.decode('ascii').lower()
         if ':' in host:
             host = '[' + host + ']'
         if port is not None and port != (80 if parts.scheme == 'http' else 443):
             host += ':' + str(port)
         return urlunsplit((parts.scheme, host, path, '', ''))
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, httpx.InvalidURL):
         raise StoreError('invalid_store_url', 'Provide an HTTP(S) store URL without credentials, query or fragment.') from None
 
 

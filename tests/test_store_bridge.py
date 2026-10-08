@@ -294,3 +294,23 @@ def test_canceled_publication_finishes_before_install_lock_released(tmp_path, mo
         assert not service._lock.locked()
         await client.aclose()
     asyncio.run(run())
+
+
+def test_v2_nested_metadata_version_installs(tmp_path):
+    async def run():
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('app.json', json.dumps({
+                'manifest_version': 2, 'id': 'hello', 'label': 'Hello', 'icon': 'H',
+                'default_target': 'web', 'targets': {'web': {'kind': 'web'}},
+                'metadata': {'version': '1.0.0', 'description': 'Nested metadata'},
+            }))
+            archive.writestr('index.html', '<title>V2 hello</title>')
+        service, client = bridge(tmp_path, body=buffer.getvalue())
+        store = await service.add_store('http://one.test')
+        plan = await service.preview(store.id, 'hello', '1.0.0')
+        installed = await service.install(plan.fingerprint)
+        assert installed.version == '1.0.0'
+        assert (tmp_path / 'installed' / 'hello' / 'index.html').read_text() == '<title>V2 hello</title>'
+        await client.aclose()
+    asyncio.run(run())

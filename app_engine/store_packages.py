@@ -48,11 +48,13 @@ def extract_package(body: bytes, destination: Path, release: Release) -> None:
                     raise ValueError('Archive entry is truncated.')
                 target.chmod(0o755 if mode & 0o111 else 0o644)
         raw = json.loads((destination / 'app.json').read_text('utf-8'))
-        if not isinstance(raw, dict) or raw.get('id') != release.id or raw.get('version') != release.version:
+        if not isinstance(raw, dict) or raw.get('id') != release.id:
             raise ValueError('Package manifest does not match its listing.')
         inspection = parse_manifest(destination)
         if inspection.manifest is None:
             raise ValueError('Package manifest is invalid.')
+        if inspection.manifest.metadata.version != release.version:
+            raise ValueError('Package version does not match its listing.')
         if not is_compatible(inspection.manifest.metadata.min_engine_version):
             raise StoreError('incompatible_app', 'The app requires a newer engine.')
     except StoreError:

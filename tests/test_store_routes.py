@@ -2,6 +2,7 @@ import hashlib
 import importlib
 import io
 import json
+import sys
 import zipfile
 
 import httpx
@@ -79,6 +80,39 @@ def test_store_owner_capability_and_launcher_origin_required(tmp_path, monkeypat
         assert client.get('/api/app-engine/store-catalog', headers={'host': 'hello.localhost'}).status_code == 403
         assert module._admin_capability not in client.get('/api/app-engine/stores/ui', headers={'host': 'hello.localhost'}).text
         assert client.post('/api/app-engine/store-installs', json={'fingerprint': 'unknown'}, headers={'x-app-engine-admin': module._admin_capability}).json()['detail']['code'] == 'invalid_preview'
+
+
+def test_app_frame_can_load_session_content_without_host_controls(tmp_path, monkeypatch):
+    root = tmp_path / 'local' / 'demo'
+    root.mkdir(parents=True)
+    (root / 'app.json').write_text(json.dumps({
+        'manifest_version': 2, 'id': 'demo', 'label': 'Demo', 'icon': 'D',
+        'default_target': 'web', 'targets': {
+            'web': {'kind': 'web'},
+            'worker': {'kind': 'web', 'runtime': {
+                'driver': 'process', 'scope': 'per_user',
+                'start': {'argv': [sys.executable, '-c', 'pass']},
+                'health': {'kind': 'http', 'path': '/health'},
+            }},
+        },
+    }))
+    (root / 'index.html').write_text('<title>Demo session content</title>')
+    module = load(tmp_path, monkeypatch)
+    with TestClient(module.app) as client:
+        preview = client.post('/api/app-engine/apps/demo/preview', json={'target_id': 'worker'})
+        assert preview.status_code == 200, preview.text
+        fingerprint = preview.json()['fingerprint']
+        frame = {'host': 'demo.localhost'}
+        assert client.post('/api/app-engine/plans/' + fingerprint + '/approve', headers=frame).status_code == 403
+        assert client.post('/api/app-engine/apps/demo/preview', json={}, headers=frame).status_code == 403
+        assert client.post('/api/app-engine/apps/demo/open', json={}, headers=frame).status_code == 403
+        assert client.get('/api/app-engine/studio/roots', headers=frame).status_code == 403
+        assert client.get('/api/app-engine/catalog', headers=frame).status_code == 403
+        opened = client.post('/api/app-engine/apps/demo/open', json={})
+        assert opened.status_code == 200
+        session_id = opened.json()['session_id']
+        asset = client.get('/api/app-engine/sessions/' + session_id + '/assets/index.html', headers=frame)
+        assert asset.status_code == 200 and 'Demo session content' in asset.text
 
 
 def test_public_players_cannot_manage_stores(tmp_path, monkeypatch):

@@ -188,6 +188,13 @@ async def _runtime_authenticate(request: Request) -> HostSubject:
     every player act as that subject once the session and allow-list checks pass.
     """
     session = _session(request)
+    # Apps may load a session's content on their isolated origin. Host controls
+    # and process-plan approvals belong to the launcher, never to app frames.
+    gateway_request = re.fullmatch(
+        r'/api/app-engine/sessions/[^/]+/(?:assets|proxy)/.*', request.url.path
+    )
+    if not _is_launcher_host(request) and gateway_request is None:
+        raise HTTPException(403, 'launcher origin required')
     match = _PLAYER_ROUTE.match(request.url.path)
     if match and match.group("app") and _PUBLIC_APPS and match.group("app") not in _PUBLIC_APPS:
         raise HTTPException(404)   # not hosted here, for anyone

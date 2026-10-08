@@ -195,6 +195,10 @@ async def _runtime_authenticate(request: Request) -> HostSubject:
     )
     if not _is_launcher_host(request) and gateway_request is None:
         raise HTTPException(403, 'launcher origin required')
+    if request.method == 'POST' and re.fullmatch(
+        r'/api/app-engine/plans/[^/]+/approve', request.url.path
+    ):
+        _require_owner_action(request)
     match = _PLAYER_ROUTE.match(request.url.path)
     if match and match.group("app") and _PUBLIC_APPS and match.group("app") not in _PUBLIC_APPS:
         raise HTTPException(404)   # not hosted here, for anyone

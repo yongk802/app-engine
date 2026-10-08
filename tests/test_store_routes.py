@@ -108,6 +108,9 @@ def test_app_frame_can_load_session_content_without_host_controls(tmp_path, monk
         assert client.post('/api/app-engine/apps/demo/open', json={}, headers=frame).status_code == 403
         assert client.get('/api/app-engine/studio/roots', headers=frame).status_code == 403
         assert client.get('/api/app-engine/catalog', headers=frame).status_code == 403
+        approval_path = '/api/app-engine/plans/' + fingerprint + '/approve'
+        assert client.post(approval_path).status_code == 403
+        assert client.post(approval_path, headers={'x-app-engine-admin': module._admin_capability}).status_code == 204
         opened = client.post('/api/app-engine/apps/demo/open', json={})
         assert opened.status_code == 200
         session_id = opened.json()['session_id']

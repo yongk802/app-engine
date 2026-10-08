@@ -73,6 +73,7 @@ def test_catalog_retains_colliding_ids_and_isolates_outages(tmp_path):
 
 def test_preview_install_feeds_existing_runtime_catalog(tmp_path):
     async def run():
+        from app_engine.store_bridge import StoreError
         from app_engine.catalog import ImmutableAppCatalog
         from app_engine.contracts import AppSource, CatalogKey
         service, client = bridge(tmp_path)
@@ -84,8 +85,9 @@ def test_preview_install_feeds_existing_runtime_catalog(tmp_path):
         catalog = ImmutableAppCatalog()
         snapshot = await catalog.configure(CatalogKey('test'), (AppSource('external', tmp_path / 'installed', 0),))
         assert [str(app.manifest.app_id) for app in snapshot.apps] == ['hello']
-        with pytest.raises(Exception, match='preview'):
+        with pytest.raises(StoreError) as exc:
             await service.install(preview.fingerprint)
+        assert exc.value.code == 'invalid_preview'
         await client.aclose()
     asyncio.run(run())
 

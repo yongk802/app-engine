@@ -72,6 +72,10 @@ configured by `APP_ENGINE_APPS_DIR`. Local apps take priority and installations
 never replace an existing app ID. Disconnecting a store keeps installed apps.
 Unavailable stores show individual errors while other catalogs remain usable.
 Store management is available only to the owner on the launcher origin.
+It requires isolated app origins: public servers configured with
+`APP_ENGINE_APP_ORIGINS=same` hide the store link and reject every store
+management endpoint with 403. Apps sharing the launcher's origin could otherwise
+read its owner capability. Use the default subdomain layout to manage stores.
 
 The store protocol is HTTP version 1. A store's `GET /api/v1/catalog` returns
 `{"protocol_version":1,"name":"My store","apps":[...]}`. Each release provides

@@ -10,7 +10,7 @@ from .store_contracts import StoreError
 
 
 def create_store_router(bridge, runtime, *, require_owner, require_owner_action,
-                        is_launcher_host, admin_capability) -> APIRouter:
+                        is_launcher_host, admin_capability, available) -> APIRouter:
     router = APIRouter(prefix='/api/app-engine', tags=['stores'])
     headers = {'Cache-Control': 'no-store'}
     limits = {'url': 2048, 'name': 200, 'store_id': 64, 'app_id': 64,
@@ -24,11 +24,20 @@ def create_store_router(bridge, runtime, *, require_owner, require_owner_action,
 
     def require_read(request):
         require_owner(request)
+        require_available()
         if not is_launcher_host(request):
             raise HTTPException(403, 'launcher origin required')
 
-    async def payload(request, fields, optional=()):
+    def require_available():
+        if not available():
+            raise HTTPException(403, 'Store management requires isolated app origins; disable APP_ENGINE_APP_ORIGINS=same.')
+
+    def require_action(request):
         require_owner_action(request)
+        require_available()
+
+    async def payload(request, fields, optional=()):
+        require_action(request)
         body = bytearray()
         async for chunk in request.stream():
             if len(body) + len(chunk) > 16 * 1024:
@@ -65,7 +74,7 @@ def create_store_router(bridge, runtime, *, require_owner, require_owner_action,
 
     @router.delete('/stores/{store_id}', status_code=204)
     async def remove_store(store_id: str, request: Request):
-        require_owner_action(request)
+        require_action(request)
         try:
             await bridge.remove_store(store_id)
         except StoreError as exc:

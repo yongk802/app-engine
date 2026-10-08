@@ -866,6 +866,7 @@ async def launcher(request: Request) -> HTMLResponse:
     html = (Path(__file__).parent / "launcher.html").read_text(encoding="utf-8")
     # A player's page never carries the owner's capability: it cannot approve, install or configure.
     html = html.replace("__APP_ENGINE_ADMIN_CAPABILITY__", _admin_capability if session.owner else "")
+    html = html.replace("__APP_ENGINE_STORES_AVAILABLE__", "true" if _stores_available() else "false")
     html = html.replace("__APP_ENGINE_ROLE__", "player" if session.role == "player" else ("owner" if _PUBLIC else "local"))
     html = html.replace("__APP_ENGINE_USER__", session.name.replace("<", "").replace(">", "").replace("'", ""))
     return HTMLResponse(html, headers={"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"})
@@ -896,12 +897,18 @@ def _require_owner_action(request: Request) -> Session:
 
 _NO_STORE = {"Cache-Control": "no-store", "Content-Security-Policy": "frame-ancestors 'none'"}
 
+
+def _stores_available() -> bool:
+    return not (_PUBLIC and _PUBLIC.layout == "same")
+
+
 app.include_router(create_store_router(
     _store_bridge, _app_runtime,
     require_owner=_require_owner,
     require_owner_action=_require_owner_action,
     is_launcher_host=_is_launcher_host,
     admin_capability=_admin_capability,
+    available=_stores_available,
 ))
 
 

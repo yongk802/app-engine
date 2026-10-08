@@ -9,13 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def load(tmp_path, monkeypatch, public=False):
+def load(tmp_path, monkeypatch, public=False, shared_origin=False):
     monkeypatch.setenv('APP_ENGINE_APPS_DIR', str(tmp_path / 'local'))
     monkeypatch.setenv('APP_ENGINE_STATE_DIR', str(tmp_path / 'state'))
     monkeypatch.delenv('APP_ENGINE_PUBLIC_ORIGIN', raising=False)
+    monkeypatch.delenv('APP_ENGINE_APP_ORIGINS', raising=False)
     if public:
         monkeypatch.setenv('APP_ENGINE_PUBLIC_ORIGIN', 'https://play.example.com')
         monkeypatch.setenv('APP_ENGINE_ADMIN_SECRET', 'a-long-test-owner-secret')
+    if shared_origin:
+        monkeypatch.setenv('APP_ENGINE_APP_ORIGINS', 'same')
     import engine
     return importlib.reload(engine)
 
@@ -146,3 +149,34 @@ def test_store_route_errors_have_useful_http_status(tmp_path, monkeypatch):
         response = client.post('/api/app-engine/store-installs/preview',
                                json={'store_id': 'missing', 'app_id': 'hello', 'version': '1.0.0'}, headers=headers)
         assert response.status_code == 404
+
+
+def test_shared_origin_owner_cannot_access_any_store_management_route(tmp_path, monkeypatch):
+    module = load(tmp_path, monkeypatch, public=True, shared_origin=True)
+    with TestClient(module.app, base_url='https://play.example.com') as client:
+        sign_in = client.post('/admin/sign-in', data={'secret': 'a-long-test-owner-secret'})
+        assert sign_in.status_code == 200
+        headers = {'x-app-engine-admin': module._admin_capability}
+        for method, path, body in (
+            ('GET', 'stores/ui', None), ('GET', 'stores', None),
+            ('GET', 'store-catalog', None),
+            ('POST', 'stores', {'url': 'http://one.test'}),
+            ('DELETE', 'stores/unknown', None),
+            ('POST', 'store-installs/preview', {'store_id': 'one', 'app_id': 'hello', 'version': '1.0.0'}),
+            ('POST', 'store-installs', {'fingerprint': 'unknown'}),
+        ):
+            response = client.request(method, '/api/app-engine/' + path, json=body, headers=headers)
+            assert response.status_code == 403, (path, response.text)
+            assert 'isolated app origins' in response.json()['detail']
+            assert module._admin_capability not in response.text
+        launcher = client.get('/').text
+        assert "const STORES_AVAILABLE='false'" in launcher
+        assert "$('#app-stores').hidden=!isOwner||!STORES_AVAILABLE" in launcher
+
+
+def test_isolated_public_owner_keeps_store_management_available(tmp_path, monkeypatch):
+    module = load(tmp_path, monkeypatch, public=True)
+    with TestClient(module.app, base_url='https://play.example.com') as client:
+        client.post('/admin/sign-in', data={'secret': 'a-long-test-owner-secret'})
+        assert client.get('/api/app-engine/stores/ui').status_code == 200
+        assert "const STORES_AVAILABLE='true'" in client.get('/').text

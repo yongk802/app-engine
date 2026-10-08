@@ -210,6 +210,7 @@
 const ADMIN_HEADERS={'X-App-Engine-Admin':'__APP_ENGINE_ADMIN_CAPABILITY__'};
 // 'local' (single-user loopback), 'owner' or 'player' on a public-origin engine.
 const ENGINE_ROLE='__APP_ENGINE_ROLE__', ENGINE_USER='__APP_ENGINE_USER__';
+const STORES_AVAILABLE='__APP_ENGINE_STORES_AVAILABLE__'!=='false';
 function adminOptions(options={}) { return {...options,headers:{...(options.headers||{}),...ADMIN_HEADERS}}; }
 const state = { apps:[], instances:{}, active:null, ai:null, engine:null, rejected:[], query:'', category:'', categories:[], results:null, searchError:'' };
 let pullController = null;
@@ -224,7 +225,7 @@ function applyRole() {
   const isOwner=ENGINE_ROLE!=='player', isPublic=ENGINE_ROLE!=='local';
   $('#ai-settings').hidden=isPublic;                 // Local AI never leaves the owner's computer
   $('#players-settings').hidden=!(isPublic&&isOwner);
-  $('#app-stores').hidden=!isOwner;
+  $('#app-stores').hidden=!isOwner||!STORES_AVAILABLE;
   if(isPublic){
     const line=$('#side-user'); line.hidden=false;
     const who=element('span'); who.textContent=(isOwner?'Owner':'Player')+' · '+ENGINE_USER;

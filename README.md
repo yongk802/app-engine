@@ -97,8 +97,10 @@ are limited to 2 MiB and packages to 64 MiB; redirects are rejected.
 | `GET /api/app-engine/stores/ui` | Owner management page |
 
 All routes require an owner session and the launcher host; mutations also
-require the `X-App-Engine-Admin` capability provided by the owner page. Errors
-return `detail: {code,message}`. Preview fingerprints are single-use and bound
+require the `X-App-Engine-Admin` capability provided by the owner page. Store
+operation and payload-validation errors return `detail: {code,message}`;
+authorization and availability failures return a string `detail`.
+Preview fingerprints are single-use and bound
 to the reviewed release; a changed catalog requires a fresh preview. Mutation
 bodies are limited to 16 KiB. Missing stores/releases return 404, installation
 conflicts or changed releases return 409, and unreachable stores return 502.

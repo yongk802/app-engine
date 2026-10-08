@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import asdict
 import hashlib
 import json
@@ -18,6 +19,20 @@ from .store_contracts import (
     canonical_url,
 )
 from .store_packages import extract_package
+
+
+async def _finish_thread(operation: Callable[..., None], *args: object) -> None:
+    """Retain the caller's transaction lock until its filesystem worker ends."""
+    worker = asyncio.create_task(asyncio.to_thread(operation, *args))
+    canceled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            canceled = True
+    worker.result()
+    if canceled:
+        raise asyncio.CancelledError()
 
 
 class StoreBridge:
@@ -79,13 +94,13 @@ class StoreBridge:
                 if len(stores) >= 100:
                     raise StoreError('store_limit', 'At most 100 stores can be connected.')
                 stores += (connection,)
-            await asyncio.to_thread(self._save, stores)
+            await _finish_thread(self._save, stores)
         return connection
 
     async def remove_store(self, store_id: str) -> None:
         async with self._lock:
             self._store(store_id)
-            await asyncio.to_thread(self._save, tuple(store for store in self._stores if store.id != store_id))
+            await _finish_thread(self._save, tuple(store for store in self._stores if store.id != store_id))
             self._previews = {key: plan for key, plan in self._previews.items() if plan.store_id != store_id}
 
     def _store(self, store_id: str) -> StoreConnection:
@@ -98,13 +113,15 @@ class StoreBridge:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=15.0, follow_redirects=False, trust_env=False)
         try:
-            async with self._client.stream('GET', url, follow_redirects=False, timeout=15.0) as response:
+            async with self._client.stream('GET', url, headers={'Accept-Encoding': 'identity'}, follow_redirects=False, timeout=15.0) as response:
                 response.raise_for_status()
+                if response.headers.get('content-encoding', 'identity').lower().strip() != 'identity':
+                    raise StoreError('unsupported_encoding', 'The store must serve unencoded responses so download limits can be enforced.')
                 data = bytearray()
-                async for chunk in response.aiter_bytes():
-                    data.extend(chunk)
-                    if len(data) > limit:
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    if len(data) + len(chunk) > limit:
                         raise StoreError('invalid_package', 'Store response exceeds its size limit.')
+                    data.extend(chunk)
                 return bytes(data)
         except httpx.HTTPError:
             raise StoreError('store_unavailable', 'The store could not be reached or returned an HTTP error.') from None
@@ -184,7 +201,7 @@ class StoreBridge:
             body = await self._download(store.url + '/' + release.package_url, min(release.size_bytes, MAX_PACKAGE_BYTES))
             if len(body) != release.size_bytes or hashlib.sha256(body).hexdigest() != release.sha256:
                 raise StoreError('invalid_package', 'The downloaded package does not match its declared size and SHA-256.')
-            await asyncio.to_thread(self._publish, body, release)
+            await _finish_thread(self._publish, body, release)
             return InstalledRelease(release.id, release.version, store.id, plan.destination)
 
     def _publish(self, body: bytes, release: Release) -> None:

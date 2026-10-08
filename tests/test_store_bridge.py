@@ -1,7 +1,9 @@
 import asyncio
+import gzip
 import hashlib
 import io
 import json
+import threading
 import zipfile
 from pathlib import Path
 
@@ -224,5 +226,71 @@ def test_recursive_package_manifest_rejected_with_safe_error(tmp_path):
             await service.install(plan.fingerprint)
         assert exc.value.code == 'invalid_package'
         assert not (tmp_path / 'installed' / 'hello').exists()
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_encoded_http_response_rejected_before_decompression(tmp_path):
+    async def run():
+        from app_engine.store_bridge import StoreBridge
+        compressed = gzip.compress(b' ' * (16 * 1024 * 1024))
+        def handle(request):
+            return httpx.Response(200, headers={'content-encoding': 'gzip'}, stream=httpx.ByteStream(compressed))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            service = StoreBridge(tmp_path / 'state', tmp_path / 'installed', client=client)
+            await service.add_store('http://compressed.test')
+            result = await service.catalog()
+            assert result.stores[0].error_code == 'unsupported_encoding'
+    asyncio.run(run())
+
+
+def test_canceled_connection_write_cannot_overwrite_next_success(tmp_path, monkeypatch):
+    async def run():
+        service, client = bridge(tmp_path)
+        started, proceed = threading.Event(), threading.Event()
+        original = service._save
+        def delayed(stores):
+            if stores[-1].url == 'http://one.test':
+                started.set()
+                proceed.wait(5)
+            original(stores)
+        monkeypatch.setattr(service, '_save', delayed)
+        first = asyncio.create_task(service.add_store('http://one.test'))
+        assert await asyncio.to_thread(started.wait, 2)
+        first.cancel()
+        second = asyncio.create_task(service.add_store('http://two.test'))
+        await asyncio.sleep(0.03)
+        proceed.set()
+        await asyncio.gather(first, second, return_exceptions=True)
+        # Let an incorrectly detached persistence worker finish before checking.
+        await asyncio.to_thread(lambda: original.__self__.path.exists())
+        await asyncio.sleep(0.03)
+        assert [store.url for store in service.stores()] == ['http://one.test', 'http://two.test']
+        assert len(json.loads(service.path.read_text())['stores']) == 2
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_canceled_publication_finishes_before_install_lock_released(tmp_path, monkeypatch):
+    async def run():
+        service, client = bridge(tmp_path)
+        store = await service.add_store('http://one.test')
+        plan = await service.preview(store.id, 'hello', '1.0.0')
+        started, proceed = threading.Event(), threading.Event()
+        original = service._publish
+        def delayed(body, release):
+            started.set()
+            proceed.wait(5)
+            original(body, release)
+        monkeypatch.setattr(service, '_publish', delayed)
+        task = asyncio.create_task(service.install(plan.fingerprint))
+        assert await asyncio.to_thread(started.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0.03)
+        assert service._lock.locked()
+        proceed.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert (tmp_path / 'installed' / 'hello' / 'index.html').is_file()
+        assert not service._lock.locked()
         await client.aclose()
     asyncio.run(run())

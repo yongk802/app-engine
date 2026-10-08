@@ -572,3 +572,9 @@ Released under the [MIT License](LICENSE). Free to use, modify, and distribute.
 ### Launcher regression tests
 
 Run `npm ci` followed by `npm test` for the browser-launcher tests. These cover managed runtime launch, approval cancellation, browser permissions, and Night City Table focus messages. The Python API tests remain `python -m pytest tests/test_api.py`.
+
+### External assistant panel
+
+The standalone launcher can embed your own chat page and expose installed app
+controls to its harness over authenticated MCP. The panel and app backends load
+on demand. See [external chat setup and app tool declarations](docs/assistant.md).

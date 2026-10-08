@@ -42,6 +42,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
+from app_engine.assistant import create_assistant_router
 from app_engine.chat import ChatRuntime
 from app_engine.media_types import asset_media_type
 from app_engine.config import ConfigStore
@@ -121,6 +122,8 @@ _chat = ChatRoom(STATE_DIR) if _PUBLIC else None
 _PUBLIC_APPS = frozenset(a.strip() for a in os.environ.get("APP_ENGINE_PUBLIC_APPS", "").split(",") if a.strip()) if _PUBLIC else None
 _minted_admin_secret = _accounts.ensure_admin_secret(os.environ.get("APP_ENGINE_ADMIN_SECRET")) if _accounts else None
 _sign_in_limiter = SignInLimiter()
+
+_assistant_approved_plans: set[str] = set()
 
 _runtime_subject = HostSubject("local", "admin")
 _runtime_host = LocalHostAdapter(
@@ -214,7 +217,7 @@ app.include_router(
         authenticate=_runtime_authenticate,
         may_rebuild=lambda request: _session(request).role != "player",
         standing_approval=(lambda fingerprint: _accounts.plan_approved(fingerprint)) if _accounts else None,
-        record_approval=(lambda fingerprint: (_accounts.approve_plan(fingerprint), _audit.record("plan.approved", fingerprint=fingerprint))) if _accounts else None,
+        record_approval=(lambda fingerprint: (_accounts.approve_plan(fingerprint), _audit.record("plan.approved", fingerprint=fingerprint))) if _accounts else _assistant_approved_plans.add,
     )
 )
 _registry = ModelRegistry.load(Path(__file__).parent / "model-registry.json")
@@ -920,6 +923,15 @@ app.include_router(create_store_router(
     is_launcher_host=_is_launcher_host,
     admin_capability=_admin_capability,
     available=_stores_available,
+))
+
+
+app.include_router(create_assistant_router(
+    _app_runtime, STATE_DIR,
+    require_owner_action=_require_owner_action,
+    is_launcher_host=_is_launcher_host,
+    available=not bool(_PUBLIC),
+    approved=lambda fingerprint: fingerprint in _assistant_approved_plans,
 ))
 
 

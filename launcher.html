@@ -138,6 +138,7 @@
   .shots { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
   .shots img { width:100%; border:1px solid var(--line); border-radius:9px; background:#0d1016; }
 </style>
+<link rel="stylesheet" href="/assistant-assets/panel.css">
 </head>
 <body>
   <nav id="sidebar" aria-label="Applications">
@@ -731,7 +732,26 @@ $('#invite-form').onsubmit=async event=>{ event.preventDefault();
   const apps=[...document.querySelectorAll('#invite-apps input:checked')].map(box=>box.value);
   try{ const r=await playersRequest('/admin/players',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('#invite-username').value.trim(),name:$('#invite-name').value.trim(),apps})}); $('#invite-username').value=''; $('#invite-name').value=''; showInviteLink(r.invite); await renderPlayers(); }
   catch(error){ const box=$('#invite-link'); box.hidden=false; box.textContent=error.message; } };
+window.AppEngineAssistantHost = Object.freeze({
+  async open(appId) {
+    const app = state.apps.find(item => item.id === appId);
+    if (!app) throw new Error('App not found: ' + appId);
+    const button = [...document.querySelectorAll('#applist .app-btn')].find(item => item.dataset.appId === appId);
+    return openApp(app, button);
+  },
+  async request(path, options = {}) {
+    if (!/^\/api\/assistant\/(settings|key|events)(\?.*)?$/.test(path)) throw new Error('Unsupported assistant request');
+    const response = await fetch(path, adminOptions(options));
+    if (!response.ok) {
+      let message = 'HTTP ' + response.status;
+      try { const data = await response.json(); if (typeof data.detail === 'string') message = data.detail; } catch {}
+      throw new Error(message);
+    }
+    return response.status === 204 ? null : response.json();
+  }
+});
 boot();
 </script>
+<script src="/assistant-assets/panel.js" defer></script>
 </body>
 </html>

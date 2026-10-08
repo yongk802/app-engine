@@ -75,6 +75,8 @@ def test_wheel_contains_importable_modules_and_standalone_assets(tmp_path):
     assert any(name.endswith("app_engine/__init__.py") for name in names)
     assert any(name.endswith("app_engine/contracts.py") for name in names)
     assert any(name.endswith("app_engine/manifest.py") for name in names)
+    assert any(name.endswith("app_engine/assistant_ui/panel.js") for name in names)
+    assert any(name.endswith("app_engine/assistant_ui/panel.css") for name in names)
     assert any(name.endswith("studio/index.html") for name in names)
     assert any("templates/" in name for name in names)
     assert any(name.endswith("app_engine/multiplayer/server.mjs") for name in names), "the Node room service ships in the wheel"

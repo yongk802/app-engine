@@ -49,7 +49,9 @@ If you're new to contributing on GitHub, the flow is:
 - **No new runtime dependencies** without discussion — the engine is
   deliberately small (FastAPI, uvicorn, httpx).
 - **Local-only AI** — chat must resolve to a loopback endpoint. Remote/cloud
-  inference endpoints are rejected by design; don't loosen that.
+  inference endpoints are rejected by design; don't loosen that. The separate
+  external assistant panel embeds an owner-configured web page; its harness
+  owns any remote inference and connects explicitly through MCP.
 - **Tutor knowledge** — every chat-enabled app needs at least two reviewed
   entries in its knowledge pack (CI enforces this). Keep facts concise and
   cite a source note.

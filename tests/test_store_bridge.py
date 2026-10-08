@@ -208,3 +208,21 @@ def test_idna_equivalent_hosts_share_connection(tmp_path):
         assert len(service.stores()) == 1
         await client.aclose()
     asyncio.run(run())
+
+
+def test_recursive_package_manifest_rejected_with_safe_error(tmp_path):
+    async def run():
+        from app_engine.store_bridge import StoreError
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('app.json', '[' * 10000 + '0' + ']' * 10000)
+            archive.writestr('index.html', 'bad')
+        service, client = bridge(tmp_path, body=buffer.getvalue())
+        store = await service.add_store('http://one.test')
+        plan = await service.preview(store.id, 'hello', '1.0.0')
+        with pytest.raises(StoreError) as exc:
+            await service.install(plan.fingerprint)
+        assert exc.value.code == 'invalid_package'
+        assert not (tmp_path / 'installed' / 'hello').exists()
+        await client.aclose()
+    asyncio.run(run())

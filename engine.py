@@ -75,6 +75,8 @@ from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationE
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.routes import create_app_engine_router
 from app_engine.runtime import DefaultAppEngineRuntime, LocalHostAdapter
+from app_engine.store_bridge import StoreBridge
+from app_engine.store_routes import create_store_router
 from app_engine.search import category_counts, search_apps
 from app_engine.system_probe import SystemProbe
 from app_engine.contracts import HostSubject
@@ -85,6 +87,8 @@ APPS_DIR = Path(os.environ.get("APP_ENGINE_APPS_DIR", "./apps")).expanduser().re
 STATE_DIR = Path(
     os.environ.get("APP_ENGINE_STATE_DIR", "~/.config/app-engine/app-state")
 ).expanduser()
+STORE_APPS_DIR = STATE_DIR / "store-apps"
+_store_bridge = StoreBridge(STATE_DIR, STORE_APPS_DIR, local_roots=(APPS_DIR,))
 MAX_STATE_BYTES = 100 * 1024  # 100 KB, matches Atrium
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -120,7 +124,7 @@ _sign_in_limiter = SignInLimiter()
 
 _runtime_subject = HostSubject("local", "admin")
 _runtime_host = LocalHostAdapter(
-    apps_roots=(APPS_DIR,),
+    apps_roots=(APPS_DIR, STORE_APPS_DIR),
     state_root=STATE_DIR,
     subject=_runtime_subject,
 )
@@ -153,6 +157,7 @@ async def lifespan(_: FastAPI):
         await _proxy.aclose()
     await _ollama_manager.close()
     await _multiplayer.close()
+    await _store_bridge.close()
 
 
 app = FastAPI(title="app-engine", lifespan=lifespan)
@@ -245,7 +250,7 @@ class App:
 
 
 def inspect_apps() -> tuple[dict[str, App], list[dict]]:
-    """Scan APPS_DIR's immediate children.
+    """Scan local and store-installed app roots, preferring local app IDs.
 
     Returns (apps_by_id, rejected). `rejected` lists folders that look like an
     app but failed validation — surfaced so a malformed manifest is visible
@@ -253,9 +258,9 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
     """
     out: dict[str, App] = {}
     rejected: list[dict] = []
-    if not APPS_DIR.is_dir():
-        return out, rejected
-    for d in sorted(APPS_DIR.iterdir()):
+    directories = [d for root in (APPS_DIR, STORE_APPS_DIR) if root.is_dir()
+                   for d in sorted(root.iterdir())]
+    for d in directories:
         if d.name.startswith(".") or not d.is_dir():
             continue
         manifest = d / "app.json"
@@ -273,6 +278,8 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
             continue
         n = _manifest.normalize(m, d.name)
         app_id = n["id"]
+        if app_id in out:
+            continue
         out[app_id] = App(
             id=app_id,
             label=n["label"],
@@ -888,6 +895,14 @@ def _require_owner_action(request: Request) -> Session:
 
 
 _NO_STORE = {"Cache-Control": "no-store", "Content-Security-Policy": "frame-ancestors 'none'"}
+
+app.include_router(create_store_router(
+    _store_bridge, _app_runtime,
+    require_owner=_require_owner,
+    require_owner_action=_require_owner_action,
+    is_launcher_host=_is_launcher_host,
+    admin_capability=_admin_capability,
+))
 
 
 @app.get("/join/{code}")

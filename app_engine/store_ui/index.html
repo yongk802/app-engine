@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="app-engine-admin" content="__APP_ENGINE_ADMIN_CAPABILITY__">
+<title>App stores · app-engine</title>
+<style>
+:root { color-scheme:dark; font:15px system-ui,sans-serif; background:#10141c; color:#e7edf5; }
+body { max-width:1100px; margin:auto; padding:32px 24px; }
+header { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:28px; }
+h1 { margin:0 0 8px; font-size:30px; } h2 { font-size:20px; margin:0 0 18px; }
+p { line-height:1.5; } .muted,small { color:#a8b5c7; } a { color:#a3c3ff; }
+section { border:1px solid #344155; background:#171e2a; border-radius:14px; padding:22px; margin-bottom:24px; }
+form,.controls,.row { display:flex; flex-wrap:wrap; gap:12px; align-items:end; }
+label { display:grid; gap:7px; flex:1; min-width:180px; }
+input,button { font:inherit; border:1px solid #40516a; border-radius:8px; padding:10px 12px; }
+input { background:#101722; color:inherit; min-width:0; }
+button { background:#27354a; color:inherit; cursor:pointer; } button.primary { background:#2862cf; border-color:#2862cf; }
+button:disabled { opacity:.5; cursor:wait; }
+.row { align-items:center; border-top:1px solid #344155; padding-top:16px; margin-top:16px; }
+.row .details { flex:1; min-width:200px; overflow-wrap:anywhere; } .row p { margin:5px 0; }
+#releases { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:14px; margin-top:20px; }
+.release { background:#101722; border:1px solid #344155; border-radius:10px; padding:18px; overflow-wrap:anywhere; }
+.release h3 { margin:0 0 6px; } .release small { display:block; margin:8px 0 16px; }
+#message { border-radius:8px; padding:12px; background:#133425; } #message.error { background:#47252b; color:#ffd4d7; }
+#message:empty { display:none; }
+dialog { width:min(620px,calc(100vw - 48px)); background:#171e2a; color:inherit; border:1px solid #526783; border-radius:14px; padding:24px; }
+dialog::backdrop { background:#000a; } dl { display:grid; grid-template-columns:110px 1fr; gap:12px; } dt { color:#a8b5c7; } dd { margin:0; overflow-wrap:anywhere; }
+@media(max-width:600px) { body { padding:20px 14px; } header { align-items:start; } form button { width:100%; } dl { grid-template-columns:1fr; gap:5px; } dd { margin-bottom:10px; } }
+</style>
+</head>
+<body>
+<header><div><h1>App stores</h1><span class="muted">Connect stores, review releases, and install apps.</span></div><a href="/" target="_blank" rel="noopener">Open launcher ↗</a></header>
+<p id="message" role="status" aria-live="polite"></p>
+<section><h2>Connected stores</h2>
+<form id="connect"><label>Store URL<input id="store-url" type="url" placeholder="https://your-store.example" required></label><label>Name (optional)<input id="store-name" maxlength="200" placeholder="My store"></label><button class="primary">Connect store</button></form>
+<div id="stores"></div></section>
+<section><div class="controls"><h2 style="flex:1;margin:0">Available releases</h2><button id="refresh">Refresh stores</button></div>
+<label style="margin-top:18px">Search store apps<input id="search" type="search" placeholder="App name, description, category, or source…"></label><div id="releases"></div></section>
+<dialog id="preview" aria-labelledby="preview-title"><h2 id="preview-title">Review installation</h2><p>The package will be checked against the digest and size below before installation.</p><p id="preview-error" role="alert" style="color:#ffd4d7"></p><dl id="preview-details"></dl><div class="controls"><button id="cancel">Cancel</button><button id="install" class="primary">Install app</button></div></dialog>
+<script>
+const $=selector=>document.querySelector(selector);
+const capability=$('meta[name="app-engine-admin"]').content;
+let catalog={apps:[],stores:[]}, plan=null;
+function node(tag,text,className){const value=document.createElement(tag);if(text!==undefined)value.textContent=text;if(className)value.className=className;return value;}
+function message(text,error=false){$('#message').textContent=text;$('#message').classList.toggle('error',error);$('#preview-error').textContent=error&&$('#preview').open?text:'';}
+async function request(path,method='GET',body){
+  const response=await fetch('/api/app-engine/'+path,{method,headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'X-App-Engine-Admin':capability})},...(body===undefined?{}:{body:JSON.stringify(body)})});
+  if(!response.ok){let detail;try{detail=(await response.json()).detail;}catch{}throw new Error(typeof detail==='string'?detail:detail?.message||`Request failed (HTTP ${response.status}).`);}
+  return response.status===204?null:response.json();
+}
+async function run(action){message('');try{await action();}catch(error){message(error.message,true);}}
+function renderStores(){
+  const list=$('#stores');list.replaceChildren();
+  if(!catalog.stores.length){list.append(node('p','No stores connected yet.','muted'));return;}
+  for(const store of catalog.stores){
+    const row=node('div',undefined,'row'),details=node('div',undefined,'details');
+    details.append(node('strong',store.name),node('p',store.store_url,'muted'),node('small',store.error?`Unavailable: ${store.error}`:'Connected'));
+    const disconnect=node('button','Disconnect');disconnect.onclick=()=>run(async()=>{await request('stores/'+encodeURIComponent(store.store_id),'DELETE');await refresh();});
+    row.append(details,disconnect);list.append(row);
+  }
+}
+function renderReleases(){
+  const list=$('#releases'),terms=$('#search').value.toLocaleLowerCase().split(/\s+/).filter(Boolean);list.replaceChildren();
+  const entries=catalog.apps.filter(item=>{const app=item.release,text=[app.id,app.label,app.description,app.author,...app.categories,item.store_url].join(' ').toLocaleLowerCase();return terms.every(term=>text.includes(term));});
+  for(const item of entries){
+    const app=item.release,card=node('article',undefined,'release');card.append(node('h3',app.icon+' '+app.label),node('div',app.id+' · '+app.version,'muted'),node('p',app.description),node('small','Source: '+item.store_url));
+    const review=node('button','Review install');review.onclick=()=>run(async()=>{plan=await request('store-installs/preview','POST',{store_id:item.store_id,app_id:app.id,version:app.version});renderPreview();});card.append(review);list.append(card);
+  }
+  if(!entries.length)list.append(node('p',catalog.apps.length?'No matching releases.':'No releases available. Connect a store or refresh to try again.','muted'));
+}
+function renderPreview(){
+  const list=$('#preview-details');list.replaceChildren();
+  for(const [label,value] of [['App',plan.release.label+' ('+plan.release.id+')'],['Version',plan.release.version],['Source',plan.store_url],['SHA-256',plan.release.sha256],['Size',plan.release.size_bytes.toLocaleString()+' bytes'],['Destination',plan.destination]])list.append(node('dt',label),node('dd',value));
+  $('#preview').showModal();
+}
+async function refresh(){catalog=await request('store-catalog');renderStores();renderReleases();}
+$('#connect').onsubmit=event=>{event.preventDefault();run(async()=>{await request('stores','POST',{url:$('#store-url').value.trim(),name:$('#store-name').value.trim()});$('#connect').reset();await refresh();});};
+$('#refresh').onclick=()=>run(refresh);$('#search').oninput=renderReleases;
+$('#cancel').onclick=()=>{$('#preview').close();plan=null;};
+$('#install').onclick=()=>run(async()=>{if(!plan)return;$('#install').disabled=true;try{const installed=await request('store-installs','POST',{fingerprint:plan.fingerprint});$('#preview').close();plan=null;message('Installed '+installed.app_id+' '+installed.version+'. Refresh the launcher to open it.');}finally{$('#install').disabled=false;}});
+run(refresh);
+</script>
+</body>
+</html>

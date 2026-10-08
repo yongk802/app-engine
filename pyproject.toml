@@ -33,6 +33,7 @@ app_engine = [
     "*.json",
     "knowledge/**/*.json",
     "studio/**/*",
+    "store_ui/**/*",
     "templates/**/*",
     "multiplayer/*.mjs",
 ]

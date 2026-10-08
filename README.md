@@ -56,6 +56,49 @@ APP_ENGINE_APPS_DIR=/path/to/personal-apps python engine.py
 You can equally write your own apps — the only requirement is an `app.json`
 manifest (and usually an `index.html`).
 
+### Install apps from stores
+
+Open **App stores ↗** in the launcher's sidebar to connect one or more store
+URLs. Give each connection an optional name, refresh the merged catalog, and
+search releases. Every release retains its source store and version. Choose
+**Review install** to inspect its source, version, SHA-256 digest, download size,
+and destination, then choose **Install app**. Refresh the launcher to open it.
+Installation does not start an app or execute its build commands; managed apps
+still use the engine's existing launch-plan review.
+
+Connections persist in `stores.json` under `APP_ENGINE_STATE_DIR`. Packages go
+into that directory's `store-apps/` folder, alongside the local collection
+configured by `APP_ENGINE_APPS_DIR`. Local apps take priority and installations
+never replace an existing app ID. Disconnecting a store keeps installed apps.
+Unavailable stores show individual errors while other catalogs remain usable.
+Store management is available only to the owner on the launcher origin.
+
+The store protocol is HTTP version 1. A store's `GET /api/v1/catalog` returns
+`{"protocol_version":1,"name":"My store","apps":[...]}`. Each release provides
+`id`, `version`, `label`, `icon`, `description`, `categories` (a string array),
+`author`, `min_engine_version`, `package_url` (relative to the store URL),
+`sha256` (64 lowercase hexadecimal characters), and `size_bytes`. The package
+is a ZIP with `app.json` at its root. The engine verifies the catalog, package
+size and digest, manifest, and safe archive paths before publishing it. Catalogs
+are limited to 2 MiB and packages to 64 MiB; redirects are rejected.
+
+| Engine endpoint | Request / result |
+|---|---|
+| `GET /api/app-engine/stores` | Connected stores: `[{id,url,name}]` |
+| `POST /api/app-engine/stores` | `{url,name?}` → connection (201) |
+| `DELETE /api/app-engine/stores/{store_id}` | Disconnect (204) |
+| `GET /api/app-engine/store-catalog?q=…` | `{apps:[{store_id,store_url,release}],stores:[{store_id,store_url,name,error_code,error}]}` |
+| `POST /api/app-engine/store-installs/preview` | `{store_id,app_id,version}` → `{fingerprint,store_id,store_url,release,destination}` |
+| `POST /api/app-engine/store-installs` | `{fingerprint}` → `{app_id,version,store_id,root}` (201) |
+| `GET /api/app-engine/stores/ui` | Owner management page |
+
+All routes require an owner session and the launcher host; mutations also
+require the `X-App-Engine-Admin` capability provided by the owner page. Errors
+return `detail: {code,message}`. Preview fingerprints are single-use and bound
+to the reviewed release; a changed catalog requires a fresh preview. Mutation
+bodies are limited to 16 KiB. Missing stores/releases return 404, installation
+conflicts or changed releases return 409, and unreachable stores return 502.
+
 ## App Studio and managed apps
 
 The standalone distribution includes the same App Studio Atrium embeds. After

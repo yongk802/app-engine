@@ -84,7 +84,9 @@ The store protocol is HTTP version 1. A store's `GET /api/v1/catalog` returns
 `sha256` (64 lowercase hexadecimal characters), and `size_bytes`. The package
 is a ZIP with `app.json` at its root. The engine verifies the catalog, package
 size and digest, manifest, and safe archive paths before publishing it. Catalogs
-are limited to 2 MiB and packages to 64 MiB; redirects are rejected.
+are limited to 2 MiB and packages to 256 MiB; expanded contents remain limited
+to 256 MiB. Redirects are rejected. Engines with the former 64 MiB download
+limit must be updated before installing larger releases.
 
 | Engine endpoint | Request / result |
 |---|---|

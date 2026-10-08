@@ -25,6 +25,22 @@ def release(body, **overrides):
     return dict(id='hello', version='1.0.0', label='Hello', icon='H', description='', categories=[], author='', min_engine_version='', package_url='api/v1/packages/hello/1.0.0', sha256=hashlib.sha256(body).hexdigest(), size_bytes=len(body), **overrides)
 
 
+@pytest.mark.parametrize('size', [65 * 1024 * 1024, 256 * 1024 * 1024])
+def test_release_listing_accepts_bounded_large_packages(size):
+    from app_engine.store_contracts import Release
+    listing = release(b'fixture')
+    listing['size_bytes'] = size
+    assert Release.parse(listing).size_bytes == size
+
+
+def test_release_listing_rejects_packages_above_256_mib():
+    from app_engine.store_contracts import Release, StoreError
+    listing = release(b'fixture')
+    listing['size_bytes'] = 256 * 1024 * 1024 + 1
+    with pytest.raises(StoreError, match='metadata'):
+        Release.parse(listing)
+
+
 def bridge(tmp_path, catalogs=None, body=None):
     from app_engine.store_bridge import StoreBridge
     body = body or package()

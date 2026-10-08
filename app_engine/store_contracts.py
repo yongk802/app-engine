@@ -6,7 +6,7 @@ import re
 from urllib.parse import unquote, urlsplit, urlunsplit
 import httpx
 
-MAX_PACKAGE_BYTES = 64 * 1024 * 1024
+MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
 SEGMENT = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$')
 APP_ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')

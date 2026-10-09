@@ -1,0 +1,39 @@
+{
+  "manifest_version": 2,
+  "id": "rpmcc",
+  "label": "RPM Command Center",
+  "icon": "📦",
+  "default_target": "web",
+  "metadata": {
+    "version": "0.1.0",
+    "description": "Build, publish, and release snc-provision RPMs from one page: press Release, watch every step stream live, and answer the manual CHG gates by clicking instead of typing into a terminal.",
+    "categories": ["developer", "system"],
+    "author": "yong.kim",
+    "min_engine_version": "0.1.0",
+    "screenshots": ["media/running.png"]
+  },
+  "browser": {
+    "sandbox": "allow-scripts allow-same-origin"
+  },
+  "targets": {
+    "web": {
+      "kind": "web",
+      "runtime": {
+        "driver": "process",
+        "scope": "shared",
+        "build": [
+          {
+            "argv": ["go", "build", "-o", "rpmcc-server", "."],
+            "cwd": "backend"
+          }
+        ],
+        "start": {
+          "argv": ["./rpmcc-server", "web", "--addr", "127.0.0.1:$PORT"],
+          "cwd": "backend"
+        },
+        "health": { "kind": "http", "path": "/healthz" },
+        "idle_timeout_seconds": 3600
+      }
+    }
+  }
+}

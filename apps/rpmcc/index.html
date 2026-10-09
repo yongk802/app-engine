@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RPM Command Center</title>
+<style>
+  :root {
+    --bg: #10201c;
+    --bg2: #16302a;
+    --line: #245044;
+    --fg: #e6f4ef;
+    --dim: #8fb3a8;
+    --green: #35e08a;
+    --red: #43434c;
+    --red2: #56565f;
+    --amber: #ffc247;
+    --cyan: #5fd7d0;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+    background: var(--bg2);
+  }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .02em; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .pill {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--dim);
+  }
+  .pill.working { color: var(--amber); border-color: var(--amber); }
+  .pill.waiting { color: var(--cyan); border-color: var(--cyan); }
+  .pill.done { color: var(--green); border-color: var(--green); }
+  .pill.failed { color: #ff7a7a; border-color: #ff7a7a; }
+
+  main { flex: 1; display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } aside { display: none; } }
+
+  .col { min-height: 0; display: flex; flex-direction: column; }
+  .col.left { border-right: 1px solid var(--line); }
+
+  .banner {
+    padding: 10px 16px; background: #3a2222; border-bottom: 1px solid #5a3030;
+    color: #ffcfcf; font-size: 12px; white-space: pre-line; display: none;
+  }
+  .banner.show { display: block; }
+
+  .card {
+    margin: 14px 16px; padding: 16px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--bg2);
+  }
+  .card.waiting { border-color: var(--cyan); box-shadow: 0 0 0 1px rgba(95,215,208,.25); }
+  .card h3 { margin: 0 0 6px; font-size: 13px; color: var(--cyan); }
+  .card .stepof { font-size: 11px; color: var(--dim); }
+  .q { margin: 8px 0 10px; }
+  .info { color: var(--dim); font-size: 12px; margin: 6px 0; }
+  .warn { color: var(--amber); font-size: 12px; margin: 6px 0; }
+  ol.ins { margin: 8px 0 10px 18px; padding: 0; font-size: 13px; }
+  ol.ins li { margin: 2px 0; }
+  .card a { color: var(--cyan); }
+
+  input[type=text], input[type=password] {
+    width: 100%; padding: 9px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: #0d1a17; color: var(--fg); font-size: 14px;
+  }
+  .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--line); background: #1c3830; color: var(--fg);
+  }
+  button:hover:not(:disabled) { border-color: var(--cyan); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--green); color: #06251a; border-color: var(--green); font-weight: 700; }
+  button.big { padding: 13px 26px; font-size: 16px; }
+  button.danger { background: #4a2020; border-color: #6a3030; }
+  button.seg { padding: 8px 12px; }
+  button.seg.on { background: var(--cyan); color: #06251a; border-color: var(--cyan); font-weight: 600; }
+
+  .hint { color: var(--dim); font-size: 12px; margin-top: 8px; }
+
+  h2 { font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+       color: var(--dim); margin: 0; padding: 12px 16px 6px; }
+
+  #log { flex: 1; overflow-y: auto; padding: 0 16px 16px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  #log .ln { display: flex; gap: 10px; padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+  #log .t { color: #5b7d73; flex: 0 0 auto; }
+  #log .m { flex: 1; }
+  #log .info .m { color: var(--fg); }
+  #log .warn .m { color: var(--amber); }
+  #log .error .m { color: #ff8a8a; }
+  #log .success .m { color: var(--green); }
+  #log .detail .m { color: var(--dim); }
+  #log .stream .m { color: #9fd6c4; }
+  #log .cmd .m { color: var(--cyan); }
+
+  aside { padding-bottom: 16px; overflow-y: auto; }
+  .steps { list-style: none; margin: 0; padding: 0 16px; font-size: 12px; }
+  .steps li { padding: 5px 0 5px 20px; position: relative; color: var(--dim); }
+  .steps li::before { content: "·"; position: absolute; left: 6px; color: #40645a; }
+  .steps li.done { color: #7fbfa5; }
+  .steps li.done::before { content: "✓"; color: var(--green); }
+  .steps li.active { color: var(--fg); font-weight: 600; }
+  .steps li.active::before { content: "▸"; color: var(--amber); }
+  .steps li.failed::before { content: "✗"; color: #ff7a7a; }
+
+  .kv { padding: 0 16px; font-size: 12px; }
+  .kv div { display: flex; gap: 8px; padding: 2px 0; }
+  .kv .k { color: var(--dim); flex: 0 0 110px; }
+  .kv .v { flex: 1; word-break: break-all; }
+  pre.env { margin: 0; padding: 0 16px; font-size: 11px; color: var(--dim); white-space: pre-wrap; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📦 RPM Command Center</h1>
+  <span class="sub" id="sub">…</span>
+  <span class="spacer"></span>
+  <span class="pill" id="status">idle</span>
+</header>
+
+<div class="banner" id="vpn"></div>
+
+<main>
+  <div class="col left">
+    <div id="prompt"></div>
+    <section class="card" id="controls">
+      <h3>RELEASE</h3>
+      <button id="go" class="primary big">▶ Release</button>
+      <div class="row">
+        <button class="seg" id="modedry">Dry run</button>
+        <button class="seg" id="modelive">Live</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="reset">Reset state</button>
+      </div>
+      <div class="hint" id="modehint">Dry run walks the plan without touching anything. Live runs it for real.</div>
+    </section>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <aside class="col">
+    <h2>Plan</h2>
+    <ul class="steps" id="plan"></ul>
+    <h2>Run state</h2>
+    <div class="kv" id="state"></div>
+    <h2>Last run</h2>
+    <div class="kv" id="last"></div>
+    <h2>Environment</h2>
+    <pre class="env" id="env"></pre>
+  </aside>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // app-engine injects <base href="/apps/rpmcc/">, so a *relative* url keeps
+  // working both inside the app iframe and when the backend is opened directly.
+  const API = "api/";
+  const $ = (id) => document.getElementById(id);
+
+  let running = false, dryRun = false, plan = [], pending = null, es = null;
+
+  function setStatus(text, cls) {
+    const p = $("status");
+    p.textContent = text;
+    p.className = "pill" + (cls ? " " + cls : "");
+  }
+
+  function addLog(level, text) {
+    if (level === "cmd") level = "detail";
+    const now = new Date();
+    const stamp = now.toTimeString().slice(0, 8);
+    const line = document.createElement("div");
+    line.className = "ln " + level;
+    const t = document.createElement("span");
+    t.className = "t"; t.textContent = stamp;
+    const m = document.createElement("span");
+    m.className = "m"; m.textContent = text;
+    line.append(t, m);
+    const log = $("log");
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 60;
+    log.appendChild(line);
+    while (log.children.length > 3000) log.removeChild(log.firstChild);
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+
+  function renderPlan() {
+    const ul = $("plan");
+    ul.textContent = "";
+    plan.forEach((p) => {
+      const li = document.createElement("li");
+      li.dataset.id = p.id;
+      li.textContent = p.name;
+      ul.appendChild(li);
+    });
+  }
+
+  function markStep(id, status) {
+    const li = $("plan").querySelector('li[data-id="' + id + '"]');
+    if (!li) return;
+    li.classList.remove("active", "done", "failed");
+    if (status === "running") li.classList.add("active");
+    else if (status === "done") li.classList.add("done");
+    else if (status === "failed") li.classList.add("failed");
+  }
+
+  function renderKV(el, obj) {
+    el.textContent = "";
+    if (!obj || !Object.keys(obj).length) {
+      const d = document.createElement("div");
+      d.innerHTML = '<span class="v">nothing yet</span>';
+      el.appendChild(d);
+      return;
+    }
+    Object.keys(obj).sort().forEach((k) => {
+      const v = obj[k];
+      const row = document.createElement("div");
+      const kk = document.createElement("span");
+      kk.className = "k"; kk.textContent = k.replace(/_/g, " ");
+      const vv = document.createElement("span");
+      vv.className = "v";
+      const text = typeof v === "string" ? v : JSON.stringify(v);
+      if (/^https?:\/\//.test(text)) {
+        const a = document.createElement("a");
+        a.href = text; a.target = "_blank"; a.rel = "noopener"; a.textContent = text;
+        vv.appendChild(a);
+      } else {
+        vv.textContent = text;
+      }
+      row.append(kk, vv);
+      el.appendChild(row);
+    });
+  }
+
+  function updateGo() {
+    $("go").disabled = running;
+    $("go").textContent = running ? "▶ running…" : (dryRun ? "▶ Dry run the release" : "▶ Release");
+    $("stop").disabled = !running;
+    $("modedry").classList.toggle("on", dryRun);
+    $("modelive").classList.toggle("on", !dryRun);
+    $("modehint").textContent = dryRun
+      ? "Dry run: prints every step, touches nothing, saves no state."
+      : "Live: runs the real workflow (SSH, rpmbuild, Nexus, CHG).";
+  }
+
+  // ── prompt cards ────────────────────────────────────────────────────────
+
+  function clearPrompt() {
+    $("prompt").textContent = "";
+    pending = null;
+    if (running) setStatus("running", "working");
+  }
+
+  function card(p) {
+    const el = document.createElement("section");
+    el.className = "card waiting";
+    const h = document.createElement("h3");
+    h.textContent = p.title || p.kind;
+    const of = document.createElement("div");
+    of.className = "stepof";
+    of.textContent = "Step " + (p.step_num || "?") + " of " + (p.step_total || "?") +
+      " — " + (p.step_name || p.step_id);
+    el.append(h, of);
+
+    (p.links || []).forEach((l) => {
+      const d = document.createElement("div");
+      d.className = "info";
+      const a = document.createElement("a");
+      a.href = l.url; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = l.label + " " + l.url;
+      d.appendChild(a);
+      el.appendChild(d);
+    });
+    (p.infos || []).forEach((t) => {
+      const d = document.createElement("div");
+      d.className = "info"; d.textContent = t; el.appendChild(d);
+    });
+    (p.warnings || []).forEach((t) => {
+      const d = document.createElement("div");
+      d.className = "warn"; d.textContent = "⚠ " + t; el.appendChild(d);
+    });
+
+    const q = document.createElement("div");
+    q.className = "q"; q.textContent = p.question || "";
+    el.appendChild(q);
+
+    if (p.instructions && p.instructions.length) {
+      const ol = document.createElement("ol");
+      ol.className = "ins";
+      p.instructions.forEach((i) => {
+        const li = document.createElement("li");
+        li.textContent = i.text;
+        ol.appendChild(li);
+      });
+      el.appendChild(ol);
+    }
+
+    const row = document.createElement("div");
+    row.className = "row";
+    el.appendChild(row);
+
+    const answer = (body) => fetch(API + "answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ id: p.id }, body)),
+    }).then(() => clearPrompt());
+
+    if (p.kind === "secret" || p.kind === "input") {
+      const inp = document.createElement("input");
+      inp.type = p.kind === "secret" ? "password" : "text";
+      inp.value = p.value || p.default || "";
+      if (p.validate) inp.placeholder = p.validate;
+      inp.autocomplete = "off";
+      el.appendChild(inp);
+      const ok = document.createElement("button");
+      ok.className = "primary";
+      ok.textContent = "Continue";
+      const submit = () => { ok.disabled = true; answer({ value: inp.value }); };
+      ok.onclick = submit;
+      inp.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+      row.appendChild(ok);
+      setTimeout(() => inp.focus(), 20);
+    } else if (p.kind === "choice") {
+      (p.choices || []).forEach((c) => {
+        const b = document.createElement("button");
+        b.textContent = c.label;
+        b.className = c.value === "q" ? "danger" : (c.value === "r" ? "primary" : "");
+        b.onclick = () => { b.disabled = true; answer({ value: c.value }); };
+        row.appendChild(b);
+      });
+    } else if (p.kind === "nav") {
+      const next = document.createElement("button");
+      next.className = "primary";
+      next.textContent = "Next step";
+      next.onclick = () => { next.disabled = true; answer({ nav: "done" }); };
+      row.appendChild(next);
+      if (p.allow_skip) {
+        const s = document.createElement("button");
+        s.textContent = "Skip";
+        s.onclick = () => { s.disabled = true; answer({ nav: "skip" }); };
+        row.appendChild(s);
+      }
+      if (p.allow_back) {
+        const b = document.createElement("button");
+        b.textContent = "Back";
+        b.onclick = () => { b.disabled = true; answer({ nav: "back" }); };
+        row.appendChild(b);
+      }
+      if (p.allow_quit) {
+        const qq = document.createElement("button");
+        qq.className = "danger";
+        qq.textContent = "Quit + save";
+        qq.onclick = () => { qq.disabled = true; answer({ nav: "quit" }); };
+        row.appendChild(qq);
+      }
+    } else {
+      // confirm: a plain "I did it" gate
+      const ok = document.createElement("button");
+      ok.className = "primary";
+      ok.textContent = "Done — continue";
+      ok.onclick = () => { ok.disabled = true; answer({ nav: "done" }); };
+      row.appendChild(ok);
+      const s = document.createElement("button");
+      s.textContent = "Skip";
+      s.onclick = () => { s.disabled = true; answer({ nav: "skip" }); };
+      row.appendChild(s);
+    }
+
+    $("prompt").appendChild(el);
+    setStatus("waiting for you", "waiting");
+  }
+
+  // ── event stream ────────────────────────────────────────────────────────
+
+  function handle(ev) {
+    switch (ev.kind) {
+      case "hello":
+        addLog("info", ev.text || "run started");
+        break;
+      case "phase":
+        addLog("info", "── Phase " + ev.phase + " — " + ev.text + " ──");
+        break;
+      case "step":
+        markStep(ev.step_id, ev.status);
+        if (ev.status === "running") addLog("cmd", "▸ step " + ev.step_num + "/" + ev.step_total + ": " + ev.step_name);
+        if (ev.status === "failed") addLog("error", "✗ " + ev.step_name + ": " + ev.err);
+        break;
+      case "log":
+        addLog(ev.level || "info", ev.text || "");
+        break;
+      case "vpn": {
+        const b = $("vpn");
+        b.textContent = "⚠ " + (ev.text || "");
+        b.classList.add("show");
+        break;
+      }
+      case "state":
+        renderKV($("state"), ev.state);
+        break;
+      case "prompt":
+        card(ev.prompt);
+        break;
+      case "prompt_resolved":
+        clearPrompt();
+        break;
+      case "done":
+      case "error": {
+        running = false;
+        updateGo();
+        if (ev.kind === "done") {
+          setStatus("completed", "done");
+          addLog("success", "✓ run complete");
+        } else {
+          setStatus("failed", "failed");
+          addLog("error", "✗ run failed: " + (ev.err || "unknown"));
+        }
+        renderKV($("last"), {
+          result: ev.kind === "done" ? "completed" : "failed",
+          mode: ev.run && ev.run.mode,
+          finished: ev.run && ev.run.finished,
+        });
+        break;
+      }
+    }
+  }
+
+  function connect() {
+    if (es) es.close();
+    es = new EventSource(API + "events");
+    es.onmessage = (m) => {
+      let ev;
+      try { ev = JSON.parse(m.data); } catch (e) { return; }
+      handle(ev);
+    };
+  }
+
+  // ── actions ─────────────────────────────────────────────────────────────
+
+  async function start() {
+    $("go").disabled = true;
+    $("log").textContent = "";
+    $("prompt").textContent = "";
+    const r = await fetch(API + "run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dry_run: dryRun, resume: true }),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      addLog("error", "could not start: " + text);
+      $("go").disabled = false;
+      return;
+    }
+    running = true;
+    setStatus("running", "working");
+    updateGo();
+  }
+
+  $("go").onclick = start;
+  $("stop").onclick = () => { running = false; fetch(API + "stop", { method: "POST" }).then(updateGo); };
+  $("reset").onclick = () => { fetch(API + "reset", { method: "POST" }); };
+  $("modedry").onclick = () => { dryRun = true; updateGo(); };
+  $("modelive").onclick = () => { dryRun = false; updateGo(); };
+
+  // ── boot ───────────────────────────────────────────────────────────────
+
+  async function boot() {
+    const info = await (await fetch(API + "info")).json();
+    dryRun = !!info.dry_run;
+    $("sub").textContent = info.rpm_type + "  ·  branch " + info.branch;
+    $("env").textContent = info.env || "";
+    plan = info.plan || [];
+    renderPlan();
+    updateGo();
+
+    const st = await (await fetch(API + "state")).json();
+    renderKV($("state"), st.state);
+    if (st.run) renderKV($("last"), st.run);
+    if (st.running) { running = true; setStatus("running", "working"); }
+    updateGo();
+    connect();
+    setInterval(async () => {
+      try {
+        const s = await (await fetch(API + "state")).json();
+        renderKV($("state"), s.state);
+      } catch (e) { /* the stream is the source of truth */ }
+    }, 5000);
+  }
+
+  boot().catch((e) => addLog("error", "boot failed: " + e));
+})();
+</script>
+</body>
+</html>

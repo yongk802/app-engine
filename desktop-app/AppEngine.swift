@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let manager = ServiceManager()
     let queue = DispatchQueue(label: "io.appengine.desktop.services", qos: .utility)
     var busy = false
+    var polling = false
     var timer: Timer?
     var settingsButton: NSButton!
     var statuses = ServiceKind.allCases.map { _ in ServiceStatus(running: false, managed: false, message: "Checking…") }
@@ -95,12 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsButton.isEnabled = !busy
     }
     func refresh() {
-        guard !busy else { return }
-        busy = true
+        guard !busy && !polling else { return }
+        polling = true
         let snapshot = settings
         queue.async {
             let values = ServiceKind.allCases.map { self.manager.status(ServiceConfiguration(kind: $0, settings: snapshot)) }
-            DispatchQueue.main.async { self.statuses = values; self.busy = false; self.render() }
+            DispatchQueue.main.async {
+                self.polling = false
+                if !self.busy { self.statuses = values; self.render() }
+            }
         }
     }
     func operate(_ sender: NSButton, stop: Bool = false, open: Bool = false) {
@@ -137,11 +141,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func showSettings() {
         guard !busy else { return }
-        guard !statuses.contains(where: { $0.managed }) else {
-            showError(LauncherError(message: "Stop both launcher-managed services before changing Settings.")); return
+        busy = true; render()
+        queue.async {
+            let managed = ServiceKind.allCases.contains { self.manager.owns($0) }
+            DispatchQueue.main.async {
+                if managed {
+                    self.busy = false; self.render()
+                    self.showError(LauncherError(message: "Stop both launcher-managed services before changing Settings."))
+                } else { self.editSettings() }
+            }
         }
+    }
+    private func editSettings() {
         // Hold off polling while the modal editor runs.
-        busy = true; defer { busy = false; refresh() }
+        defer { busy = false; render(); refresh() }
         let alert = NSAlert(); alert.messageText = "Launcher Settings"
         alert.informativeText = "Choose local source folders with existing uv Python environments. Servers listen on this Mac only."
         alert.addButton(withTitle: "Save"); alert.addButton(withTitle: "Cancel")

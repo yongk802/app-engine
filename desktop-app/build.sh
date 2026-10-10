@@ -13,7 +13,7 @@ done
 BUILD="$ROOT/desktop-app/build"
 APP="$BUILD/App Engine.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-xcrun swiftc -O -framework AppKit "$ROOT/desktop-app/ServiceConfiguration.swift" "$ROOT/desktop-app/ServiceManager.swift" "$ROOT/desktop-app/AppEngine.swift" -o "$APP/Contents/MacOS/AppEngine"
+xcrun swiftc -O -target "$(uname -m)-apple-macosx13.0" -framework AppKit "$ROOT/desktop-app/ServiceConfiguration.swift" "$ROOT/desktop-app/ServiceManager.swift" "$ROOT/desktop-app/AppEngine.swift" -o "$APP/Contents/MacOS/AppEngine"
 /usr/bin/swift "$ROOT/desktop-app/Icon.swift" "$BUILD/icon.png"
 ICONSET="$BUILD/AppIcon.iconset"
 mkdir -p "$ICONSET"

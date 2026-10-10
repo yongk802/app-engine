@@ -1,12 +1,23 @@
 # App Engine desktop launcher
 
-A native macOS control window for App Engine and App Store. Each has Start,
+Native macOS and Windows control windows for App Engine and App Store. Each has Start,
 Stop, Open and Logs buttons. Open starts the selected service when needed and
 opens its web UI in your default browser. Merely opening the launcher starts
 neither server. Closing the launcher leaves running services available until
 stopped or logout. There is no login autostart.
 
-## Build and install
+## Windows
+
+See [windows/README.md](windows/README.md). Run
+`powershell -NoProfile -ExecutionPolicy Bypass -File desktop-app\windows\install.ps1`
+from either repository to build/install the native Windows executable and Desktop
+shortcut. The default installation uses D: when available. There is no Atrium
+dependency.
+
+All launcher sources are versioned in both standalone repositories. See
+[SOURCE.md](SOURCE.md) for synchronization.
+
+## macOS build and install
 
 Requires macOS 13+, Xcode command-line tools, and local `app-engine` and
 `app-store` checkouts with their `uv` Python environments already set up.

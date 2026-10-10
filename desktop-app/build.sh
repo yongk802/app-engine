@@ -2,6 +2,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ENGINE_REPO="$ROOT"
+if [ ! -f "$ENGINE_REPO/engine.py" ]; then ENGINE_REPO="$(dirname "$ROOT")/app-engine"; fi
 INSTALL=false
 while [ "$#" -gt 0 ]; do
   case "$1" in

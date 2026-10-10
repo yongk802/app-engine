@@ -1,0 +1,9 @@
+# Windows standalone launcher
+
+Extend the existing approved two-service native launcher to Windows. The same Start, Stop, Open, Logs and Settings controls manage App Engine and App Store. Start is explicit; opening or closing the window does not start or stop services. Bind both servers to loopback and recognize healthy external services without taking ownership. The user requested testing/installing on .173, with installation on D:, and source in both standalone repositories.
+
+Use a Windows Forms executable built with the Windows .NET Framework C# compiler, without an Atrium dependency or extra GUI runtime. Slow work runs off the UI thread. A separate broker process owns each service's Windows Job Object so all descendants stop together, while closing the GUI leaves the broker running. Persist PID, creation time, executable and random token, and validate them before stopping; hold the process handle to prevent PID reuse. A per-service named mutex serializes lifecycle changes. Validate ports and paths before starting and prevent changing settings while an owned broker is active. Configuration and logs live under the chosen install directory; .173 uses D:\Apps\App Engine and D:\git source repos.
+
+Keep desktop-app source in both app-engine and app-store. App Engine is the maintenance source; a narrow sync/check command copies this directory into App Store, with a provenance file and identical functional source. Build commands detect which checkout they run in and resolve the sibling repository. No code is placed in Atrium.
+
+Acceptance: both repository copies build; Windows ownership/configuration tests and isolated real-service integration pass on .173; the installed Desktop shortcut launches a visible native window in the logged-in session; judged screenshot confirms both cards; Start/Open/Stop and Settings guard work; source committed and pushed in both repositories.

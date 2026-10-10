@@ -62,9 +62,10 @@ public static class Tests {
                 outsider.Stop(kind); Check(manager.Status(config).Running,"Foreign stop cannot stop service");
                 Owner record=Json.Read<Owner>(manager.OwnerPath(kind));
                 long ticks=record.CreatedTicks; record.CreatedTicks=ticks+1; Json.Write(manager.OwnerPath(kind),record);
-                Check(!manager.Owns(kind),"Reject stale/reused PID record"); manager.Stop(kind);
-                Check(outsider.Status(config).Running,"Stale record cannot stop live process");
-                record.CreatedTicks=ticks; Json.Write(manager.OwnerPath(kind),record);
+                try {
+                    Check(!manager.Owns(kind),"Reject stale/reused PID record"); manager.Stop(kind);
+                    Check(outsider.Status(config).Running,"Stale record cannot stop live process");
+                } finally {record.CreatedTicks=ticks; Json.Write(manager.OwnerPath(kind),record);}
                 manager.Stop(kind); Check(!manager.Owns(kind) && !manager.Status(config).Running,"Stop and cleanup");
                 Console.WriteLine("PASS: "+kind+" live start/health/reuse/external/stop");
             }

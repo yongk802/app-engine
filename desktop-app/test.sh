@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ENGINE_REPO="$ROOT"
+if [ ! -f "$ENGINE_REPO/engine.py" ]; then ENGINE_REPO="$(dirname "$ROOT")/app-engine"; fi
 BUILD="$(mktemp -d)"
 trap 'rm -rf "$BUILD"' EXIT
 swiftc "$ROOT/desktop-app/ServiceConfiguration.swift" "$ROOT/desktop-app/ServiceManager.swift" "$ROOT/desktop-app/ServiceTests.swift" -o "$BUILD/service-tests"

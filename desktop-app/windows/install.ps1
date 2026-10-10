@@ -12,15 +12,17 @@ if (-not $EngineRepository) {
     if (Test-Path (Join-Path $repoRoot 'engine.py')) { $EngineRepository=$repoRoot }
     else { $EngineRepository=Join-Path (Split-Path $repoRoot -Parent) 'app-engine' }
 }
-$EngineRepository=[IO.Path]::GetFullPath($EngineRepository)
+$EngineRepository=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($EngineRepository)
 $parent=Split-Path $EngineRepository -Parent
 if (-not $StoreRepository) { $StoreRepository=Join-Path $parent 'app-store' }
 if (-not $AppsDirectory) { $AppsDirectory=Join-Path $parent 'personal-apps' }
+$StoreRepository=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($StoreRepository)
+$AppsDirectory=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($AppsDirectory)
 if (-not $InstallDirectory) {
     if (Test-Path 'D:\') { $InstallDirectory='D:\Apps\App Engine' }
     else { $InstallDirectory=Join-Path $env:LOCALAPPDATA 'App Engine' }
 }
-$InstallDirectory=[IO.Path]::GetFullPath($InstallDirectory)
+$InstallDirectory=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallDirectory)
 $destination=Join-Path $InstallDirectory 'AppEngine.exe'
 $running=@(Get-CimInstance Win32_Process -Filter "Name='AppEngine.exe'" | Where-Object {$_.ExecutablePath -eq $destination})
 if ($running.Count) { throw 'Close the App Engine window and stop its managed services before updating the launcher.' }
@@ -33,8 +35,8 @@ else {
         StateDirectory=(Join-Path $InstallDirectory 'app-state'); StoreDataDirectory=(Join-Path $StoreRepository 'store-data'); EnginePort=8770; StorePort=8780 }
 }
 if ($PSBoundParameters.ContainsKey('EngineRepository')) { $settings.EngineRepository=$EngineRepository }
-if ($PSBoundParameters.ContainsKey('StoreRepository')) { $settings.StoreRepository=[IO.Path]::GetFullPath($StoreRepository) }
-if ($PSBoundParameters.ContainsKey('AppsDirectory')) { $settings.AppsDirectory=[IO.Path]::GetFullPath($AppsDirectory) }
+if ($PSBoundParameters.ContainsKey('StoreRepository')) { $settings.StoreRepository=$StoreRepository }
+if ($PSBoundParameters.ContainsKey('AppsDirectory')) { $settings.AppsDirectory=$AppsDirectory }
 if ($EnginePort) { $settings.EnginePort=$EnginePort }; if ($StorePort) { $settings.StorePort=$StorePort }
 # Use the same validator as the executable before changing the installation.
 Add-Type -Path (Join-Path $PSScriptRoot 'Settings.cs') -ReferencedAssemblies System.Web.Extensions

@@ -23,7 +23,7 @@
         "scope": "shared",
         "build": [
           {
-            "argv": ["go", "build", "-o", "rpmcc-server", "."],
+            "argv": ["/opt/homebrew/bin/go", "build", "-o", "rpmcc-server", "."],
             "cwd": "backend"
           }
         ],

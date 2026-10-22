@@ -211,7 +211,7 @@ if child_record:
 crash_record = os.environ.get("CRASH_RECORD")
 if crash_record and not Path(crash_record).exists():
     Path(crash_record).write_text("first", encoding="utf-8")
-    threading.Timer(0.15, lambda: os._exit(7)).start()
+    threading.Timer(0.75 if os.name == "nt" else 0.15, lambda: os._exit(7)).start()
 
 for number in range(int(os.environ.get("LOG_LINES", "0"))):
     print(f"stdout-{number}", flush=True)
@@ -1055,6 +1055,10 @@ async def test_stop_kills_descendants_after_process_leader_exits(tmp_path):
             os.kill(child_pid, 0)
         except ProcessLookupError:
             break
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) in {6, 87, 1168}:
+                break
+            raise
         await asyncio.sleep(0.02)
     else:
         pytest.fail("descendant survived process-group shutdown")

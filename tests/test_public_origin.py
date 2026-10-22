@@ -612,12 +612,17 @@ def test_only_the_owner_may_force_a_rebuild_of_the_shared_backend(tmp_path, monk
         assert owner.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={"force_rebuild": True}).status_code == 200
         assert seen and all(seen), "the owner may rebuild (the open previews the plan more than once)"
         invite = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["game"]}, headers=admin).json()["invite"]
-        with public_client(module) as guest:
+        # The owner already owns the app lifespan. A second lifespan on the
+        # same ASGI app would shut down its managed process from another loop.
+        guest = public_client(module)
+        try:
             guest.post(invite, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
             seen.clear()
             opened = guest.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={"force_rebuild": True})
             assert opened.status_code == 200, opened.text
             assert seen and not any(seen), "a player's open never restarts the backend everyone shares"
             assert guest.post(f"{LAUNCHER}/api/app-engine/apps/game/open", content="[]", headers={"content-type": "application/json"}).status_code == 400
+        finally:
+            guest.close()
     finally:
         owner.close()

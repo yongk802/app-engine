@@ -1015,14 +1015,14 @@ def _cli(argv: list[str]) -> int:
         )
         if inspection.errors or listing:
             rc = 1
-            print(f"✗ {label}: {len(inspection.errors) + len(listing)} error(s)")
+            print(f"ERROR {label}: {len(inspection.errors) + len(listing)} error(s)")
             for issue in inspection.errors:
                 suffix = f" ({issue.path})" if issue.path else ""
                 print(f"    error:   {issue.message}{suffix}")
             for message in listing:
                 print(f"    error:   {message}")
         else:
-            print(f"✓ {label}: valid" + (f" (engine {ENGINE_VERSION})" if not inspection.warnings else ""))
+            print(f"OK {label}: valid" + (f" (engine {ENGINE_VERSION})" if not inspection.warnings else ""))
         for issue in inspection.warnings:
             if issue.message in listing:
                 continue

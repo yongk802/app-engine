@@ -21,6 +21,7 @@ def package(app_id='hello', version='1.0.0', extra=None):
             # the attacker-supplied name to exercise the extractor itself.
             info = zipfile.ZipInfo('placeholder')
             info.filename = name
+            info.orig_filename = name
             archive.writestr(info, value)
     return stream.getvalue()
 

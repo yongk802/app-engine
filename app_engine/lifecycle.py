@@ -1223,6 +1223,12 @@ class ProcessLifecycleManager(LifecycleManager):
             return False
         except PermissionError:
             return True
+        except OSError as exc:
+            # Windows reports a nonexistent PID as ERROR_INVALID_PARAMETER
+            # rather than mapping it to ProcessLookupError.
+            if os.name == "nt" and getattr(exc, "winerror", None) in {6, 87, 1168}:
+                return False
+            raise
         return True
 
     async def _drain_streams(self, record: _LaunchRecord) -> None:

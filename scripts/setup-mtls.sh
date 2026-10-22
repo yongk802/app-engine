@@ -93,6 +93,7 @@ fi
 cat > "$directory/mcp-gateway/nginx-app-engine-mcp.conf" <<EOF
 server {
     listen 443 ssl;
+    listen [::]:443 ssl;
     server_name $mcp_host;
     ssl_certificate $directory/mcp-gateway/app-engine-mcp.crt;
     ssl_certificate_key $directory/mcp-gateway/app-engine-mcp.key;

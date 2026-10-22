@@ -49,7 +49,9 @@ def test_mcp_gateway_requires_client_certificate_and_bearer(tmp_path):  # noqa: 
                                "127.0.0.1", "--port", str(engine_port), "--no-access-log"],
                               cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     snippet = (bundle / "mcp-gateway" / "nginx-app-engine-mcp.conf").read_text()
+    assert "listen [::]:443 ssl;" in snippet
     snippet = snippet.replace("listen 443 ssl;", f"listen {proxy_port} ssl;")
+    snippet = snippet.replace("listen [::]:443 ssl;", "")
     snippet = snippet.replace("proxy_pass http://127.0.0.1:8770;",
                               f"proxy_pass http://127.0.0.1:{engine_port};")
     (bundle / "mcp-gateway" / "nginx-app-engine-mcp.conf").write_text(snippet)

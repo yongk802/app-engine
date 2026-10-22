@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {checkRules,createService} from '../server.mjs';
 import {engine} from './fake-rules.mjs';
 
@@ -53,7 +53,7 @@ test('without an AI policy or daily plugin the service says so instead of failin
  const dir=await mkdtemp(join(tmpdir(),'app-engine-mp-'));
  try{
   const plain=join(dir,'plain.mjs');
-  await writeFile(plain,`import {engine} from '${join(here,'fake-rules.mjs')}';\nconst {chooseAction,...rest}=engine;\nexport default rest;\n`);
+  await writeFile(plain,`import {engine} from '${pathToFileURL(join(here,'fake-rules.mjs')).href}';\nconst {chooseAction,...rest}=engine;\nexport default rest;\n`);
   const service=await createService({rules:plain,dataDir:dir});
   assert.equal(service.chooseAction,null);
   await assert.rejects(service.dispatch('dailyBoard',{day:'2026-09-13',playerId:'p'.repeat(20),...compatibility}),e=>e.code==='MULTIPLAYER_UNAVAILABLE');

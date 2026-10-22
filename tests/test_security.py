@@ -47,6 +47,7 @@ def test_direct_asgi_public_bind_cannot_expose_local_owner_api(tmp_path, monkeyp
                 if message["type"] == "http.response.start") == 503
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows runner firewall blocks non-loopback self-connections; direct ASGI boundary is tested above")
 def test_direct_uvicorn_public_bind_denies_remote_owner_api(tmp_path):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
         try:

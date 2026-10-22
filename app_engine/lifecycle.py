@@ -15,6 +15,7 @@ import os
 import shutil
 import signal
 import socket
+import subprocess
 import urllib.error
 import urllib.request
 import uuid
@@ -82,6 +83,7 @@ _SAFE_PARENT_ENVIRONMENT = (
 )
 
 _isolation_log = logging.getLogger("app_engine.process_isolation")
+_FORCE_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def _now() -> datetime:
@@ -789,7 +791,7 @@ class ProcessLifecycleManager(LifecycleManager):
                         process.communicate(), timeout=resolved.command.timeout_seconds
                     )
                 except asyncio.TimeoutError as exc:
-                    self._signal_group(process, signal.SIGKILL)
+                    self._signal_group(process, _FORCE_SIGNAL)
                     await process.wait()
                     raise PreparationError(
                         "preparation_timeout",
@@ -797,7 +799,7 @@ class ProcessLifecycleManager(LifecycleManager):
                         remediation="Increase its timeout or make the step complete sooner.",
                     ) from exc
                 except asyncio.CancelledError:
-                    self._signal_group(process, signal.SIGKILL)
+                    self._signal_group(process, _FORCE_SIGNAL)
                     await process.wait()
                     raise
             except OSError as exc:
@@ -1179,14 +1181,14 @@ class ProcessLifecycleManager(LifecycleManager):
         while self._group_alive(group_id):
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                self._signal_group_id(group_id, signal.SIGKILL)
+                self._signal_group_id(group_id, _FORCE_SIGNAL)
                 break
             await asyncio.sleep(min(0.02, remaining))
         if process.returncode is None:
             try:
                 await asyncio.wait_for(process.wait(), self._stop_grace_seconds)
             except asyncio.TimeoutError:
-                self._signal_group_id(group_id, signal.SIGKILL)
+                self._signal_group_id(group_id, _FORCE_SIGNAL)
 
     @staticmethod
     def _signal_group(process: asyncio.subprocess.Process, sig: signal.Signals) -> None:
@@ -1194,6 +1196,17 @@ class ProcessLifecycleManager(LifecycleManager):
 
     @staticmethod
     def _signal_group_id(group_id: int, sig: signal.Signals) -> None:
+        if os.name == "nt":
+            # Windows has no killpg. taskkill /T terminates descendants as well
+            # as the leader, including preparation commands that time out.
+            subprocess.run(
+                ["taskkill", "/PID", str(group_id), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+            )
+            return
         try:
             os.killpg(group_id, sig)
         except ProcessLookupError:
@@ -1202,7 +1215,10 @@ class ProcessLifecycleManager(LifecycleManager):
     @staticmethod
     def _group_alive(group_id: int) -> bool:
         try:
-            os.killpg(group_id, 0)
+            if os.name == "nt":
+                os.kill(group_id, 0)
+            else:
+                os.killpg(group_id, 0)
         except ProcessLookupError:
             return False
         except PermissionError:

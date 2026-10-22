@@ -783,6 +783,7 @@ async def test_logs_are_bounded_and_preserve_stream_identity(tmp_path):
         await manager.stop(handle.launch_id, StopReason.USER)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no graceful POSIX SIGTERM")
 @pytest.mark.asyncio
 async def test_stop_is_graceful_and_idempotent(tmp_path):
     stop_record = tmp_path / "stop-record"

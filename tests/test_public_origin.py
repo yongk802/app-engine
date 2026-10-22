@@ -553,7 +553,7 @@ def test_a_remote_game_client_reads_health_with_its_bearer_token(tmp_path, monke
     root = tmp_path / "apps" / "cards"
     root.mkdir(parents=True)
     (root / "index.html").write_text("<!doctype html><title>cards</title>")
-    (root / "rules.mjs").write_text(f"export {{default}} from '{FAKE_RULES.as_posix()}';\n")
+    (root / "rules.mjs").write_text(f"export {{default}} from '{FAKE_RULES.as_uri()}';\n")
     (root / "app.json").write_text(json.dumps({"label": "cards", "icon": "c", "multiplayer": {"rules": "rules.mjs"}}))
     module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
     invite_and_join(module)[0].close()

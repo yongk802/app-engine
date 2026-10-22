@@ -26,6 +26,9 @@ button:disabled { opacity:.5; cursor:wait; }
 .release h3 { margin:0 0 6px; } .release small { display:block; margin:8px 0 16px; }
 #message { border-radius:8px; padding:12px; background:#133425; } #message.error { background:#47252b; color:#ffd4d7; }
 #message:empty { display:none; }
+button[aria-busy="true"] { opacity:.7; cursor:progress; }
+.store-ok { color:#7fd4a8; } .store-error { color:#ffb0b6; }
+#message:empty { display:none; }
 dialog { width:min(620px,calc(100vw - 48px)); background:#171e2a; color:inherit; border:1px solid #526783; border-radius:14px; padding:24px; }
 dialog::backdrop { background:#000a; } dl { display:grid; grid-template-columns:110px 1fr; gap:12px; } dt { color:#a8b5c7; } dd { margin:0; overflow-wrap:anywhere; }
 @media(max-width:600px) { body { padding:20px 14px; } header { align-items:start; } form button { width:100%; } dl { grid-template-columns:1fr; gap:5px; } dd { margin-bottom:10px; } }
@@ -52,12 +55,37 @@ async function request(path,method='GET',body){
   return response.status===204?null:response.json();
 }
 async function run(action){message('');try{await action();}catch(error){message(error.message,true);}}
+// A refresh that reaches an unreachable store fails in milliseconds and
+// re-renders identical markup, which reads as a dead button. Say so instead.
+// A local store answers in milliseconds and an unreachable one fails even
+// faster, so without a floor the label changes for a frame nobody sees.
+const BUSY_MIN_MS=450;
+async function busy(button,label,action){
+  const original=button.textContent;
+  button.disabled=true;button.textContent=label;button.setAttribute('aria-busy','true');
+  const settled=await Promise.allSettled(
+    [action(),new Promise(resolve=>setTimeout(resolve,BUSY_MIN_MS))]);
+  button.disabled=false;button.textContent=original;button.removeAttribute('aria-busy');
+  if(settled[0].status==='rejected')throw settled[0].reason;
+}
+function summarize(){
+  const failed=catalog.stores.filter(store=>store.error);
+  const when=new Date().toLocaleTimeString();
+  if(!catalog.stores.length)return message(`Checked at ${when}: no stores connected.`);
+  const counted=`${catalog.apps.length} release${catalog.apps.length===1?'':'s'} from `
+    +`${catalog.stores.length-failed.length} of ${catalog.stores.length} store`
+    +`${catalog.stores.length===1?'':'s'}`;
+  if(!failed.length)return message(`Checked at ${when}: ${counted}.`);
+  message(`Checked at ${when}: ${counted}. Unavailable: `
+    +failed.map(store=>`${store.name||store.store_url} (${store.error_code||'error'})`).join(', '),true);
+}
 function renderStores(){
   const list=$('#stores');list.replaceChildren();
   if(!catalog.stores.length){list.append(node('p','No stores connected yet.','muted'));return;}
   for(const store of catalog.stores){
     const row=node('div',undefined,'row'),details=node('div',undefined,'details');
-    details.append(node('strong',store.name),node('p',store.store_url,'muted'),node('small',store.error?`Unavailable: ${store.error}`:'Connected'));
+    const status=node('small',store.error?`Unavailable: ${store.error}`:'Connected',store.error?'store-error':'store-ok');
+    details.append(node('strong',store.name),node('p',store.store_url,'muted'),status);
     const disconnect=node('button','Disconnect');disconnect.onclick=()=>run(async()=>{await request('stores/'+encodeURIComponent(store.store_id),'DELETE');await refresh();});
     row.append(details,disconnect);list.append(row);
   }
@@ -78,10 +106,11 @@ function renderPreview(){
 }
 async function refresh(){catalog=await request('store-catalog');renderStores();renderReleases();}
 $('#connect').onsubmit=event=>{event.preventDefault();run(async()=>{await request('stores','POST',{url:$('#store-url').value.trim(),name:$('#store-name').value.trim()});$('#connect').reset();await refresh();});};
-$('#refresh').onclick=()=>run(refresh);$('#search').oninput=renderReleases;
+$('#refresh').onclick=()=>busy($('#refresh'),'Checking stores…',()=>run(async()=>{await refresh();summarize();}));
+$('#search').oninput=renderReleases;
 $('#cancel').onclick=()=>{$('#preview').close();plan=null;};
 $('#install').onclick=()=>run(async()=>{if(!plan)return;$('#install').disabled=true;try{const installed=await request('store-installs','POST',{fingerprint:plan.fingerprint});$('#preview').close();plan=null;message('Installed '+installed.app_id+' '+installed.version+'. Refresh the launcher to open it.');}finally{$('#install').disabled=false;}});
-run(refresh);
+run(async()=>{await refresh();summarize();});
 </script>
 </body>
 </html>

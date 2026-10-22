@@ -139,6 +139,24 @@ def listing_problems(description: object, categories: object) -> list[str]:
     return problems
 
 
+def _declares_runtime_target(m: object) -> bool:
+    """True when a version-2 manifest declares a target the host launches itself.
+
+    Such an app has no index.html and no entry_point by design — app-engine
+    starts its process and proxies to it — so the version-1 serving
+    requirement does not apply. ``parse_manifest`` already allows this; this
+    keeps discovery from reporting the same app as malformed.
+    """
+    if not isinstance(m, dict):
+        return False
+    targets = m.get("targets")
+    entries = list(targets.values()) if isinstance(targets, dict) else targets
+    if not isinstance(entries, (list, tuple)):
+        return False
+    return any(isinstance(target, dict) and isinstance(target.get("runtime"), dict)
+               for target in entries)
+
+
 def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[list[str], list[str]]:
     """Validate a parsed app.json.
 
@@ -174,8 +192,8 @@ def validate_manifest(m: dict, *, has_index: bool, dir_name: str = "") -> tuple[
                 parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or
                 parsed.username is not None or parsed.password is not None):
             errors.append("entry_point must be an http:// loopback URL (localhost, 127.0.0.1, or ::1)")
-    if not has_index and not entry_point:
-        errors.append("app has neither an index.html nor an entry_point")
+    if not has_index and not entry_point and not _declares_runtime_target(m):
+        errors.append("app has neither an index.html, an entry_point, nor a target with a runtime")
 
     version = m.get("version", "")
     if version and not _SEMVER_RE.match(str(version)):
@@ -997,14 +1015,14 @@ def _cli(argv: list[str]) -> int:
         )
         if inspection.errors or listing:
             rc = 1
-            print(f"✗ {label}: {len(inspection.errors) + len(listing)} error(s)")
+            print(f"ERROR {label}: {len(inspection.errors) + len(listing)} error(s)")
             for issue in inspection.errors:
                 suffix = f" ({issue.path})" if issue.path else ""
                 print(f"    error:   {issue.message}{suffix}")
             for message in listing:
                 print(f"    error:   {message}")
         else:
-            print(f"✓ {label}: valid" + (f" (engine {ENGINE_VERSION})" if not inspection.warnings else ""))
+            print(f"OK {label}: valid" + (f" (engine {ENGINE_VERSION})" if not inspection.warnings else ""))
         for issue in inspection.warnings:
             if issue.message in listing:
                 continue

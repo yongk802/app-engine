@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from app_engine.public_origin import SESSION_COOKIE, Accounts, PublicOrigin, SignInLimiter, bind_is_allowed
@@ -26,7 +27,8 @@ def make_app(apps: Path, app_id: str = "notes") -> None:
 def load_engine(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("APP_ENGINE_APPS_DIR", str(tmp_path / "apps"))
-    for name in ("APP_ENGINE_PUBLIC_ORIGIN", "APP_ENGINE_ADMIN_SECRET", "APP_ENGINE_TRUST_PROXY"):
+    for name in ("APP_ENGINE_PUBLIC_ORIGIN", "APP_ENGINE_ADMIN_SECRET", "APP_ENGINE_TRUST_PROXY",
+                 "APP_ENGINE_MCP_PROXY_SECRET", "APP_ENGINE_MCP_URL", "APP_ENGINE_OUTBOUND_MTLS_CONFIG"):
         monkeypatch.delenv(name, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -55,13 +57,72 @@ def test_public_origin_parsing_and_app_hosts():
     assert origin.app_id_for("play.example.com") is None
     assert origin.app_id_for("a.b.play.example.com") is None, "one label only: no nested hosts"
     assert origin.app_id_for("evil-play.example.com") is None
-    assert PublicOrigin.parse("http://games.lan:8080").host == "games.lan:8080"
     assert PublicOrigin.parse("play.example.com").origin == "https://play.example.com", "https is the default scheme"
     assert PublicOrigin.parse("") is None and PublicOrigin.parse(None) is None
     assert PublicOrigin.parse("http://play.localhost:8770").app_authority("notes") == "notes.play.localhost:8770", "rehearsal on one machine"
     for bad in ("https://127.0.0.1", "https://localhost", "https://play.example.com/path", "ftp://x.y", "https://user@play.example.com"):
         with pytest.raises(ValueError):
             PublicOrigin.parse(bad)
+
+
+def test_plaintext_public_origin_is_refused_but_local_rehearsal_works():
+    with pytest.raises(ValueError, match="HTTPS"):
+        PublicOrigin.parse("http://play.example.com")
+    assert PublicOrigin.parse("http://play.localhost:8770").origin == "http://play.localhost:8770"
+
+
+def test_legacy_proxy_does_not_forward_engine_credentials_or_follow_redirect(tmp_path, monkeypatch):
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC,
+                         APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    manifest = tmp_path / "apps" / "notes" / "app.json"
+    manifest.write_text(json.dumps({"id": "notes", "label": "notes", "icon": "n",
+                                    "entry_point": "http://127.0.0.1:18888"}))
+    captured = []
+
+    def upstream(request):
+        captured.append(request)
+        return httpx.Response(302, headers={"location": "https://external.example/secret"})
+
+    module._proxy = httpx.AsyncClient(transport=httpx.MockTransport(upstream), follow_redirects=True)
+    with public_client(module) as client:
+        assert sign_in(client).status_code == 303
+        token = client.cookies.get(SESSION_COOKIE)
+        response = client.get(f"{APP}/apps/notes/", headers={
+            "cookie": f"{SESSION_COOKIE}={token}; app_login=app-value",
+            "x-app-engine-admin": "admin-secret",
+            "x-app-state-token": "state-secret",
+            "x-app-engine-mtls-proxy": "proxy-secret",
+        }, follow_redirects=False)
+    assert response.status_code == 302
+    assert len(captured) == 1
+    headers = captured[0].headers
+    assert headers.get("cookie") == "app_login=app-value"
+    assert "x-app-engine-admin" not in headers
+    assert "x-app-state-token" not in headers
+    assert "x-app-engine-mtls-proxy" not in headers
+
+
+def test_public_mcp_needs_proxy_assertion_and_bearer(tmp_path, monkeypatch):
+    proxy_secret = "proxy-secret-with-at-least-thirty-two-random-characters"
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC,
+                         APP_ENGINE_ADMIN_SECRET="hunter2-but-longer",
+                         APP_ENGINE_MCP_PROXY_SECRET=proxy_secret,
+                         APP_ENGINE_MCP_URL="https://mcp.play.example.com/api/mcp")
+    with public_client(module) as client:
+        assert sign_in(client).status_code == 303
+        rotated = client.post(f"{LAUNCHER}/api/assistant/key",
+                              headers={"x-app-engine-admin": module._admin_capability})
+        assert rotated.status_code == 200
+        bearer = rotated.json()["key"]
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        target = "https://mcp.play.example.com/api/mcp"
+        assert client.post(target, json=payload, headers={"authorization": f"Bearer {bearer}"}).status_code in {401, 403}
+        assertion = {"x-app-engine-mtls-proxy": proxy_secret}
+        assert client.post(target, json=payload, headers=assertion).status_code == 401
+        accepted = client.post(target, json=payload,
+                               headers={**assertion, "authorization": f"Bearer {bearer}"})
+        assert accepted.status_code == 200
+        assert "tools" in accepted.json()["result"]
 
 
 def test_loopback_mode_is_unchanged(tmp_path, monkeypatch):
@@ -161,9 +222,9 @@ def test_bind_guard_and_bad_origin(tmp_path, monkeypatch):
     assert bind_is_allowed("127.0.0.1", None, None) is None
     assert "administrator" in bind_is_allowed("0.0.0.0", None, None)
     public = PublicOrigin.parse(PUBLIC)
-    assert "admin secret" in bind_is_allowed("0.0.0.0", public, accounts)
+    assert "loopback" in bind_is_allowed("0.0.0.0", public, accounts)
     accounts.set_admin_secret("s3cret-long-enough")
-    assert bind_is_allowed("0.0.0.0", public, accounts) is None
+    assert "loopback" in bind_is_allowed("0.0.0.0", public, accounts)
     monkeypatch.setenv("APP_ENGINE_PUBLIC_ORIGIN", "https://127.0.0.1")
     monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path / "s"))
     monkeypatch.setenv("APP_ENGINE_APPS_DIR", str(tmp_path / "a"))
@@ -492,7 +553,7 @@ def test_a_remote_game_client_reads_health_with_its_bearer_token(tmp_path, monke
     root = tmp_path / "apps" / "cards"
     root.mkdir(parents=True)
     (root / "index.html").write_text("<!doctype html><title>cards</title>")
-    (root / "rules.mjs").write_text(f"export {{default}} from '{FAKE_RULES.as_posix()}';\n")
+    (root / "rules.mjs").write_text(f"export {{default}} from '{FAKE_RULES.as_uri()}';\n")
     (root / "app.json").write_text(json.dumps({"label": "cards", "icon": "c", "multiplayer": {"rules": "rules.mjs"}}))
     module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
     invite_and_join(module)[0].close()
@@ -551,12 +612,17 @@ def test_only_the_owner_may_force_a_rebuild_of_the_shared_backend(tmp_path, monk
         assert owner.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={"force_rebuild": True}).status_code == 200
         assert seen and all(seen), "the owner may rebuild (the open previews the plan more than once)"
         invite = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["game"]}, headers=admin).json()["invite"]
-        with public_client(module) as guest:
+        # The owner already owns the app lifespan. A second lifespan on the
+        # same ASGI app would shut down its managed process from another loop.
+        guest = public_client(module)
+        try:
             guest.post(invite, data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
             seen.clear()
             opened = guest.post(f"{LAUNCHER}/api/app-engine/apps/game/open", json={"force_rebuild": True})
             assert opened.status_code == 200, opened.text
             assert seen and not any(seen), "a player's open never restarts the backend everyone shares"
             assert guest.post(f"{LAUNCHER}/api/app-engine/apps/game/open", content="[]", headers={"content-type": "application/json"}).status_code == 400
+        finally:
+            guest.close()
     finally:
         owner.close()

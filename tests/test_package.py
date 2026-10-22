@@ -5,9 +5,13 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +33,9 @@ def _build_wheel(destination: Path) -> Path:
             "build",
             "--wheel",
             "--offline",
+            "--no-build-isolation",
+            "--python",
+            sys.executable,
             "--out-dir",
             str(destination),
         ],
@@ -111,7 +118,7 @@ def test_wheel_contains_importable_modules_and_standalone_assets(tmp_path):
                 "from app_engine import AppManifest, ManifestInspection"
             ),
         ],
-        env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(install_dir)},
+        env={**os.environ, "PYTHONPATH": str(install_dir)},
         capture_output=True,
         text=True,
     )
@@ -145,14 +152,15 @@ def test_clean_venv_install_resolves_assets_and_console_manifest_entrypoint(tmp_
     outside.mkdir()
     app_root = tmp_path / "sample-app"
     app_root.mkdir()
-    (app_root / "app.json").write_text('{"id":"sample-app","label":"Sample","icon":"🧪"}')
+    (app_root / "app.json").write_text('{"id":"sample-app","label":"Sample","icon":"🧪"}', encoding="utf-8")
     (app_root / "index.html").write_text("<h1>Sample</h1>")
     v2_root = tmp_path / "sample-v2"
     v2_root.mkdir()
     (v2_root / "app.json").write_text(
         '{"manifest_version":2,"id":"sample-v2","label":"Sample v2",'
         '"icon":"🧪","targets":{"api":{"kind":"web",'
-        '"runtime":{"driver":"process","start":{"argv":["app"]}}}}}'
+        '"runtime":{"driver":"process","start":{"argv":["app"]}}}}}',
+        encoding="utf-8",
     )
 
     probe = subprocess.run(

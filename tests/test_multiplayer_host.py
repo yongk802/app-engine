@@ -23,7 +23,7 @@ def make_game(apps: Path, app_id: str, *, multiplayer=True, rules_name="rules.mj
     (root / "index.html").write_text("<!doctype html><title>game</title>")
     if multiplayer:
         # The fake rules module is app-engine's own; a real game ships its engine here.
-        (root / rules_name).write_text(f"export {{default}} from '{FAKE_RULES.as_posix()}';\n")
+        (root / rules_name).write_text(f"export {{default}} from '{FAKE_RULES.as_uri()}';\n")
     manifest = {"label": app_id, "icon": "g"}
     if multiplayer:
         manifest["multiplayer"] = {"rules": rules_name}

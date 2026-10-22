@@ -31,10 +31,70 @@ The harness must be able to reach this engine. On another machine,
 `127.0.0.1` means that machine, not yours: use an explicitly configured secure
 port forward or run the harness locally. The endpoint validates its loopback
 Host and any Origin header; a proxy must preserve the local engine authority.
-No tunnel, public listener or firewall rule is created automatically. This
-first version is available in local-owner mode; public-origin/player mode does
-not expose the new assistant or MCP endpoint. Atrium already has its own
-external MCP adapter; this feature is in the standalone launcher.
+No tunnel, public listener or firewall rule is created automatically.
+
+In public-origin mode, MCP is available only through a separate mTLS gateway.
+The owner can still generate and rotate its independent bearer key from the
+launcher; the public browser listener must strip `X-App-Engine-MTLS-Proxy`.
+The dedicated nginx gateway requires a trusted client certificate before it
+forwards `/api/mcp`, overwrites the internal assertion header, clears cookies,
+and forwards to the engine's loopback listener. Other gateway paths return 404.
+
+Generate a private service CA and distinct client/server identities in a new
+directory (use a new directory for each rotation):
+
+```bash
+bash scripts/setup-mtls.sh /secure/app-engine-mtls-v1 mcp.play.example.com store.example.com status.atrium.example.com
+```
+
+The command writes separate `engine/`, `atrium/`, `store/`, and
+`mcp-gateway/` role directories (plus `atrium-status-gateway/` when requested).
+Copy only the needed role directory to each service host and restrict it to
+that service account. Keep the generated absolute directory path on each host,
+or edit the paths in the generated nginx and JSON files after copying.
+Install `mcp-gateway/nginx-app-engine-mcp.conf` under
+nginx's `http` configuration and load `engine/app-engine-mcp.env` into app-engine.
+Configure these settings before restarting the loopback engine:
+
+```text
+APP_ENGINE_MCP_URL=https://mcp.play.example.com/api/mcp
+APP_ENGINE_OUTBOUND_MTLS_CONFIG=/secure/app-engine-mtls-v1/engine/outbound-mtls.json
+```
+
+`engine/app-engine-mcp.env` contains `APP_ENGINE_MCP_PROXY_SECRET`; keep it readable
+only by the engine and nginx operators. The browser-facing nginx server must
+set `proxy_set_header X-App-Engine-MTLS-Proxy "";`. Use the generated
+`ca.crt`, `atrium-client.crt`, and `atrium-client.key` in Atrium's MCP HTTP
+server configuration, along with the generated app-engine bearer key:
+
+```json
+{
+  "url": "https://mcp.play.example.com/api/mcp",
+  "headers": {"Authorization": "Bearer <generated-app-engine-key>"},
+  "tls_ca_file": "/secure/app-engine-mtls-v1/atrium/ca.crt",
+  "tls_cert_file": "/secure/app-engine-mtls-v1/atrium/atrium-client.crt",
+  "tls_key_file": "/secure/app-engine-mtls-v1/atrium/atrium-client.key"
+}
+```
+
+For app-store, run its `serve` command with `store/app-store.crt`,
+`store/app-store.key`, and `store/ca.crt` in its TLS flags. Connect the store
+using the exact HTTPS origin listed in `engine/outbound-mtls.json`; the engine sends its client certificate only
+to that origin and verifies the server certificate against the private CA.
+Set app-store's `--tls-client-cn app-engine-client` so Atrium's separate client
+certificate cannot browse packages.
+The optional fourth setup argument also generates
+`atrium-status-gateway/nginx-atrium-status.conf` and adds Atrium's status origin
+to `engine/outbound-mtls.json`. Install that server
+block on the Atrium host, changing its loopback `proxy_pass` port if Atrium does
+not listen on 8000. The engine polls `APP_ENGINE_ATRIUM_STATUS_URL` from
+`app-engine-mcp.env` every 60 seconds over mTLS; the owner can inspect the last
+result at `/api/app-engine/atrium-status` with the launcher capability.
+The signing key is written to the separate `.ca-offline` directory. Move that
+directory off the service host before installing any role directory.
+Never install the whole staging directory on a service host. Rotation means generating a
+new bundle, updating both services and clients, checking the new handshake,
+then removing the old bundle.
 
 ## Memory and lifetime
 

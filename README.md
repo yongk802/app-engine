@@ -109,6 +109,12 @@ conflicts or changed releases return 409, and unreachable stores return 502.
 
 ## App Studio and managed apps
 
+For production pilots, set `APP_ENGINE_PROCESS_ISOLATION=audit` to record each
+managed install, build, and start command that still runs on the host. See
+[managed command isolation status](docs/process-isolation.md) before using
+`enforce`, which currently refuses these commands because no verified isolated
+runner is available.
+
 The standalone distribution includes the same App Studio Atrium embeds. After
 starting app-engine, open
 [`http://127.0.0.1:8770/api/app-engine/studio/`](http://127.0.0.1:8770/api/app-engine/studio/)
@@ -395,19 +401,25 @@ What changes when the variable is set:
   `players.json` under the state directory) or adopts `APP_ENGINE_ADMIN_SECRET`.
   Sign in at `https://play.example.com/admin`; the session cookie (`HttpOnly`,
   `Secure`, `SameSite=Lax`, domain-wide so app subdomains carry it) lasts 90
-  days and is revoked by **Sign out** or by rotating the secret. HTML
+  days and is revoked by **Sign out** or by rotating the secret. The engine
+  removes its session cookie before proxying requests to app backends. HTML
   navigations without it are sent to `/admin`; API calls get `401`. Only
   `/api/engine` and the sign-in page are open. Wrong secrets are limited to
   five attempts per minute per address.
 - App responses may be framed only by the public launcher
   (`frame-ancestors https://play.example.com`).
+- Production store connections require an exact operator-configured HTTPS mTLS
+  origin. Multiplayer alert webhooks must target an
+  origin listed in `APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS`, with a path of
+  `/api/app-notify/<app-id>`; TLS certificate validation stays enabled.
 - **Local AI is off.** `/api/app-chat` and `/api/local-ai/*` answer `403`: the
   owner's models never leave the owner's computer.
-- `APP_ENGINE_HOST` may now be a public address, but the intended layout is a
-  TLS proxy on the same machine forwarding to loopback, with
+- `APP_ENGINE_HOST` must remain loopback. Put a TLS proxy on the same machine
+  forwarding to `127.0.0.1:8770`, with
   `APP_ENGINE_TRUST_PROXY=1` so the engine sees `https` and the real client
-  address. Reference Caddy configuration (wildcard certificates need Caddy's
-  DNS-challenge plugin for your DNS provider):
+  address. A public origin outside `.localhost` must use HTTPS. Reference
+  Caddy configuration (wildcard certificates need Caddy's DNS-challenge plugin
+  for your DNS provider):
 
 ```caddyfile
 play.example.com, *.play.example.com {

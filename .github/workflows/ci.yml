@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -27,6 +28,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: app-engine/requirements*.txt
+      - uses: astral-sh/setup-uv@v6
       - run: python -m pip install -r requirements-dev.txt
         working-directory: app-engine
       - uses: actions/setup-node@v4

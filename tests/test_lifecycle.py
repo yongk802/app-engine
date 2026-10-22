@@ -12,10 +12,13 @@ import asyncio
 import json
 import os
 import sys
+import threading
 import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +56,7 @@ from app_engine.contracts import (
     LaunchRequest,
     ManifestInspection,
     PlanFingerprint,
+    PreparationError,
     ProcessScope,
     ResolvedConfiguration,
     RuntimeSpec,
@@ -207,7 +211,7 @@ if child_record:
 crash_record = os.environ.get("CRASH_RECORD")
 if crash_record and not Path(crash_record).exists():
     Path(crash_record).write_text("first", encoding="utf-8")
-    threading.Timer(0.15, lambda: os._exit(7)).start()
+    threading.Timer(0.75 if os.name == "nt" else 0.15, lambda: os._exit(7)).start()
 
 for number in range(int(os.environ.get("LOG_LINES", "0"))):
     print(f"stdout-{number}", flush=True)
@@ -311,6 +315,7 @@ def _manager(
     *,
     host: _Host | None = None,
     max_log_records: int = 100,
+    isolation_policy=None,
 ):
     catalog = _Catalog(manifest)
     manager = _manager_type()(
@@ -320,8 +325,158 @@ def _manager(
         runtime_root=tmp_path / "runtime",
         max_log_records=max_log_records,
         stop_grace_seconds=0.75,
+        isolation_policy=isolation_policy,
     )
     return manager
+
+
+def test_managed_health_probe_ignores_host_proxy_settings(monkeypatch):
+    from app_engine.lifecycle import ProcessLifecycleManager
+
+    class Health(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("no_proxy", "")
+        assert ProcessLifecycleManager._health_status(
+            f"http://127.0.0.1:{server.server_port}/health"
+        ) == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_stream_cleanup_ignores_completed_readers_from_an_old_event_loop():
+    from app_engine.lifecycle import ProcessLifecycleManager
+
+    old_loop = asyncio.new_event_loop()
+    try:
+        async def finished_reader():
+            return None
+
+        old_task = old_loop.create_task(finished_reader())
+        old_loop.run_until_complete(old_task)
+    finally:
+        old_loop.close()
+
+    manager = SimpleNamespace(_stop_grace_seconds=0.1)
+    record = SimpleNamespace(stream_tasks=[old_task])
+    asyncio.run(ProcessLifecycleManager._drain_streams(manager, record))
+
+
+@pytest.mark.asyncio
+async def test_audit_mode_records_each_host_command_without_command_secrets(
+    tmp_path, caplog
+):
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    root.mkdir()
+    _write_counter(root)
+    install = CommandStep(
+        argv=(sys.executable, "counter.py", "install.count", "install.out"),
+        outputs=("install.out",),
+    )
+    build = CommandStep(
+        argv=(sys.executable, "counter.py", "build.count", "build.out"),
+        outputs=("build.out",),
+    )
+    start = CommandStep(
+        argv=(sys.executable, "server.py"),
+        environment=(
+            EnvironmentBinding(
+                "PRIVATE_VALUE", EnvironmentSource.LITERAL, "secret-canary"
+            ),
+        ),
+    )
+    manager = _manager(
+        tmp_path,
+        _manifest(root, install=(install,), build=(build,), start=start),
+        isolation_policy=ProcessIsolationPolicy.from_value("audit"),
+    )
+
+    with caplog.at_level("WARNING", logger="app_engine.process_isolation"):
+        handle = await manager.launch(_request(), approval=None)
+        await manager.stop(handle.launch_id, StopReason.USER)
+
+    evidence = [
+        json.loads(record.message.removeprefix("managed_process_isolation "))
+        for record in caplog.records
+        if record.message.startswith("managed_process_isolation ")
+    ]
+    assert [item["phase"] for item in evidence] == ["install", "build", "start"]
+    assert all(
+        item["mode"] == "audit" and item["decision"] == "host_process"
+        for item in evidence
+    )
+    assert all(
+        item["app_id"] == "demo" and item["target_id"] == "web"
+        for item in evidence
+    )
+    assert "secret-canary" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_enforce_mode_refuses_install_before_any_host_command(tmp_path):
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    root.mkdir()
+    _write_counter(root)
+    install = CommandStep(
+        argv=(sys.executable, "counter.py", "install.count", "install.out"),
+        outputs=("install.out",),
+    )
+    manager = _manager(
+        tmp_path,
+        _manifest(root, install=(install,)),
+        isolation_policy=ProcessIsolationPolicy.from_value("enforce"),
+    )
+
+    with pytest.raises(PreparationError, match="isolated runner") as caught:
+        await manager.launch(_request(), approval=None)
+    assert caught.value.code == "isolated_runner_unavailable"
+    assert not (root / "install.count").exists()
+
+
+@pytest.mark.asyncio
+async def test_enforce_mode_refuses_start_before_any_host_command(tmp_path):
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    argv_record = tmp_path / "started"
+    start = CommandStep(
+        argv=(sys.executable, "server.py"),
+        environment=(
+            EnvironmentBinding(
+                "ARGV_RECORD", EnvironmentSource.LITERAL, str(argv_record)
+            ),
+        ),
+    )
+    host = _Host()
+    manager = _manager(
+        tmp_path,
+        _manifest(root, start=start),
+        host=host,
+        isolation_policy=ProcessIsolationPolicy.from_value("enforce"),
+    )
+
+    with pytest.raises(LaunchError, match="isolated runner") as caught:
+        await manager.launch(_request(), approval=None)
+    assert caught.value.code == "isolated_runner_unavailable"
+    assert not argv_record.exists()
+    assert host.recorded_events[-1].failure.code == "isolated_runner_unavailable"
 
 
 def _request(
@@ -628,6 +783,7 @@ async def test_logs_are_bounded_and_preserve_stream_identity(tmp_path):
         await manager.stop(handle.launch_id, StopReason.USER)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no graceful POSIX SIGTERM")
 @pytest.mark.asyncio
 async def test_stop_is_graceful_and_idempotent(tmp_path):
     stop_record = tmp_path / "stop-record"
@@ -899,6 +1055,10 @@ async def test_stop_kills_descendants_after_process_leader_exits(tmp_path):
             os.kill(child_pid, 0)
         except ProcessLookupError:
             break
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) in {6, 87, 1168}:
+                break
+            raise
         await asyncio.sleep(0.02)
     else:
         pytest.fail("descendant survived process-group shutdown")
@@ -1006,10 +1166,11 @@ async def test_idle_stop_retries_when_first_cleanup_is_incomplete(
     await manager.retain(handle.launch_id)
     await manager.release(handle.launch_id)
 
-    for _ in range(100):
+    deadline = asyncio.get_running_loop().time() + 10
+    while asyncio.get_running_loop().time() < deadline:
         if (await manager.status(handle.launch_id)).state is RuntimeState.STOPPED:
             break
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.02)
     else:
         await original_terminate(manager._records[handle.launch_id])
         pytest.fail("incomplete idle cleanup was not retried")

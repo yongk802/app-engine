@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import http.client
 import json
+import logging
 import os
 import shutil
 import signal
 import socket
-import urllib.error
-import urllib.request
+import subprocess
 import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -23,6 +24,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import AsyncIterator, Any
+from urllib.parse import urlsplit
 
 from .contracts import (
     AppCatalog,
@@ -62,6 +64,7 @@ from .contracts import (
     TargetSpec,
     ToolchainError,
 )
+from .process_isolation import IsolationMode, ProcessIsolationPolicy
 
 
 _SAFE_PARENT_ENVIRONMENT = (
@@ -78,6 +81,9 @@ _SAFE_PARENT_ENVIRONMENT = (
     "USERPROFILE",
     "WINDIR",
 )
+
+_isolation_log = logging.getLogger("app_engine.process_isolation")
+_FORCE_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def _now() -> datetime:
@@ -153,6 +159,7 @@ class ProcessLifecycleManager(LifecycleManager):
         max_log_bytes: int = 1024 * 1024,
         stop_grace_seconds: float = 5.0,
         max_crash_restarts: int = 1,
+        isolation_policy: ProcessIsolationPolicy | None = None,
     ) -> None:
         if max_log_records < 1:
             raise ValueError("max_log_records must be positive")
@@ -171,6 +178,9 @@ class ProcessLifecycleManager(LifecycleManager):
         self._max_log_record_bytes = min(64 * 1024, max_log_bytes)
         self._stop_grace_seconds = stop_grace_seconds
         self._max_crash_restarts = max_crash_restarts
+        self._isolation_policy = (
+            isolation_policy or ProcessIsolationPolicy.from_environment()
+        )
         self._records: dict[LaunchId, _LaunchRecord] = {}
         self._active: dict[ScopeKey, LaunchId] = {}
         self._scope_locks: dict[ScopeKey, asyncio.Lock] = {}
@@ -329,13 +339,16 @@ class ProcessLifecycleManager(LifecycleManager):
                 )
                 self._remove_active(record)
                 raise
-            except (HealthCheckError, LaunchError):
+            except (HealthCheckError, LaunchError) as exc:
                 await self._terminate_process(record)
-                failure = RuntimeFailure(
-                    "health_check_failed",
-                    "The app did not satisfy its startup health contract.",
-                    "Check the app logs and health endpoint, then retry.",
-                )
+                if isinstance(exc, LaunchError):
+                    failure = RuntimeFailure(exc.code, exc.message, exc.remediation)
+                else:
+                    failure = RuntimeFailure(
+                        "health_check_failed",
+                        "The app did not satisfy its startup health contract.",
+                        "Check the app logs and health endpoint, then retry.",
+                    )
                 await self._fail(record, failure)
                 self._remove_active(record)
                 raise
@@ -758,6 +771,7 @@ class ProcessLifecycleManager(LifecycleManager):
         for resolved in plan.steps:
             if resolved.phase == "start":
                 continue
+            self._check_isolation(plan, resolved.phase)
             environment = self._environment(
                 resolved.command, configuration, reserved={}
             )
@@ -777,7 +791,7 @@ class ProcessLifecycleManager(LifecycleManager):
                         process.communicate(), timeout=resolved.command.timeout_seconds
                     )
                 except asyncio.TimeoutError as exc:
-                    self._signal_group(process, signal.SIGKILL)
+                    self._signal_group(process, _FORCE_SIGNAL)
                     await process.wait()
                     raise PreparationError(
                         "preparation_timeout",
@@ -785,7 +799,7 @@ class ProcessLifecycleManager(LifecycleManager):
                         remediation="Increase its timeout or make the step complete sooner.",
                     ) from exc
                 except asyncio.CancelledError:
-                    self._signal_group(process, signal.SIGKILL)
+                    self._signal_group(process, _FORCE_SIGNAL)
                     await process.wait()
                     raise
             except OSError as exc:
@@ -821,6 +835,7 @@ class ProcessLifecycleManager(LifecycleManager):
         target: TargetSpec,
         configuration: ResolvedConfiguration,
     ) -> None:
+        self._check_isolation(plan, "start")
         runtime = target.runtime
         assert runtime is not None
         start = next(step for step in plan.steps if step.phase == "start")
@@ -867,6 +882,34 @@ class ProcessLifecycleManager(LifecycleManager):
             asyncio.create_task(self._capture(record, "stderr", process.stderr)),
         ]
 
+    def _check_isolation(self, plan: LaunchPlan, phase: str) -> None:
+        decision = self._isolation_policy.decide(phase)
+        if decision.mode is not IsolationMode.LEGACY:
+            _isolation_log.warning(
+                "managed_process_isolation %s",
+                json.dumps(
+                    {
+                        "app_id": str(plan.scope_key.app_id),
+                        "target_id": str(plan.scope_key.target_id),
+                        "phase": phase,
+                        "mode": decision.mode.value,
+                        "decision": decision.execution_class,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        if not decision.allowed:
+            error_type = LaunchError if phase == "start" else PreparationError
+            raise error_type(
+                "isolated_runner_unavailable",
+                "A verified isolated runner is required for managed app commands.",
+                remediation=(
+                    "Configure a verified isolated runner or switch to audit mode "
+                    "after reviewing the host-execution risk."
+                ),
+                context=(("phase", phase),),
+            )
+
     @staticmethod
     def _environment(
         command: CommandStep,
@@ -911,6 +954,7 @@ class ProcessLifecycleManager(LifecycleManager):
         deadline = asyncio.get_running_loop().time() + health.timeout_seconds
         path = health.path if health.path.startswith("/") else f"/{health.path}"
         url = f"http://127.0.0.1:{record.endpoint.port}{path}"
+        last_result = "no response"
         while asyncio.get_running_loop().time() < deadline:
             process = record.process
             if process is not None and process.returncode is not None:
@@ -922,11 +966,18 @@ class ProcessLifecycleManager(LifecycleManager):
                 )
             try:
                 status = await asyncio.to_thread(self._health_status, url)
+                last_result = f"HTTP {status}"
                 if 200 <= status < 300:
                     return
-            except (OSError, urllib.error.URLError):
-                pass
+            except (OSError, http.client.HTTPException) as exc:
+                last_result = f"{type(exc).__name__}: {exc}"
             await asyncio.sleep(max(0.001, health.interval_seconds))
+        logging.getLogger(__name__).warning(
+            "managed health timeout: pid=%s returncode=%s last_result=%s",
+            record.process.pid if record.process else None,
+            record.process.returncode if record.process else None,
+            last_result,
+        )
         raise HealthCheckError(
             "health_timeout",
             "The app health check did not succeed before its timeout.",
@@ -935,9 +986,20 @@ class ProcessLifecycleManager(LifecycleManager):
 
     @staticmethod
     def _health_status(url: str) -> int:
-        request = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(request, timeout=0.2) as response:
-            return response.status
+        # Use a direct socket so OS proxy discovery cannot redirect or stall
+        # an engine-managed loopback health probe.
+        parsed = urlsplit(url)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port is None:
+            raise ValueError("Managed health probes require a loopback HTTP URL")
+        path = parsed.path or "/"
+        if parsed.query:
+            path += f"?{parsed.query}"
+        connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=0.2)
+        try:
+            connection.request("GET", path)
+            return connection.getresponse().status
+        finally:
+            connection.close()
 
     async def _capture(
         self,
@@ -1135,14 +1197,14 @@ class ProcessLifecycleManager(LifecycleManager):
         while self._group_alive(group_id):
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                self._signal_group_id(group_id, signal.SIGKILL)
+                self._signal_group_id(group_id, _FORCE_SIGNAL)
                 break
             await asyncio.sleep(min(0.02, remaining))
         if process.returncode is None:
             try:
                 await asyncio.wait_for(process.wait(), self._stop_grace_seconds)
             except asyncio.TimeoutError:
-                self._signal_group_id(group_id, signal.SIGKILL)
+                self._signal_group_id(group_id, _FORCE_SIGNAL)
 
     @staticmethod
     def _signal_group(process: asyncio.subprocess.Process, sig: signal.Signals) -> None:
@@ -1150,6 +1212,17 @@ class ProcessLifecycleManager(LifecycleManager):
 
     @staticmethod
     def _signal_group_id(group_id: int, sig: signal.Signals) -> None:
+        if os.name == "nt":
+            # Windows has no killpg. taskkill /T terminates descendants as well
+            # as the leader, including preparation commands that time out.
+            subprocess.run(
+                ["taskkill", "/PID", str(group_id), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+            )
+            return
         try:
             os.killpg(group_id, sig)
         except ProcessLookupError:
@@ -1158,16 +1231,30 @@ class ProcessLifecycleManager(LifecycleManager):
     @staticmethod
     def _group_alive(group_id: int) -> bool:
         try:
-            os.killpg(group_id, 0)
+            if os.name == "nt":
+                os.kill(group_id, 0)
+            else:
+                os.killpg(group_id, 0)
         except ProcessLookupError:
             return False
         except PermissionError:
             return True
+        except OSError as exc:
+            # Windows reports a nonexistent PID as ERROR_INVALID_PARAMETER
+            # rather than mapping it to ProcessLookupError.
+            if os.name == "nt" and getattr(exc, "winerror", None) in {6, 87, 1168}:
+                return False
+            raise
         return True
 
     async def _drain_streams(self, record: _LaunchRecord) -> None:
         current = asyncio.current_task()
-        tasks = [task for task in record.stream_tasks if task is not current]
+        loop = asyncio.get_running_loop()
+        # A test client or embedded host can dispose its event loop between
+        # runtime lifespans. Finished readers from that loop cannot be awaited
+        # by this loop (Python 3.10/3.11 reject the cross-loop future).
+        tasks = [task for task in record.stream_tasks
+                 if task is not current and task.get_loop() is loop]
         if tasks:
             gathering = asyncio.gather(*tasks, return_exceptions=True)
             try:

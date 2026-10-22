@@ -38,6 +38,7 @@ from .contracts import (
     TargetProviderError,
     TargetSpec,
 )
+from .proxy_headers import forward_app_headers
 
 
 _HOP_BY_HOP = frozenset(
@@ -249,7 +250,7 @@ class DefaultAppGateway(AppGateway):
             )
 
         url = _proxy_url(endpoint, request.path, request.query)
-        headers = _strip_hop_headers(request.headers, remove_host=True)
+        headers = forward_app_headers(_strip_hop_headers(request.headers, remove_host=True))
         upstream_request = self._client.build_request(
             request.method,
             url,
@@ -420,6 +421,8 @@ def _read_contained_regular(
     """
     if not parts:
         return None
+    if os.name == "nt":
+        return _read_contained_regular_windows(root, parts, display_path)
     common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     directory_flags = (
         common_flags
@@ -461,6 +464,57 @@ def _read_contained_regular(
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
+
+
+def _read_contained_regular_windows(
+    root: Path, parts: tuple[str, ...], display_path: str
+) -> bytes | None:
+    """Check the final Windows handle path after opening, including reparse points.
+
+    Python's Windows ``os.open`` lacks ``dir_fd``. Checking the path before
+    opening would permit a junction or symlink swap, so containment is checked
+    against the already-open file handle instead.
+    """
+    import ctypes
+    import msvcrt
+
+    if any("\\" in part or ":" in part or "\x00" in part for part in parts):
+        raise _asset_escape(display_path)
+    asset_fd: int | None = None
+    try:
+        trusted_root = root.resolve(strict=True)
+        asset_fd = os.open(root.joinpath(*parts), os.O_RDONLY | os.O_BINARY)
+        if not stat.S_ISREG(os.fstat(asset_fd).st_mode):
+            return None
+        handle = msvcrt.get_osfhandle(asset_fd)
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetFinalPathNameByHandleW(
+            handle, buffer, len(buffer), 0
+        )
+        if not length or length >= len(buffer):
+            raise OSError("Could not verify the opened asset path")
+        final_path = buffer.value.removeprefix("\\\\?\\")
+        try:
+            Path(final_path).relative_to(trusted_root)
+        except ValueError as exc:
+            raise _asset_escape(display_path) from exc
+        chunks: list[bytes] = []
+        while chunk := os.read(asset_fd, 1024 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except FileNotFoundError:
+        return None
+    except TargetProviderError:
+        raise
+    except OSError as exc:
+        raise TargetProviderError(
+            "asset_unavailable",
+            "The requested asset could not be opened safely.",
+            context=(("path", display_path), ("detail", str(exc))),
+        ) from exc
+    finally:
+        if asset_fd is not None:
+            os.close(asset_fd)
 
 
 def _asset_escape(relative_path: str) -> TargetProviderError:

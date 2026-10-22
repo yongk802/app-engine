@@ -5,6 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {engine} from './fake-rules.mjs';
 import {RoomService,deliverWebhook} from '../rooms.mjs';
+import http from 'node:http';
+process.env.APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS='https://192.168.1.20:9900,http://127.0.0.1:9900';
 
 const compatibility={protocol:1,rulesVersion:engine.rulesVersion,catalogDigest:engine.catalogDigest};
 const deck=engine.generateDeck({},1701);
@@ -95,7 +97,7 @@ test('move alerts reach only an absent player, with a registered webhook, when t
   // Clearing the webhook stops alerts; the snapshot says so.
   const cleared=await t.service.dispatch('notify',{roomId:t.owner.roomId,requestId:rid(),webhook:null},otherToken);
   assert.equal(cleared.alerts,false);
-  for(const bad of [{url:'ftp://x/y',token:'t'},{url:'https://user:pw@host/x',token:'t'},{url:'https://host/x'},{url:'https://host/x',token:''},'nope'])
+  for(const bad of [{url:'ftp://x/y',token:'t'},{url:'https://user:pw@host/x',token:'t'},{url:'https://host/x'},{url:'https://host/x',token:''},{url:'http://127.0.0.1:1/api/app-notify/cyberpunk-tcg',token:'t'},'nope'])
    await assert.rejects(t.service.dispatch('notify',{roomId:t.owner.roomId,requestId:rid(),webhook:bad},otherToken),e=>e.code==='INVALID_REQUEST');
   // Re-register, then let the absent player's clock expire: they hear the match ended.
   await t.service.dispatch('notify',{roomId:t.owner.roomId,requestId:rid(),webhook},otherToken);
@@ -129,5 +131,16 @@ test('webhook delivery refuses non-http destinations without throwing',async()=>
  assert.equal(await deliverWebhook({url:'file:///etc/passwd',token:'t'},{title:'x'}),false);
  assert.equal(await deliverWebhook({url:'not a url',token:'t'},{title:'x'}),false);
  assert.equal(await deliverWebhook({url:'http://127.0.0.1:1/x',token:'t'},{title:'x'},{timeout:300}),false);
+});
+
+test('webhook delivery never dials a player-supplied loopback endpoint',async()=>{
+ let hits=0;
+ const server=http.createServer((_req,res)=>{hits++;res.end('ok');});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ try{
+  const url=`http://127.0.0.1:${server.address().port}/private`;
+  assert.equal(await deliverWebhook({url,token:'t'},{title:'x'}),false);
+  assert.equal(hits,0);
+ }finally{await new Promise(resolve=>server.close(resolve));}
 });
 

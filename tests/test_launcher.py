@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-HTML = Path("launcher.html").read_text()
+HTML = Path("launcher.html").read_text(encoding="utf-8")
 
 
 def test_manifest_values_are_not_inserted_with_inner_html():

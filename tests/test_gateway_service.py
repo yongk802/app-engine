@@ -528,6 +528,39 @@ class _StreamingResponse(httpx.AsyncByteStream):
 
 
 @pytest.mark.asyncio
+async def test_proxy_keeps_app_cookie_but_strips_engine_credentials(tmp_path):
+    captured = []
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, text="ok")
+
+    gateway = _gateway_type()(
+        catalog=_Catalog(_manifest(tmp_path, managed=True)),
+        lifecycle=_Lifecycle(TargetEndpoint("http", "localhost", 8912)),
+        catalog_key=CatalogKey("test"),
+        transport=httpx.MockTransport(upstream),
+    )
+    session = await gateway.open(_open_request())
+    await gateway.proxy(
+        session,
+        ProxyRequest(
+            method="GET", path="/", query=(),
+            headers=(("Cookie", "app_engine_session=engine-secret; app_login=app-value"),
+                     ("X-App-Engine-Admin", "admin-secret"),
+                     ("X-App-State-Token", "state-secret"),
+                     ("X-App-Engine-MTLS-Proxy", "proxy-secret")),
+            body=_body(),
+        ),
+    )
+    assert len(captured) == 1
+    assert captured[0].headers.get("cookie") == "app_login=app-value"
+    assert "x-app-engine-admin" not in captured[0].headers
+    assert "x-app-state-token" not in captured[0].headers
+    assert "x-app-engine-mtls-proxy" not in captured[0].headers
+
+
+@pytest.mark.asyncio
 async def test_proxy_preserves_stream_status_body_and_query_but_strips_hop_headers(
     tmp_path,
 ):

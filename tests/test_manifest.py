@@ -44,6 +44,44 @@ def test_no_index_and_no_entry_point_is_error():
     assert any("index.html" in e or "entry_point" in e for e in errors)
 
 
+MANAGED_TARGET = {"kind": "web", "runtime": {"driver": "process",
+                                             "start": {"argv": ["python", "server.py"]}}}
+
+
+def test_a_managed_target_serves_the_app_without_an_index():
+    """A v2 app the host launches has no index.html and no entry_point by
+    design; discovery must not report it as malformed."""
+    errors, _ = manifest.validate_manifest(
+        {"manifest_version": 2, "label": "X", "icon": "x",
+         "default_target": "web", "targets": {"web": MANAGED_TARGET}},
+        has_index=False, dir_name="x")
+    assert errors == []
+
+
+def test_managed_targets_are_accepted_as_an_array_too():
+    errors, _ = manifest.validate_manifest(
+        {"manifest_version": 2, "label": "X", "icon": "x",
+         "targets": [{"id": "web", **MANAGED_TARGET}]},
+        has_index=False, dir_name="x")
+    assert errors == []
+
+
+def test_a_target_without_a_runtime_cannot_serve_the_app():
+    errors, _ = manifest.validate_manifest(
+        {"manifest_version": 2, "label": "X", "icon": "x",
+         "targets": {"web": {"kind": "web"}}},
+        has_index=False, dir_name="x")
+    assert any("index.html" in e for e in errors)
+
+
+def test_malformed_targets_do_not_excuse_a_missing_index():
+    for targets in ("web", 7, {"web": "runtime"}, [], {}):
+        errors, _ = manifest.validate_manifest(
+            {"manifest_version": 2, "label": "X", "icon": "x", "targets": targets},
+            has_index=False, dir_name="x")
+        assert any("index.html" in e for e in errors), targets
+
+
 def test_loopback_entry_point_is_valid():
     errors, _ = manifest.validate_manifest(
         {"label": "X", "icon": "x", "entry_point": "http://127.0.0.1:8550"},

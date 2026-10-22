@@ -17,7 +17,12 @@ def package(app_id='hello', version='1.0.0', extra=None):
         archive.writestr('app.json', json.dumps({'id': app_id, 'version': version, 'label': 'Hello', 'icon': 'H'}))
         archive.writestr('index.html', '<!doctype html><title>Hello from store</title>')
         for name, value in (extra or {}).items():
-            archive.writestr(name, value)
+            # ZipInfo's constructor normalizes Windows backslashes. Preserve
+            # the attacker-supplied name to exercise the extractor itself.
+            info = zipfile.ZipInfo('placeholder')
+            info.filename = name
+            info.orig_filename = name
+            archive.writestr(info, value)
     return stream.getvalue()
 
 

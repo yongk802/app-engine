@@ -41,7 +41,8 @@ openssl req -x509 -newkey rsa:3072 -noenc -sha256 -days 3650 \
   -keyout "$key_directory/ca.key" -out "$directory/ca.crt" \
   -subj '/CN=App Engine private service CA' \
   -addext 'basicConstraints=critical,CA:TRUE' \
-  -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'subjectKeyIdentifier=hash' >/dev/null 2>&1
 
 issue() {
   local name=$1 kind=$2 dns=${3:-}
@@ -50,9 +51,9 @@ issue() {
     -subj "/CN=$name" >/dev/null 2>&1
   local extension="$directory/$name.ext"
   if [[ $kind == server ]]; then
-    printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s\n' "$dns" > "$extension"
+    printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\nsubjectAltName=DNS:%s\n' "$dns" > "$extension"
   else
-    printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n' > "$extension"
+    printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' > "$extension"
   fi
   openssl x509 -req -in "$directory/$name.csr" -CA "$directory/ca.crt" \
     -CAkey "$key_directory/ca.key" -CAcreateserial -out "$directory/$name.crt" \

@@ -31,6 +31,13 @@ def test_engine_status_probe_uses_client_certificate(tmp_path):
     subprocess.run(["bash", str(root / "scripts/setup-mtls.sh"), str(bundle),
                     "mcp.localhost", "store.localhost", "atrium.localhost"],
                    check=True, capture_output=True)
+    for cert in (bundle / "store" / "app-store.crt",
+                 bundle / "atrium-status-gateway" / "atrium-status.crt",
+                 bundle / "engine" / "app-engine-client.crt"):
+        details = subprocess.run(["openssl", "x509", "-in", str(cert),
+                                  "-noout", "-text"], check=True,
+                                 capture_output=True, text=True).stdout
+        assert "X509v3 Authority Key Identifier" in details
     status_port, tls_port = _port(), _port()
 
     class Health(BaseHTTPRequestHandler):

@@ -9,10 +9,12 @@ import json
 from pathlib import Path
 import secrets
 import tempfile
+from urllib.parse import urlsplit
 
 import httpx
 
 from .manifest import is_compatible, parse_manifest
+from .outbound_tls import OutboundTlsPolicy
 from .store_contracts import (
     MAX_CATALOG_BYTES, MAX_PACKAGE_BYTES, InstallPreview, InstalledRelease,
     Release, StoreCatalog, StoreConnection, StoreError, StoreListing, StoreStatus,
@@ -37,12 +39,17 @@ async def _finish_thread(operation: Callable[..., None], *args: object) -> None:
 
 class StoreBridge:
     def __init__(self, state_dir: Path, apps_dir: Path, *,
-                 local_roots: tuple[Path, ...] = (), client: httpx.AsyncClient | None = None):
+                 local_roots: tuple[Path, ...] = (), client: httpx.AsyncClient | None = None,
+                 tls_policy: OutboundTlsPolicy | None = None,
+                 public_mode: bool = False):
         self.path = Path(state_dir) / 'stores.json'
         self.apps_dir = Path(apps_dir).resolve()
         self.local_roots = tuple(Path(root).resolve() for root in local_roots)
         self._client = client
         self._owns_client = client is None
+        self._tls_policy = tls_policy or OutboundTlsPolicy()
+        self._public_mode = public_mode
+        self._mtls_clients: dict[object, httpx.AsyncClient] = {}
         self._stores: tuple[StoreConnection, ...] = self._load()
         self._previews: dict[str, InstallPreview] = {}
         self._lock = asyncio.Lock()
@@ -85,6 +92,8 @@ class StoreBridge:
 
     async def add_store(self, url: str, name: str = '') -> StoreConnection:
         url = canonical_url(url)
+        if self._public_mode:
+            await self._validate_public_target(url)
         if not isinstance(name, str) or len(name) > 200:
             raise StoreError('invalid_store_name', 'Store names must be at most 200 characters.')
         connection = StoreConnection(self._store_id(url), url, name.strip() or url)
@@ -110,10 +119,22 @@ class StoreBridge:
         raise StoreError('store_not_found', 'The store connection does not exist.')
 
     async def _download(self, url: str, limit: int) -> bytes:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=15.0, follow_redirects=False, trust_env=False)
+        context = self._tls_policy.for_origin(url) if self._owns_client else None
+        if self._public_mode:
+            await self._validate_public_target(url)
+        if context is not None:
+            client = self._mtls_clients.get(context)
+            if client is None:
+                client = httpx.AsyncClient(timeout=15.0, follow_redirects=False,
+                                           trust_env=False, verify=context)
+                self._mtls_clients[context] = client
+        else:
+            if self._client is None:
+                self._client = httpx.AsyncClient(timeout=15.0, follow_redirects=False,
+                                                 trust_env=False, verify=True)
+            client = self._client
         try:
-            async with self._client.stream('GET', url, headers={'Accept-Encoding': 'identity'}, follow_redirects=False, timeout=15.0) as response:
+            async with client.stream('GET', url, headers={'Accept-Encoding': 'identity'}, follow_redirects=False, timeout=15.0) as response:
                 response.raise_for_status()
                 if response.headers.get('content-encoding', 'identity').lower().strip() != 'identity':
                     raise StoreError('unsupported_encoding', 'The store must serve unencoded responses so download limits can be enforced.')
@@ -125,6 +146,11 @@ class StoreBridge:
                 return bytes(data)
         except httpx.HTTPError:
             raise StoreError('store_unavailable', 'The store could not be reached or returned an HTTP error.') from None
+
+    async def _validate_public_target(self, url: str) -> None:
+        parsed = urlsplit(url)
+        if parsed.scheme != 'https' or not parsed.hostname or self._tls_policy.for_origin(url) is None:
+            raise StoreError('unsafe_store_url', 'Production stores require an explicitly configured HTTPS mTLS origin.')
 
     async def _releases(self, store: StoreConnection) -> tuple[str, tuple[Release, ...]]:
         try:
@@ -217,3 +243,6 @@ class StoreBridge:
     async def close(self) -> None:
         if self._owns_client and self._client is not None:
             await self._client.aclose()
+        for client in self._mtls_clients.values():
+            await client.aclose()
+        self._mtls_clients.clear()

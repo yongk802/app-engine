@@ -3,6 +3,8 @@ import http from 'node:http';
 import https from 'node:https';
 import {mkdir, readFile, open, rename, unlink} from 'node:fs/promises';
 import path from 'node:path';
+import {URL} from 'node:url';
+import {Buffer} from 'node:buffer';
 import {PROTOCOL_VERSION, RoomError, RoomServiceContract} from './contract.mjs';
 import {installTournaments} from './tournaments.mjs';
 import {installFriends} from './friends.mjs';
@@ -35,15 +37,29 @@ let TOURNEY_FIELDS = {}, FRIEND_FIELDS = {};
 const TURN_TIMERS = {'24h': 86400000, '72h': 259200000};
 const CONNECTED_WINDOW = 30000;
 const CONCEDE = 'concede::::::';
-const privateHost = host => /^(localhost|127\.|10\.|192\.168\.|169\.254\.|::1$|\[::1\]|fc|fd)/i.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /\.(local|lan|home|internal)$/i.test(host);
-/** Fire-and-forget webhook POST. LAN and loopback hosts may present the operator's own certificate. */
+/** Only the operator may choose notification services; players can register a token for one. */
+export function allowedWebhookDestination(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return false; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
+      !/^\/(?:api\/)?app-notify\/[a-z0-9][a-z0-9-]*$/.test(url.pathname)) return false;
+  const allowed = (process.env.APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
+  return allowed.some(value => {
+    try {
+      const configured = new URL(value);
+      return configured.origin === url.origin && configured.pathname === '/' && !configured.search && !configured.hash &&
+        !configured.username && !configured.password && ['http:', 'https:'].includes(configured.protocol);
+    } catch { return false; }
+  });
+}
+/** Fire-and-forget webhook POST to an operator-approved notification origin. */
 export function deliverWebhook(webhook, payload, {timeout = 5000} = {}) {
   return new Promise(resolve => {
     let url;
     try { url = new URL(webhook.url); } catch { resolve(false); return; }
-    if (!['http:', 'https:'].includes(url.protocol)) { resolve(false); return; }
+    if (!allowedWebhookDestination(webhook.url)) { resolve(false); return; }
     const body = JSON.stringify(payload);
-    const request = (url.protocol === 'https:' ? https : http).request(url, {method: 'POST', timeout, headers: {'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-App-Notify-Token': webhook.token}, ...(url.protocol === 'https:' && privateHost(url.hostname) ? {rejectUnauthorized: false} : {})}, response => { response.resume(); resolve(response.statusCode >= 200 && response.statusCode < 300); });
+    const request = (url.protocol === 'https:' ? https : http).request(url, {method: 'POST', timeout, headers: {'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-App-Notify-Token': webhook.token}}, response => { response.resume(); resolve(response.statusCode >= 200 && response.statusCode < 300); });
     request.on('timeout', () => request.destroy(new Error('timeout')));
     request.on('error', () => resolve(false));
     request.end(body);
@@ -385,9 +401,7 @@ export class RoomService extends RoomServiceContract {
       case 'notify': {
         if (p.webhook !== null) {
           if (!object(p.webhook) || Object.keys(p.webhook).some(k => !['url', 'token'].includes(k)) || typeof p.webhook.url !== 'string' || p.webhook.url.length > 2048 || typeof p.webhook.token !== 'string' || !p.webhook.token || p.webhook.token.length > 4096) fail('INVALID_REQUEST', 'Invalid alert destination.');
-          let url;
-          try { url = new URL(p.webhook.url); } catch { fail('INVALID_REQUEST', 'Invalid alert destination.'); }
-          if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) fail('INVALID_REQUEST', 'Invalid alert destination.');
+          if (!allowedWebhookDestination(p.webhook.url)) fail('INVALID_REQUEST', 'Alert destination is not approved by the host.');
         }
         seat.webhook = p.webhook ? {url: p.webhook.url, token: p.webhook.token} : null;
         break;
@@ -498,5 +512,5 @@ export class RoomService extends RoomServiceContract {
   }
 }
 // Tournaments extend the prototype; installed after the class exists.
-TOURNEY_FIELDS = installTournaments(RoomService, {secret, digest, eqHash, text, object, copy, fail, canonical, PROTOCOL_VERSION});
+TOURNEY_FIELDS = installTournaments(RoomService, {secret, digest, eqHash, text, object, copy, fail, canonical, PROTOCOL_VERSION, allowedWebhookDestination});
 FRIEND_FIELDS = installFriends(RoomService, {secret, digest, eqHash, text, object, copy, fail, PROTOCOL_VERSION});

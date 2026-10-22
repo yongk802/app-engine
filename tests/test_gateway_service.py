@@ -548,7 +548,8 @@ async def test_proxy_keeps_app_cookie_but_strips_engine_credentials(tmp_path):
             method="GET", path="/", query=(),
             headers=(("Cookie", "app_engine_session=engine-secret; app_login=app-value"),
                      ("X-App-Engine-Admin", "admin-secret"),
-                     ("X-App-State-Token", "state-secret")),
+                     ("X-App-State-Token", "state-secret"),
+                     ("X-App-Engine-MTLS-Proxy", "proxy-secret")),
             body=_body(),
         ),
     )
@@ -556,6 +557,7 @@ async def test_proxy_keeps_app_cookie_but_strips_engine_credentials(tmp_path):
     assert captured[0].headers.get("cookie") == "app_login=app-value"
     assert "x-app-engine-admin" not in captured[0].headers
     assert "x-app-state-token" not in captured[0].headers
+    assert "x-app-engine-mtls-proxy" not in captured[0].headers
 
 
 @pytest.mark.asyncio

@@ -402,6 +402,10 @@ What changes when the variable is set:
   five attempts per minute per address.
 - App responses may be framed only by the public launcher
   (`frame-ancestors https://play.example.com`).
+- Production store connections require an exact operator-configured HTTPS mTLS
+  origin. Multiplayer alert webhooks must target an
+  origin listed in `APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS`, with a path of
+  `/api/app-notify/<app-id>`; TLS certificate validation stays enabled.
 - **Local AI is off.** `/api/app-chat` and `/api/local-ai/*` answer `403`: the
   owner's models never leave the owner's computer.
 - `APP_ENGINE_HOST` must remain loopback. Put a TLS proxy on the same machine

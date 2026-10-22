@@ -543,9 +543,11 @@ class OwnerGate:
     # The busy, per-player surfaces; the launcher and static apps are not worth metering.
     LIMITED_PREFIXES = ("/api/players/", "/api/app-multiplayer/", "/api/app-state/", "/api/chat")
 
-    def __init__(self, app: ASGIApp, accounts: Accounts, enabled: bool, limiter: RateLimiter | None = None):
+    def __init__(self, app: ASGIApp, accounts: Accounts, enabled: bool, limiter: RateLimiter | None = None,
+                 mcp_proxy_secret: str = ""):
         self.app, self.accounts, self.enabled = app, accounts, enabled
         self.limiter = limiter or RateLimiter()
+        self.mcp_proxy_secret = mcp_proxy_secret
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not self.enabled:
@@ -568,7 +570,10 @@ class OwnerGate:
                 response = JSONResponse({"ok": False, "error": {"code": "RATE_LIMITED", "message": "Slow down: too many requests."}}, status_code=429, headers={"Retry-After": str(max(1, int(wait + 0.999)))})
                 await response(scope, receive, send)
                 return
-        if session is None and path not in self.OPEN_PATHS and not path.startswith(self.OPEN_PREFIXES):
+        mcp_proxy = (path == "/api/mcp" and bool(self.mcp_proxy_secret) and
+                     request.client is not None and request.client.host in _LOOPBACK and
+                     secrets.compare_digest(request.headers.get("x-app-engine-mtls-proxy", ""), self.mcp_proxy_secret))
+        if session is None and not mcp_proxy and path not in self.OPEN_PATHS and not path.startswith(self.OPEN_PREFIXES):
             accepts_html = "text/html" in request.headers.get("accept", "") and request.method == "GET"
             response: Response = RedirectResponse("/admin", status_code=303) if accepts_html else JSONResponse({"detail": "sign in required"}, status_code=401)
             await response(scope, receive, send)

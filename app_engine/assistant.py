@@ -95,7 +95,9 @@ async def payload(request: Request):
         raise HTTPException(400, 'Invalid JSON') from None
 
 
-def create_assistant_router(runtime, state_dir: Path, *, require_owner_action, is_launcher_host, available: bool, approved):
+def create_assistant_router(runtime, state_dir: Path, *, require_owner_action, is_launcher_host, available: bool, approved,  # noqa: C901
+                            is_mtls_request=lambda request: False, public_requires_mtls: bool = False,
+                            mcp_url: str = ''):
     router = APIRouter()
     settings = AssistantSettings(state_dir)
     app_tools = AppTools(runtime, state_dir, approved)
@@ -109,17 +111,23 @@ def create_assistant_router(runtime, state_dir: Path, *, require_owner_action, i
     def authenticate(request):
         if not available:
             raise HTTPException(404)
-        if not is_launcher_host(request):
+        mtls_request = is_mtls_request(request)
+        if not mtls_request and not is_launcher_host(request):
             raise HTTPException(403, 'Launcher host required')
         origin = request.headers.get('origin')
         expected = f'{request.url.scheme}://{request.url.netloc}'
-        if origin is not None and origin != expected:
+        if origin is not None and (mtls_request or origin != expected):
             raise HTTPException(403, 'Origin denied')
+        if not mtls_request and public_requires_mtls:
+            raise HTTPException(403, 'mTLS gateway required')
         if not settings.accepts(request):
             raise HTTPException(401, 'MCP key required', headers={'WWW-Authenticate': 'Bearer'})
 
     def status(request):
-        return {'available': available, 'chat_url': settings.url, 'mcp_url': str(request.base_url).rstrip('/') + '/api/mcp', 'enabled': bool(settings.key_hash) and available, 'last_connected_at': settings.last_connected_at, 'event_cursor': app_tools.cursor}
+        return {'available': available, 'chat_url': settings.url,
+                'mcp_url': mcp_url or str(request.base_url).rstrip('/') + '/api/mcp',
+                'enabled': bool(settings.key_hash) and available,
+                'last_connected_at': settings.last_connected_at, 'event_cursor': app_tools.cursor}
 
     @router.get('/assistant-assets/{filename}')
     async def asset(filename: str):

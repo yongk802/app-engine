@@ -73,6 +73,9 @@ from app_engine.public_origin import (
     startup_warnings,
 )
 from app_engine.proxy_headers import forward_app_headers
+from app_engine.outbound_tls import OutboundTlsPolicy
+from app_engine.atrium_status import AtriumStatusProbe
+from app_engine.listener_gate import LoopbackListenerGate
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.routes import create_app_engine_router
@@ -90,7 +93,15 @@ STATE_DIR = Path(
     os.environ.get("APP_ENGINE_STATE_DIR", "~/.config/app-engine/app-state")
 ).expanduser()
 STORE_APPS_DIR = STATE_DIR / "store-apps"
-_store_bridge = StoreBridge(STATE_DIR, STORE_APPS_DIR, local_roots=(APPS_DIR,))
+_outbound_tls_file = os.environ.get("APP_ENGINE_OUTBOUND_MTLS_CONFIG", "").strip()
+_outbound_tls = (OutboundTlsPolicy.from_file(Path(_outbound_tls_file))
+                 if _outbound_tls_file else OutboundTlsPolicy())
+_atrium_status_url = os.environ.get("APP_ENGINE_ATRIUM_STATUS_URL", "").strip()
+_atrium_status_probe = (AtriumStatusProbe(_atrium_status_url, _outbound_tls)
+                        if _atrium_status_url else None)
+_store_bridge = StoreBridge(STATE_DIR, STORE_APPS_DIR, local_roots=(APPS_DIR,),
+                            tls_policy=_outbound_tls,
+                            public_mode=bool(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN")))
 MAX_STATE_BYTES = 100 * 1024  # 100 KB, matches Atrium
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -110,6 +121,23 @@ try:
 except ValueError as _exc:
     raise SystemExit(f"app-engine: {_exc}") from _exc
 _TRUST_PROXY = os.environ.get("APP_ENGINE_TRUST_PROXY", "") in {"1", "true", "yes"}
+_MCP_PROXY_SECRET = os.environ.get("APP_ENGINE_MCP_PROXY_SECRET", "")
+if _MCP_PROXY_SECRET and len(_MCP_PROXY_SECRET) < 32:
+    raise ValueError("APP_ENGINE_MCP_PROXY_SECRET must be at least 32 characters")
+_MCP_URL = os.environ.get("APP_ENGINE_MCP_URL", "").strip()
+if _PUBLIC and _MCP_PROXY_SECRET:
+    parsed_mcp_url = urlparse(_MCP_URL)
+    if (parsed_mcp_url.scheme != "https" or not parsed_mcp_url.hostname or
+            parsed_mcp_url.port == 0 or
+            parsed_mcp_url.path != "/api/mcp" or parsed_mcp_url.username or
+            parsed_mcp_url.password or parsed_mcp_url.query or parsed_mcp_url.fragment):
+        raise ValueError("APP_ENGINE_MCP_URL must be the dedicated HTTPS /api/mcp gateway URL")
+
+
+def _is_mtls_request(request: Request) -> bool:
+    return (bool(_MCP_PROXY_SECRET) and request.client is not None and
+            request.client.host in {"127.0.0.1", "::1", "localhost", "testclient"} and
+            secrets.compare_digest(request.headers.get("x-app-engine-mtls-proxy", ""), _MCP_PROXY_SECRET))
 _accounts = Accounts.load(STATE_DIR) if _PUBLIC else None
 _audit = Audit(STATE_DIR) if _PUBLIC else None
 try:
@@ -155,7 +183,11 @@ async def lifespan(_: FastAPI):
             print("            warning: APP_ENGINE_PUBLIC_APPS is not set, so every app in the collection is listed; each one needs its own name in the certificate.", flush=True)
         _audit.record("engine.start", origin=_PUBLIC.origin, layout=_PUBLIC.layout)
     await _app_runtime.start()
+    if _atrium_status_probe is not None:
+        _atrium_status_probe.start()
     yield
+    if _atrium_status_probe is not None:
+        await _atrium_status_probe.close()
     await _app_runtime.close(5.0)
     if _proxy and not _proxy.is_closed:
         await _proxy.aclose()
@@ -166,8 +198,10 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="app-engine", lifespan=lifespan)
 if _PUBLIC:
-    app.add_middleware(OwnerGate, accounts=_accounts, enabled=True)
+    app.add_middleware(OwnerGate, accounts=_accounts, enabled=True,
+                       mcp_proxy_secret=_MCP_PROXY_SECRET)
     app.add_middleware(RemoteApiCors)
+app.add_middleware(LoopbackListenerGate)
 
 
 def _session(request: Request) -> Session:
@@ -916,6 +950,14 @@ def _require_owner_action(request: Request) -> Session:
 _NO_STORE = {"Cache-Control": "no-store", "Content-Security-Policy": "frame-ancestors 'none'"}
 
 
+@app.get("/api/app-engine/atrium-status")
+async def atrium_status(request: Request) -> JSONResponse:
+    _require_owner_action(request)
+    if _atrium_status_probe is None:
+        raise HTTPException(404)
+    return JSONResponse(_atrium_status_probe.last, headers=_NO_STORE)
+
+
 def _stores_available() -> bool:
     return not (_PUBLIC and _PUBLIC.layout == "same")
 
@@ -934,8 +976,11 @@ app.include_router(create_assistant_router(
     _app_runtime, STATE_DIR,
     require_owner_action=_require_owner_action,
     is_launcher_host=_is_launcher_host,
-    available=not bool(_PUBLIC),
+    available=not bool(_PUBLIC) or bool(_MCP_PROXY_SECRET),
     approved=lambda fingerprint: fingerprint in _assistant_approved_plans,
+    is_mtls_request=_is_mtls_request,
+    public_requires_mtls=bool(_PUBLIC),
+    mcp_url=_MCP_URL,
 ))
 
 

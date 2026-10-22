@@ -7,7 +7,8 @@ from collections.abc import Iterable
 from .public_origin import SESSION_COOKIE
 
 
-_ENGINE_HEADERS = frozenset({"x-app-engine-admin", "x-app-state-token"})
+_ENGINE_HEADERS = frozenset({"x-app-engine-admin", "x-app-state-token",
+                             "x-app-engine-mtls-proxy"})
 
 
 def forward_app_headers(headers: Iterable[tuple[str, str]]) -> tuple[tuple[str, str], ...]:

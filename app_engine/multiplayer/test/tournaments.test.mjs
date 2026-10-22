@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {engine} from './fake-rules.mjs';
 import {RoomService} from '../rooms.mjs';
+process.env.APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS='https://192.168.1.5:9900';
 import {fillField,robinRounds,firstRound,nextRound,standings,standingsText} from '../bracket.mjs';
 
 const compatibility={protocol:1,rulesVersion:engine.rulesVersion,catalogDigest:engine.catalogDigest};

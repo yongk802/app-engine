@@ -66,6 +66,8 @@ Environment=APP_ENGINE_PUBLIC_APPS=cyberpunk-tcg
 Environment=APP_ENGINE_TRUST_PROXY=1
 Environment=APP_ENGINE_HOST=127.0.0.1
 Environment=APP_ENGINE_PORT=8770
+# Optional: set this to the exact Atrium origin used by alert callbacks.
+# Environment=APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS=https://your-atrium-host.example
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/etc/app-engine.env
@@ -120,6 +122,7 @@ server {
         proxy_set_header Host $host;              # the engine routes apps by host name
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-App-Engine-MTLS-Proxy ""; # browser traffic cannot assert mTLS
         proxy_read_timeout 60s;
     }
 }

@@ -27,7 +27,8 @@ def make_app(apps: Path, app_id: str = "notes") -> None:
 def load_engine(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("APP_ENGINE_APPS_DIR", str(tmp_path / "apps"))
-    for name in ("APP_ENGINE_PUBLIC_ORIGIN", "APP_ENGINE_ADMIN_SECRET", "APP_ENGINE_TRUST_PROXY"):
+    for name in ("APP_ENGINE_PUBLIC_ORIGIN", "APP_ENGINE_ADMIN_SECRET", "APP_ENGINE_TRUST_PROXY",
+                 "APP_ENGINE_MCP_PROXY_SECRET", "APP_ENGINE_MCP_URL", "APP_ENGINE_OUTBOUND_MTLS_CONFIG"):
         monkeypatch.delenv(name, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -90,6 +91,7 @@ def test_legacy_proxy_does_not_forward_engine_credentials_or_follow_redirect(tmp
             "cookie": f"{SESSION_COOKIE}={token}; app_login=app-value",
             "x-app-engine-admin": "admin-secret",
             "x-app-state-token": "state-secret",
+            "x-app-engine-mtls-proxy": "proxy-secret",
         }, follow_redirects=False)
     assert response.status_code == 302
     assert len(captured) == 1
@@ -97,6 +99,30 @@ def test_legacy_proxy_does_not_forward_engine_credentials_or_follow_redirect(tmp
     assert headers.get("cookie") == "app_login=app-value"
     assert "x-app-engine-admin" not in headers
     assert "x-app-state-token" not in headers
+    assert "x-app-engine-mtls-proxy" not in headers
+
+
+def test_public_mcp_needs_proxy_assertion_and_bearer(tmp_path, monkeypatch):
+    proxy_secret = "proxy-secret-with-at-least-thirty-two-random-characters"
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC,
+                         APP_ENGINE_ADMIN_SECRET="hunter2-but-longer",
+                         APP_ENGINE_MCP_PROXY_SECRET=proxy_secret,
+                         APP_ENGINE_MCP_URL="https://mcp.play.example.com/api/mcp")
+    with public_client(module) as client:
+        assert sign_in(client).status_code == 303
+        rotated = client.post(f"{LAUNCHER}/api/assistant/key",
+                              headers={"x-app-engine-admin": module._admin_capability})
+        assert rotated.status_code == 200
+        bearer = rotated.json()["key"]
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        target = "https://mcp.play.example.com/api/mcp"
+        assert client.post(target, json=payload, headers={"authorization": f"Bearer {bearer}"}).status_code in {401, 403}
+        assertion = {"x-app-engine-mtls-proxy": proxy_secret}
+        assert client.post(target, json=payload, headers=assertion).status_code == 401
+        accepted = client.post(target, json=payload,
+                               headers={**assertion, "authorization": f"Bearer {bearer}"})
+        assert accepted.status_code == 200
+        assert "tools" in accepted.json()["result"]
 
 
 def test_loopback_mode_is_unchanged(tmp_path, monkeypatch):

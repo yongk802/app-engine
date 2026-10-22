@@ -7,7 +7,7 @@ const MAX_TOURNAMENTS=50,MAX_PLAYERS=16,AI_MOVE_CAP=200,SIM_CAP=1500,DAYS_KEPT=6
 const TURN_TIMERS={'24h':86400000,'72h':259200000};
 const aiSeed=state=>(state.turn*311+state.log.length)>>>0;
 
-export function installTournaments(RoomService,{secret,digest,eqHash,text,object,copy,fail,canonical,PROTOCOL_VERSION}){
+export function installTournaments(RoomService,{secret,digest,eqHash,text,object,copy,fail,PROTOCOL_VERSION,allowedWebhookDestination}){
  const fields={
   tourneyCreate:['name','playerName','format','clock','ai','protocol','rulesVersion','catalogDigest'],
   tourneyJoin:['tournamentId','invite','name','requestId','protocol','rulesVersion','catalogDigest'],
@@ -92,8 +92,7 @@ export function installTournaments(RoomService,{secret,digest,eqHash,text,object
    if(op==='tourneyNotify'){
     if(p.webhook!==null){
      if(!object(p.webhook)||typeof p.webhook.url!=='string'||p.webhook.url.length>2048||typeof p.webhook.token!=='string'||!p.webhook.token||p.webhook.token.length>4096)fail('INVALID_REQUEST','Invalid alert destination.');
-     let url;try{url=new URL(p.webhook.url);}catch{fail('INVALID_REQUEST','Invalid alert destination.');}
-     if(!['http:','https:'].includes(url.protocol)||url.username||url.password)fail('INVALID_REQUEST','Invalid alert destination.');
+     if(!allowedWebhookDestination(p.webhook.url))fail('INVALID_REQUEST','Alert destination is not approved by the host.');
     }
     me.webhook=p.webhook?{url:p.webhook.url,token:p.webhook.token}:null;
    }

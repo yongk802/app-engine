@@ -171,7 +171,9 @@ class MultiplayerHost:
     @staticmethod
     def _environment() -> dict[str, str]:
         keep = {"PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL"}
-        return {k: v for k, v in os.environ.items() if k in keep}
+        environment = {k: v for k, v in os.environ.items() if k in keep}
+        environment["APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS"] = os.environ.get("APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS", "")
+        return environment
 
     async def _await_listening(self, record: RoomProcess) -> str:
         process = record.process

@@ -5,9 +5,13 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +33,9 @@ def _build_wheel(destination: Path) -> Path:
             "build",
             "--wheel",
             "--offline",
+            "--no-build-isolation",
+            "--python",
+            sys.executable,
             "--out-dir",
             str(destination),
         ],

@@ -1211,7 +1211,12 @@ class ProcessLifecycleManager(LifecycleManager):
 
     async def _drain_streams(self, record: _LaunchRecord) -> None:
         current = asyncio.current_task()
-        tasks = [task for task in record.stream_tasks if task is not current]
+        loop = asyncio.get_running_loop()
+        # A test client or embedded host can dispose its event loop between
+        # runtime lifespans. Finished readers from that loop cannot be awaited
+        # by this loop (Python 3.10/3.11 reject the cross-loop future).
+        tasks = [task for task in record.stream_tasks
+                 if task is not current and task.get_loop() is loop]
         if tasks:
             gathering = asyncio.gather(*tasks, return_exceptions=True)
             try:

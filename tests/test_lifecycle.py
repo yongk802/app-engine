@@ -18,6 +18,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -354,6 +355,24 @@ def test_managed_health_probe_ignores_host_proxy_settings(monkeypatch):
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_stream_cleanup_ignores_completed_readers_from_an_old_event_loop():
+    from app_engine.lifecycle import ProcessLifecycleManager
+
+    old_loop = asyncio.new_event_loop()
+    try:
+        async def finished_reader():
+            return None
+
+        old_task = old_loop.create_task(finished_reader())
+        old_loop.run_until_complete(old_task)
+    finally:
+        old_loop.close()
+
+    manager = SimpleNamespace(_stop_grace_seconds=0.1)
+    record = SimpleNamespace(stream_tasks=[old_task])
+    asyncio.run(ProcessLifecycleManager._drain_streams(manager, record))
 
 
 @pytest.mark.asyncio

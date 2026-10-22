@@ -55,6 +55,7 @@ def test_mcp_gateway_requires_client_certificate_and_bearer(tmp_path):  # noqa: 
     (bundle / "mcp-gateway" / "nginx-app-engine-mcp.conf").write_text(snippet)
     (bundle / "logs").mkdir()
     (bundle / "nginx.conf").write_text(
+        f"pid {bundle}/logs/nginx.pid;\n"
         f"error_log {bundle}/logs/error.log;\n"
         f"events {{}}\nhttp {{ access_log {bundle}/logs/access.log; "
         f"include {bundle}/mcp-gateway/nginx-app-engine-mcp.conf; }}\n")

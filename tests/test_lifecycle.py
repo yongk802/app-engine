@@ -12,9 +12,11 @@ import asyncio
 import json
 import os
 import sys
+import threading
 import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -325,6 +327,33 @@ def _manager(
         isolation_policy=isolation_policy,
     )
     return manager
+
+
+def test_managed_health_probe_ignores_host_proxy_settings(monkeypatch):
+    from app_engine.lifecycle import ProcessLifecycleManager
+
+    class Health(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+        monkeypatch.setenv("NO_PROXY", "")
+        monkeypatch.setenv("no_proxy", "")
+        assert ProcessLifecycleManager._health_status(
+            f"http://127.0.0.1:{server.server_port}/health"
+        ) == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 @pytest.mark.asyncio

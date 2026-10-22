@@ -977,7 +977,10 @@ class ProcessLifecycleManager(LifecycleManager):
     @staticmethod
     def _health_status(url: str) -> int:
         request = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(request, timeout=0.2) as response:
+        # Health endpoints are always engine-managed loopback ports. Ignore OS
+        # and environment proxy settings so these probes stay on this host.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=0.2) as response:
             return response.status
 
     async def _capture(

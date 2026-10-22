@@ -59,6 +59,7 @@ def test_engine_status_probe_uses_client_certificate(tmp_path):
     (bundle / "atrium-status-gateway" / "nginx-atrium-status.conf").write_text(snippet)
     (bundle / "logs").mkdir()
     (bundle / "nginx.conf").write_text(
+        f"pid {bundle}/logs/nginx.pid;\n"
         f"error_log {bundle}/logs/error.log;\n"
         f"events {{}}\nhttp {{ access_log {bundle}/logs/access.log; "
         f"include {bundle}/atrium-status-gateway/nginx-atrium-status.conf; }}\n")

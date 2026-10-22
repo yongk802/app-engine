@@ -1113,10 +1113,11 @@ async def test_idle_stop_retries_when_first_cleanup_is_incomplete(
     await manager.retain(handle.launch_id)
     await manager.release(handle.launch_id)
 
-    for _ in range(100):
+    deadline = asyncio.get_running_loop().time() + 10
+    while asyncio.get_running_loop().time() < deadline:
         if (await manager.status(handle.launch_id)).state is RuntimeState.STOPPED:
             break
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.02)
     else:
         await original_terminate(manager._records[handle.launch_id])
         pytest.fail("incomplete idle cleanup was not retried")

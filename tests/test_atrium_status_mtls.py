@@ -59,7 +59,9 @@ def test_engine_status_probe_uses_client_certificate(tmp_path):
     (bundle / "atrium-status-gateway" / "nginx-atrium-status.conf").write_text(snippet)
     (bundle / "logs").mkdir()
     (bundle / "nginx.conf").write_text(
-        f"events {{}}\nhttp {{ include {bundle}/atrium-status-gateway/nginx-atrium-status.conf; }}\n")
+        f"error_log {bundle}/logs/error.log;\n"
+        f"events {{}}\nhttp {{ access_log {bundle}/logs/access.log; "
+        f"include {bundle}/atrium-status-gateway/nginx-atrium-status.conf; }}\n")
     config = bundle / "engine" / "outbound-mtls.json"
     document = json.loads(config.read_text())
     identity = document.pop("https://atrium.localhost")

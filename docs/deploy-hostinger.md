@@ -82,6 +82,24 @@ WantedBy=multi-user.target
 The engine now refuses a non-loopback `APP_ENGINE_HOST` even when public-origin
 mode is configured. Keep nginx on ports 80/443 as the only public listener.
 
+Install the service hardening drop-in shipped with this repository. It removes
+privilege escalation paths and access to host kernel controls while retaining
+the local sockets and writable app/state directories needed by current apps:
+
+```bash
+install -D -m 0644 scripts/app-engine-hardening.conf \
+  /etc/systemd/system/app-engine.service.d/30-hardening.conf
+systemctl daemon-reload
+systemd-analyze verify app-engine.service
+systemctl restart app-engine
+systemctl is-active --quiet app-engine
+```
+
+These service limits also apply to managed app commands. They do not separate
+app commands from the engine's Unix user, credentials, or outbound network;
+keep `APP_ENGINE_PROCESS_ISOLATION=audit` only for apps you trust until a
+verified isolated runner is available.
+
 `/etc/app-engine.env` (mode 600) holds the owner's secret so it never sits in a
 world-readable unit file:
 

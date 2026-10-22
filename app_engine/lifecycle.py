@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import http.client
 import json
 import logging
 import os
@@ -16,8 +17,6 @@ import shutil
 import signal
 import socket
 import subprocess
-import urllib.error
-import urllib.request
 import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -25,6 +24,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import AsyncIterator, Any
+from urllib.parse import urlsplit
 
 from .contracts import (
     AppCatalog,
@@ -969,7 +969,7 @@ class ProcessLifecycleManager(LifecycleManager):
                 last_result = f"HTTP {status}"
                 if 200 <= status < 300:
                     return
-            except (OSError, urllib.error.URLError) as exc:
+            except (OSError, http.client.HTTPException) as exc:
                 last_result = f"{type(exc).__name__}: {exc}"
             await asyncio.sleep(max(0.001, health.interval_seconds))
         logging.getLogger(__name__).warning(
@@ -986,12 +986,20 @@ class ProcessLifecycleManager(LifecycleManager):
 
     @staticmethod
     def _health_status(url: str) -> int:
-        request = urllib.request.Request(url, method="GET")
-        # Health endpoints are always engine-managed loopback ports. Ignore OS
-        # and environment proxy settings so these probes stay on this host.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(request, timeout=0.2) as response:
-            return response.status
+        # Use a direct socket so OS proxy discovery cannot redirect or stall
+        # an engine-managed loopback health probe.
+        parsed = urlsplit(url)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port is None:
+            raise ValueError("Managed health probes require a loopback HTTP URL")
+        path = parsed.path or "/"
+        if parsed.query:
+            path += f"?{parsed.query}"
+        connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=0.2)
+        try:
+            connection.request("GET", path)
+            return connection.getresponse().status
+        finally:
+            connection.close()
 
     async def _capture(
         self,

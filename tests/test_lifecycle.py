@@ -53,6 +53,7 @@ from app_engine.contracts import (
     LaunchRequest,
     ManifestInspection,
     PlanFingerprint,
+    PreparationError,
     ProcessScope,
     ResolvedConfiguration,
     RuntimeSpec,
@@ -311,6 +312,7 @@ def _manager(
     *,
     host: _Host | None = None,
     max_log_records: int = 100,
+    isolation_policy=None,
 ):
     catalog = _Catalog(manifest)
     manager = _manager_type()(
@@ -320,8 +322,113 @@ def _manager(
         runtime_root=tmp_path / "runtime",
         max_log_records=max_log_records,
         stop_grace_seconds=0.75,
+        isolation_policy=isolation_policy,
     )
     return manager
+
+
+@pytest.mark.asyncio
+async def test_audit_mode_records_each_host_command_without_command_secrets(
+    tmp_path, caplog
+):
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    root.mkdir()
+    _write_counter(root)
+    install = CommandStep(
+        argv=(sys.executable, "counter.py", "install.count", "install.out"),
+        outputs=("install.out",),
+    )
+    build = CommandStep(
+        argv=(sys.executable, "counter.py", "build.count", "build.out"),
+        outputs=("build.out",),
+    )
+    start = CommandStep(
+        argv=(sys.executable, "server.py"),
+        environment=(
+            EnvironmentBinding(
+                "PRIVATE_VALUE", EnvironmentSource.LITERAL, "secret-canary"
+            ),
+        ),
+    )
+    manager = _manager(
+        tmp_path,
+        _manifest(root, install=(install,), build=(build,), start=start),
+        isolation_policy=ProcessIsolationPolicy.from_value("audit"),
+    )
+
+    with caplog.at_level("WARNING", logger="app_engine.process_isolation"):
+        handle = await manager.launch(_request(), approval=None)
+        await manager.stop(handle.launch_id, StopReason.USER)
+
+    evidence = [
+        json.loads(record.message.removeprefix("managed_process_isolation "))
+        for record in caplog.records
+        if record.message.startswith("managed_process_isolation ")
+    ]
+    assert [item["phase"] for item in evidence] == ["install", "build", "start"]
+    assert all(
+        item["mode"] == "audit" and item["decision"] == "host_process"
+        for item in evidence
+    )
+    assert all(
+        item["app_id"] == "demo" and item["target_id"] == "web"
+        for item in evidence
+    )
+    assert "secret-canary" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_enforce_mode_refuses_install_before_any_host_command(tmp_path):
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    root.mkdir()
+    _write_counter(root)
+    install = CommandStep(
+        argv=(sys.executable, "counter.py", "install.count", "install.out"),
+        outputs=("install.out",),
+    )
+    manager = _manager(
+        tmp_path,
+        _manifest(root, install=(install,)),
+        isolation_policy=ProcessIsolationPolicy.from_value("enforce"),
+    )
+
+    with pytest.raises(PreparationError, match="isolated runner") as caught:
+        await manager.launch(_request(), approval=None)
+    assert caught.value.code == "isolated_runner_unavailable"
+    assert not (root / "install.count").exists()
+
+
+@pytest.mark.asyncio
+async def test_enforce_mode_refuses_start_before_any_host_command(tmp_path):
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    argv_record = tmp_path / "started"
+    start = CommandStep(
+        argv=(sys.executable, "server.py"),
+        environment=(
+            EnvironmentBinding(
+                "ARGV_RECORD", EnvironmentSource.LITERAL, str(argv_record)
+            ),
+        ),
+    )
+    host = _Host()
+    manager = _manager(
+        tmp_path,
+        _manifest(root, start=start),
+        host=host,
+        isolation_policy=ProcessIsolationPolicy.from_value("enforce"),
+    )
+
+    with pytest.raises(LaunchError, match="isolated runner") as caught:
+        await manager.launch(_request(), approval=None)
+    assert caught.value.code == "isolated_runner_unavailable"
+    assert not argv_record.exists()
+    assert host.recorded_events[-1].failure.code == "isolated_runner_unavailable"
 
 
 def _request(

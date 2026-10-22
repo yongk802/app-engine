@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
 import signal
@@ -62,6 +63,7 @@ from .contracts import (
     TargetSpec,
     ToolchainError,
 )
+from .process_isolation import IsolationMode, ProcessIsolationPolicy
 
 
 _SAFE_PARENT_ENVIRONMENT = (
@@ -78,6 +80,8 @@ _SAFE_PARENT_ENVIRONMENT = (
     "USERPROFILE",
     "WINDIR",
 )
+
+_isolation_log = logging.getLogger("app_engine.process_isolation")
 
 
 def _now() -> datetime:
@@ -153,6 +157,7 @@ class ProcessLifecycleManager(LifecycleManager):
         max_log_bytes: int = 1024 * 1024,
         stop_grace_seconds: float = 5.0,
         max_crash_restarts: int = 1,
+        isolation_policy: ProcessIsolationPolicy | None = None,
     ) -> None:
         if max_log_records < 1:
             raise ValueError("max_log_records must be positive")
@@ -171,6 +176,9 @@ class ProcessLifecycleManager(LifecycleManager):
         self._max_log_record_bytes = min(64 * 1024, max_log_bytes)
         self._stop_grace_seconds = stop_grace_seconds
         self._max_crash_restarts = max_crash_restarts
+        self._isolation_policy = (
+            isolation_policy or ProcessIsolationPolicy.from_environment()
+        )
         self._records: dict[LaunchId, _LaunchRecord] = {}
         self._active: dict[ScopeKey, LaunchId] = {}
         self._scope_locks: dict[ScopeKey, asyncio.Lock] = {}
@@ -329,13 +337,16 @@ class ProcessLifecycleManager(LifecycleManager):
                 )
                 self._remove_active(record)
                 raise
-            except (HealthCheckError, LaunchError):
+            except (HealthCheckError, LaunchError) as exc:
                 await self._terminate_process(record)
-                failure = RuntimeFailure(
-                    "health_check_failed",
-                    "The app did not satisfy its startup health contract.",
-                    "Check the app logs and health endpoint, then retry.",
-                )
+                if isinstance(exc, LaunchError):
+                    failure = RuntimeFailure(exc.code, exc.message, exc.remediation)
+                else:
+                    failure = RuntimeFailure(
+                        "health_check_failed",
+                        "The app did not satisfy its startup health contract.",
+                        "Check the app logs and health endpoint, then retry.",
+                    )
                 await self._fail(record, failure)
                 self._remove_active(record)
                 raise
@@ -758,6 +769,7 @@ class ProcessLifecycleManager(LifecycleManager):
         for resolved in plan.steps:
             if resolved.phase == "start":
                 continue
+            self._check_isolation(plan, resolved.phase)
             environment = self._environment(
                 resolved.command, configuration, reserved={}
             )
@@ -821,6 +833,7 @@ class ProcessLifecycleManager(LifecycleManager):
         target: TargetSpec,
         configuration: ResolvedConfiguration,
     ) -> None:
+        self._check_isolation(plan, "start")
         runtime = target.runtime
         assert runtime is not None
         start = next(step for step in plan.steps if step.phase == "start")
@@ -866,6 +879,34 @@ class ProcessLifecycleManager(LifecycleManager):
             asyncio.create_task(self._capture(record, "stdout", process.stdout)),
             asyncio.create_task(self._capture(record, "stderr", process.stderr)),
         ]
+
+    def _check_isolation(self, plan: LaunchPlan, phase: str) -> None:
+        decision = self._isolation_policy.decide(phase)
+        if decision.mode is not IsolationMode.LEGACY:
+            _isolation_log.warning(
+                "managed_process_isolation %s",
+                json.dumps(
+                    {
+                        "app_id": str(plan.scope_key.app_id),
+                        "target_id": str(plan.scope_key.target_id),
+                        "phase": phase,
+                        "mode": decision.mode.value,
+                        "decision": decision.execution_class,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        if not decision.allowed:
+            error_type = LaunchError if phase == "start" else PreparationError
+            raise error_type(
+                "isolated_runner_unavailable",
+                "A verified isolated runner is required for managed app commands.",
+                remediation=(
+                    "Configure a verified isolated runner or switch to audit mode "
+                    "after reviewing the host-execution risk."
+                ),
+                context=(("phase", phase),),
+            )
 
     @staticmethod
     def _environment(

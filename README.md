@@ -109,6 +109,12 @@ conflicts or changed releases return 409, and unreachable stores return 502.
 
 ## App Studio and managed apps
 
+For production pilots, set `APP_ENGINE_PROCESS_ISOLATION=audit` to record each
+managed install, build, and start command that still runs on the host. See
+[managed command isolation status](docs/process-isolation.md) before using
+`enforce`, which currently refuses these commands because no verified isolated
+runner is available.
+
 The standalone distribution includes the same App Studio Atrium embeds. After
 starting app-engine, open
 [`http://127.0.0.1:8770/api/app-engine/studio/`](http://127.0.0.1:8770/api/app-engine/studio/)

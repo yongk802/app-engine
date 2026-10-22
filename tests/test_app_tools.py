@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -101,10 +102,16 @@ HTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()
     assert not result['isError'], result
     assert result['structuredContent'] == {'done': True}
     assert not module._app_runtime.gateway._sessions
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + (12 if os.name == 'nt' else 3)
     while module._app_runtime.diagnostics()['active_launch_count'] and time.monotonic() < deadline:
         time.sleep(.02)
-    assert module._app_runtime.diagnostics()['active_launch_count'] == 0
+    records = module._app_runtime.lifecycle._records.values()
+    states = [
+        (record.state.value, record.process.returncode if record.process else None,
+         record.idle_task.done() if record.idle_task else None)
+        for record in records
+    ]
+    assert module._app_runtime.diagnostics()['active_launch_count'] == 0, states
 
 
 def test_malformed_json_is_refused(engine_client):

@@ -478,6 +478,8 @@ def _read_contained_regular_windows(
     import ctypes
     import msvcrt
 
+    if any("\\" in part or ":" in part or "\x00" in part for part in parts):
+        raise _asset_escape(display_path)
     asset_fd: int | None = None
     try:
         trusted_root = root.resolve(strict=True)

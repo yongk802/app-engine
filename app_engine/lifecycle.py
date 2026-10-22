@@ -954,6 +954,7 @@ class ProcessLifecycleManager(LifecycleManager):
         deadline = asyncio.get_running_loop().time() + health.timeout_seconds
         path = health.path if health.path.startswith("/") else f"/{health.path}"
         url = f"http://127.0.0.1:{record.endpoint.port}{path}"
+        last_result = "no response"
         while asyncio.get_running_loop().time() < deadline:
             process = record.process
             if process is not None and process.returncode is not None:
@@ -965,11 +966,18 @@ class ProcessLifecycleManager(LifecycleManager):
                 )
             try:
                 status = await asyncio.to_thread(self._health_status, url)
+                last_result = f"HTTP {status}"
                 if 200 <= status < 300:
                     return
-            except (OSError, urllib.error.URLError):
-                pass
+            except (OSError, urllib.error.URLError) as exc:
+                last_result = f"{type(exc).__name__}: {exc}"
             await asyncio.sleep(max(0.001, health.interval_seconds))
+        logging.getLogger(__name__).warning(
+            "managed health timeout: pid=%s returncode=%s last_result=%s",
+            record.process.pid if record.process else None,
+            record.process.returncode if record.process else None,
+            last_result,
+        )
         raise HealthCheckError(
             "health_timeout",
             "The app health check did not succeed before its timeout.",

@@ -130,6 +130,8 @@ class PublicOrigin:
         # (browsers resolve it to loopback); bare loopback addresses are not a public origin.
         if hostname in _LOOPBACK:
             raise ValueError("APP_ENGINE_PUBLIC_ORIGIN must be a public host name, not a loopback address")
+        if parts.scheme != "https" and not hostname.endswith(".localhost"):
+            raise ValueError("APP_ENGINE_PUBLIC_ORIGIN requires HTTPS outside .localhost")
         port = parts.port
         default = 443 if parts.scheme == "https" else 80
         host = hostname if port in (None, default) else f"{hostname}:{port}"
@@ -674,8 +676,6 @@ def bind_is_allowed(host: str, public: PublicOrigin | None, accounts: Accounts |
     """Why a bind address is refused, or None when it is fine."""
     if host.strip().strip("[]").lower() in _LOOPBACK:
         return None
-    if public is None:
-        return f"APP_ENGINE_HOST={host} would make every visitor the administrator. Set APP_ENGINE_PUBLIC_ORIGIN and put a TLS proxy in front, or bind 127.0.0.1."
-    if accounts is None or not accounts.has_admin_secret:
-        return "Public-origin mode needs an admin secret before binding a public address."
-    return None
+    return (f"APP_ENGINE_HOST={host} must be loopback: a direct public listener "
+            "would expose administrator traffic without TLS. Bind 127.0.0.1 "
+            "and put a TLS proxy in front.")

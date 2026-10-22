@@ -77,6 +77,9 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
+The engine now refuses a non-loopback `APP_ENGINE_HOST` even when public-origin
+mode is configured. Keep nginx on ports 80/443 as the only public listener.
+
 `/etc/app-engine.env` (mode 600) holds the owner's secret so it never sits in a
 world-readable unit file:
 

@@ -32,13 +32,24 @@ def test_public_bind_is_refused_without_public_origin_mode(monkeypatch, tmp_path
     assert called == {}, "uvicorn never started"
 
 
-def test_public_origin_mode_binds_behind_a_trusted_proxy(monkeypatch, tmp_path, capsys):
+def test_public_bind_is_refused_even_with_public_origin_and_admin_secret(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("APP_ENGINE_HOST", "0.0.0.0")
+    monkeypatch.setenv("APP_ENGINE_PUBLIC_ORIGIN", "https://play.example.com")
+    monkeypatch.setenv("APP_ENGINE_ADMIN_SECRET", "hunter2-but-longer")
+    called = _capture(monkeypatch)
+    with pytest.raises(SystemExit, match="loopback"):
+        runpy.run_path("engine.py", run_name="__main__")
+    assert called == {}
+
+
+def test_public_origin_mode_binds_behind_a_trusted_proxy(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("APP_ENGINE_HOST", "127.0.0.1")
     monkeypatch.setenv("APP_ENGINE_PUBLIC_ORIGIN", "https://play.example.com")
     monkeypatch.setenv("APP_ENGINE_TRUST_PROXY", "1")
     monkeypatch.delenv("APP_ENGINE_ADMIN_SECRET", raising=False)
     called = _capture(monkeypatch)
     runpy.run_path("engine.py", run_name="__main__")
-    assert called["host"] == "0.0.0.0" and called["proxy_headers"] is True and called["forwarded_allow_ips"] == "127.0.0.1,::1"
+    assert called["host"] == "127.0.0.1" and called["proxy_headers"] is True and called["forwarded_allow_ips"] == "127.0.0.1,::1"
     assert (tmp_path / "players.json").is_file(), "the minted admin secret is stored as a hash before the engine listens"

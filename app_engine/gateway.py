@@ -38,6 +38,7 @@ from .contracts import (
     TargetProviderError,
     TargetSpec,
 )
+from .proxy_headers import forward_app_headers
 
 
 _HOP_BY_HOP = frozenset(
@@ -249,7 +250,7 @@ class DefaultAppGateway(AppGateway):
             )
 
         url = _proxy_url(endpoint, request.path, request.query)
-        headers = _strip_hop_headers(request.headers, remove_host=True)
+        headers = forward_app_headers(_strip_hop_headers(request.headers, remove_host=True))
         upstream_request = self._client.build_request(
             request.method,
             url,

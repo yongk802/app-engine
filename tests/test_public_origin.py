@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from app_engine.public_origin import SESSION_COOKIE, Accounts, PublicOrigin, SignInLimiter, bind_is_allowed
@@ -55,13 +56,47 @@ def test_public_origin_parsing_and_app_hosts():
     assert origin.app_id_for("play.example.com") is None
     assert origin.app_id_for("a.b.play.example.com") is None, "one label only: no nested hosts"
     assert origin.app_id_for("evil-play.example.com") is None
-    assert PublicOrigin.parse("http://games.lan:8080").host == "games.lan:8080"
     assert PublicOrigin.parse("play.example.com").origin == "https://play.example.com", "https is the default scheme"
     assert PublicOrigin.parse("") is None and PublicOrigin.parse(None) is None
     assert PublicOrigin.parse("http://play.localhost:8770").app_authority("notes") == "notes.play.localhost:8770", "rehearsal on one machine"
     for bad in ("https://127.0.0.1", "https://localhost", "https://play.example.com/path", "ftp://x.y", "https://user@play.example.com"):
         with pytest.raises(ValueError):
             PublicOrigin.parse(bad)
+
+
+def test_plaintext_public_origin_is_refused_but_local_rehearsal_works():
+    with pytest.raises(ValueError, match="HTTPS"):
+        PublicOrigin.parse("http://play.example.com")
+    assert PublicOrigin.parse("http://play.localhost:8770").origin == "http://play.localhost:8770"
+
+
+def test_legacy_proxy_does_not_forward_engine_credentials_or_follow_redirect(tmp_path, monkeypatch):
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC,
+                         APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    manifest = tmp_path / "apps" / "notes" / "app.json"
+    manifest.write_text(json.dumps({"id": "notes", "label": "notes", "icon": "n",
+                                    "entry_point": "http://127.0.0.1:18888"}))
+    captured = []
+
+    def upstream(request):
+        captured.append(request)
+        return httpx.Response(302, headers={"location": "https://external.example/secret"})
+
+    module._proxy = httpx.AsyncClient(transport=httpx.MockTransport(upstream), follow_redirects=True)
+    with public_client(module) as client:
+        assert sign_in(client).status_code == 303
+        token = client.cookies.get(SESSION_COOKIE)
+        response = client.get(f"{APP}/apps/notes/", headers={
+            "cookie": f"{SESSION_COOKIE}={token}; app_login=app-value",
+            "x-app-engine-admin": "admin-secret",
+            "x-app-state-token": "state-secret",
+        }, follow_redirects=False)
+    assert response.status_code == 302
+    assert len(captured) == 1
+    headers = captured[0].headers
+    assert headers.get("cookie") == "app_login=app-value"
+    assert "x-app-engine-admin" not in headers
+    assert "x-app-state-token" not in headers
 
 
 def test_loopback_mode_is_unchanged(tmp_path, monkeypatch):
@@ -161,9 +196,9 @@ def test_bind_guard_and_bad_origin(tmp_path, monkeypatch):
     assert bind_is_allowed("127.0.0.1", None, None) is None
     assert "administrator" in bind_is_allowed("0.0.0.0", None, None)
     public = PublicOrigin.parse(PUBLIC)
-    assert "admin secret" in bind_is_allowed("0.0.0.0", public, accounts)
+    assert "loopback" in bind_is_allowed("0.0.0.0", public, accounts)
     accounts.set_admin_secret("s3cret-long-enough")
-    assert bind_is_allowed("0.0.0.0", public, accounts) is None
+    assert "loopback" in bind_is_allowed("0.0.0.0", public, accounts)
     monkeypatch.setenv("APP_ENGINE_PUBLIC_ORIGIN", "https://127.0.0.1")
     monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path / "s"))
     monkeypatch.setenv("APP_ENGINE_APPS_DIR", str(tmp_path / "a"))

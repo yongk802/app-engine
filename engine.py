@@ -72,6 +72,7 @@ from app_engine.public_origin import (
     sign_in_page,
     startup_warnings,
 )
+from app_engine.proxy_headers import forward_app_headers
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
 from app_engine.routes import create_app_engine_router
@@ -750,12 +751,15 @@ async def shared_file(filename: str, request: Request) -> Response:
 
 async def _proxy_entry_point(app_obj: App, path: str, request: Request) -> Response:
     target = app_obj.entry_point.rstrip("/") + "/" + path
-    headers = {k: v for k, v in request.headers.items()
-               if k.lower() not in ("host", "content-length", "transfer-encoding")}
+    headers = dict(forward_app_headers(
+        (k, v) for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length", "transfer-encoding")
+    ))
     try:
         resp = await _client().request(
             request.method, target, headers=headers,
             content=await request.body(), params=dict(request.query_params),
+            follow_redirects=False,
         )
     except httpx.HTTPError:
         raise HTTPException(502, "entry_point unreachable")

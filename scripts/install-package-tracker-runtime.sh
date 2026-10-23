@@ -144,7 +144,8 @@ install -m 0644 -o root -g root \
   "$engine_source/deploy/package-tracker/app-engine-package-browser.service" "$browser_unit"
 systemd-analyze verify "$proxy_unit" "$browser_unit"
 systemctl daemon-reload
-systemctl enable --now app-engine-package-proxy.service app-engine-package-browser.service
+systemctl enable app-engine-package-proxy.service app-engine-package-browser.service
+systemctl restart app-engine-package-proxy.service app-engine-package-browser.service
 systemctl is-active --quiet app-engine-package-proxy.service
 systemctl is-active --quiet app-engine-package-browser.service
 python3 - <<'PY'

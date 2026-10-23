@@ -88,6 +88,8 @@ class _ConnectHandler(BaseHTTPRequestHandler):
 
     def _reply(self, code: int, reason: str) -> None:
         self.send_response_only(code, reason)
+        if code == 407:
+            self.send_header("Proxy-Authenticate", 'Basic realm="package-tracker"')
         self.send_header("Content-Length", "0")
         self.send_header("Connection", "close")
         self.end_headers()

@@ -6,7 +6,7 @@ import asyncio
 import json
 import socket
 import struct
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .isolation_wire import MAX_EVENT_BYTES, MAX_REQUEST_BYTES
@@ -15,10 +15,10 @@ BROKER_SOCKET = "/run/app-engine-runner.sock"
 
 
 def _unit_path(path: Path, app_root: Path, data_dir: Path,
-               build_dir: Path) -> Path | None:
-    for host_root, unit_root in ((app_root, Path("/workspace")),
-                                 (data_dir, Path("/app-data")),
-                                 (build_dir, Path("/app-build"))):
+               build_dir: Path) -> PurePosixPath | None:
+    for host_root, unit_root in ((app_root, PurePosixPath("/workspace")),
+                                 (data_dir, PurePosixPath("/app-data")),
+                                 (build_dir, PurePosixPath("/app-build"))):
         try:
             suffix = path.relative_to(host_root)
         except ValueError:
@@ -94,6 +94,8 @@ class IsolatedProcess:
                              ensure_ascii=False, allow_nan=False).encode("utf-8")
         if not payload or len(payload) > MAX_REQUEST_BYTES:
             raise ValueError("isolated command request too large")
+        if not hasattr(asyncio, "open_unix_connection"):
+            raise RuntimeError("isolated broker requires Unix sockets")
         reader, writer = await asyncio.open_unix_connection(BROKER_SOCKET)
         try:
             _require_root_peer(writer)

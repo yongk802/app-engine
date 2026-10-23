@@ -13,6 +13,7 @@ import json
 import os
 import pwd
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -56,6 +57,29 @@ def _install(path: Path, content: bytes, mode: int) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def _check_broker_traversal(paths: list[str]) -> None:
+    """Check paths as root after dropping the DAC bypass used by normal root."""
+    setpriv = shutil.which("setpriv")
+    if setpriv is None:
+        raise ValueError("setpriv is required to check the broker's path access")
+    code = (
+        "import os,sys; "
+        "[(os.listdir(p) if os.path.isdir(p) else open(p,'rb').close()) "
+        "for p in sys.argv[1:]]"
+    )
+    result = subprocess.run(
+        [setpriv, "--bounding-set=-dac_override,-dac_read_search", "--",
+         "/usr/bin/python3", "-c", code, *paths],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode:
+        raise ValueError(
+            "broker cannot traverse an app/state path without root DAC bypass; "
+            "grant root search ACL on any private ancestor (for example, "
+            "setfacl -m u:root:--x /home/appengine), then rerun --check"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apps-root", type=Path, action="append", required=True)
@@ -85,6 +109,11 @@ def main() -> int:
     multiplayer = str(multiplayer_root.resolve(strict=True))
     if any(not Path(path).is_dir() for path in (*roots, state, multiplayer)):
         parser.error("app and state roots must be directories")
+    if os.geteuid() == 0:
+        try:
+            _check_broker_traversal([*roots, state, multiplayer])
+        except ValueError as exc:
+            parser.error(str(exc))
     policy = json.dumps({"apps_roots": roots, "state_root": state,
                          "multiplayer_root": multiplayer,
                          "engine_user": args.engine_user,

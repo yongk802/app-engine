@@ -38,6 +38,11 @@ The installer writes root-owned runner and fixed-origin TCGCSV gateway code,
 the room server modules, `/etc/app-engine-runner.json`, and their systemd units.
 The multiplayer root defaults to the `multiplayer/` sibling of the supplied
 runtime state root; use `--multiplayer-root` for a different state layout.
+The broker deliberately has no root DAC bypass capabilities. If the engine
+home is private (`0700`), grant only root search access to that ancestor before
+installing: `sudo setfacl -m u:root:--x /home/appengine`. The installer checks
+broker traversal with DAC bypass removed and reports this prerequisite; the
+engine user keeps its existing home access. Keep the ACL when upgrading.
 It starts the socket and
 the loopback-only gateway on port 18792 but does not change app-engine's
 `APP_ENGINE_PROCESS_ISOLATION=audit` setting. The gateway accepts GET only for

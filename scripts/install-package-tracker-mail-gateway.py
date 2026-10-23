@@ -49,6 +49,7 @@ def render(source: str, ca_file: str) -> str:
             '            if ($ssl_client_s_dn != "CN=package-tracker-client") { return 403; }\n'
             '            if ($request_method != GET) { return 405; }\n'
             "            limit_except GET { deny all; }\n"
+            "            access_log off;\n"
             "            proxy_pass https://127.0.0.1:9900;\n"
             "            proxy_ssl_verify on;\n"
             f"            {trusted}\n"

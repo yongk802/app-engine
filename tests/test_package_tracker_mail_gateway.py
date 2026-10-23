@@ -35,6 +35,7 @@ def test_renderer_adds_only_three_get_mail_routes_with_separate_client_identity(
     assert "location ~ ^/api/email/accounts/[^/]+/inbox$ {" in rendered
     assert "location ~ ^/api/email/accounts/[^/]+/message/[^/]+$ {" in rendered
     assert rendered.count("limit_except GET { deny all; }") == 4
+    assert rendered.count("access_log off;") == 3
     assert "proxy_ssl_verify off;" not in rendered
     assert rendered.count("proxy_ssl_trusted_certificate /secure/atrium-local-ca.pem;") == 4
     assert '"CN=app-engine-client"' in rendered

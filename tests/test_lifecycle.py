@@ -454,6 +454,45 @@ async def test_enforce_mode_refuses_install_before_any_host_command(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_blocked_app_cannot_preview_or_launch(tmp_path):
+    from app_engine.process_isolation import IsolationMode, ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    root.mkdir()
+    _write_counter(root)
+    manager = _manager(
+        tmp_path,
+        _manifest(root),
+        isolation_policy=ProcessIsolationPolicy(
+            IsolationMode.ENFORCE,
+            blocked_app_ids=frozenset({"demo"}),
+        ),
+    )
+    for operation in (manager.preview, lambda request: manager.launch(request, None)):
+        with pytest.raises(LaunchError) as caught:
+            await operation(_request())
+        assert caught.value.code == "app_launch_blocked"
+    assert manager.active_launch_ids() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="Unix directory modes")
+async def test_enforced_runtime_directories_are_group_scoped(tmp_path):
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    manifest = _manifest(root)
+    manager = _manager(
+        tmp_path, manifest,
+        isolation_policy=ProcessIsolationPolicy.from_value("enforce"),
+    )
+    plan = await manager.preview(_request())
+    data_dir, build_dir = manager._runtime_dirs(plan, manifest)
+    assert data_dir.stat().st_mode & 0o777 == 0o770
+    assert build_dir.stat().st_mode & 0o777 == 0o770
+
+
+@pytest.mark.asyncio
 async def test_enforce_mode_refuses_start_before_any_host_command(tmp_path):
     from app_engine.process_isolation import ProcessIsolationPolicy
 

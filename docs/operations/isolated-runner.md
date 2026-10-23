@@ -87,17 +87,21 @@ seats; a later deployment must recheck both conditions.
 
 The VPS also has `package-tracker`, whose current `uv --with playwright`
 launch, carrier APIs, Atrium mail access, and browser page lookups require a
-separate compatibility design. Keep the global mode at `audit`. After the
-owner approves the exact changed `cyberpunk-tcg` launch plan, set
-`APP_ENGINE_ISOLATED_APP_IDS=cyberpunk-tcg` to enforce only that pilot; the
-other app stays in audit until its own gates pass. A missing broker is a
-launch failure for the pilot, with no host-process fallback. Verify the pilot
+separate compatibility design. During the pilot, keep the global mode at
+`audit` and set `APP_ENGINE_ISOLATED_APP_IDS=cyberpunk-tcg` after the owner
+approves that exact changed launch plan. A missing broker is a launch failure
+for the pilot, with no host-process fallback. Verify the pilot
 UI, price refresh, room tables, data persistence, crash/stop cleanup,
 configured SMTP, store catalog, both mTLS directions, and rejected
 non-loopback egress. Verify the host multiplayer route, including the remote
 player API, starts a broker unit and never starts a host-UID Node process.
 
-Only after every managed app has a verified network/toolchain path should the
-global `APP_ENGINE_PROCESS_ISOLATION=enforce` setting replace the pilot. For
-rollback, remove the pilot app ID and restart app-engine in audit mode; leave
-the broker socket and gateway installed for diagnosis.
+For global enforcement while Package Tracker is incompatible, set
+`APP_ENGINE_BLOCKED_APP_IDS=package-tracker` and
+`APP_ENGINE_PROCESS_ISOLATION=enforce`. Its managed preview and open endpoints
+must reject with `app_launch_blocked`; its source and data stay in place.
+Verify no other process manifest exists, and retain Night City Table's exact
+standing approval. After Package Tracker has its own verified toolchain,
+network, browser, state, and owner-approved launch path, remove its block.
+For rollback, restore the prior service override and restart app-engine in
+audit mode; leave the broker socket and gateway installed for diagnosis.

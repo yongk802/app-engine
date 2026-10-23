@@ -190,6 +190,12 @@ class ProcessLifecycleManager(LifecycleManager):
         self._latest_fingerprint: dict[tuple[str, str], PlanFingerprint] = {}
 
     async def preview(self, request: LaunchRequest) -> LaunchPlan:
+        if self._isolation_policy.is_blocked(str(request.app_id)):
+            raise LaunchError(
+                "app_launch_blocked",
+                "This app is blocked by the operator.",
+                remediation="Ask the operator to remove the app launch block.",
+            )
         manifest, target = self._resolve_target(request)
         runtime = target.runtime
         if runtime is None or runtime.driver != "process":
@@ -928,6 +934,13 @@ class ProcessLifecycleManager(LifecycleManager):
             )
         if not decision.allowed:
             error_type = LaunchError if phase == "start" else PreparationError
+            if decision.execution_class == "blocked":
+                raise error_type(
+                    "app_launch_blocked",
+                    "This app is blocked by the operator.",
+                    remediation="Ask the operator to remove the app launch block.",
+                    context=(("phase", phase),),
+                )
             raise error_type(
                 "isolated_runner_unavailable",
                 "A verified isolated runner is required for managed app commands.",
@@ -945,8 +958,8 @@ class ProcessLifecycleManager(LifecycleManager):
         if self._isolation_policy.mode_for(str(manifest.app_id)) is IsolationMode.ENFORCE:
             # DynamicUser changes on every unit. Persisted state must remain
             # writable by the broker's stable, appengine-owned group.
-            data_dir.chmod(0o775)
-            build_dir.chmod(0o775)
+            data_dir.chmod(0o770)
+            build_dir.chmod(0o770)
         return data_dir, build_dir
 
     @staticmethod

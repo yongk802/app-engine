@@ -12,12 +12,18 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-MARKER = "# package-tracker-mail-v1"
+MARKER = "# package-tracker-mail-v2"
+OLD_MARKER = "# package-tracker-mail-v1"
 SENTINEL = "location / { return 404; }"
 MAIL_PATHS = (
     "= /api/email/accounts",
     "~ ^/api/email/accounts/[^/]+/inbox$",
     "~ ^/api/email/accounts/[^/]+/message/[^/]+$",
+)
+QUERY_GUARDS = (
+    '            if ($args != "") { return 403; }\n',
+    '            if ($args !~ "^folder=INBOX&limit=[0-9]{1,3}$") { return 403; }\n',
+    '            if ($args !~ "^folder=INBOX$") { return 403; }\n',
 )
 
 
@@ -31,8 +37,27 @@ def render(source: str, ca_file: str) -> str:
         raise ValueError("unexpected Atrium status gateway configuration")
     trusted = f"proxy_ssl_trusted_certificate {ca_file};"
     if MARKER in source:
-        if source.count(MARKER) != 1 or source.count(trusted) != 4:
+        if (source.count(MARKER) != 1 or source.count(trusted) != 4
+                or any(source.count(guard) != 1 for guard in QUERY_GUARDS)):
             raise ValueError("unexpected Atrium status gateway configuration")
+        return source
+    if OLD_MARKER in source:
+        if (source.count(OLD_MARKER) != 1 or source.count(trusted) != 4
+                or source.count('"CN=package-tracker-client"') != 3
+                or source.count("access_log off;") != 3):
+            raise ValueError("unexpected Atrium status gateway configuration")
+        source = source.replace(OLD_MARKER, MARKER, 1)
+        for path, guard in zip(MAIL_PATHS, QUERY_GUARDS):
+            start = source.find(f"location {path} {{")
+            end = source.find("\n        }", start)
+            if start < 0 or end < 0:
+                raise ValueError("unexpected Atrium status gateway configuration")
+            block = source[start:end]
+            if block.count("            access_log off;\n") != 1:
+                raise ValueError("unexpected Atrium status gateway configuration")
+            source = (source[:start] + block.replace(
+                "            access_log off;\n", guard + "            access_log off;\n", 1
+            ) + source[end:])
         return source
     if source.count("proxy_ssl_verify off;") != 1 or "/api/email/" in source:
         raise ValueError("unexpected Atrium status gateway configuration")
@@ -43,12 +68,13 @@ def render(source: str, ca_file: str) -> str:
         1,
     )
     locations = []
-    for path in MAIL_PATHS:
+    for path, guard in zip(MAIL_PATHS, QUERY_GUARDS):
         locations.append(
             f"        location {path} {{\n"
             '            if ($ssl_client_s_dn != "CN=package-tracker-client") { return 403; }\n'
             '            if ($request_method != GET) { return 405; }\n'
             "            limit_except GET { deny all; }\n"
+            f"{guard}"
             "            access_log off;\n"
             "            proxy_pass https://127.0.0.1:9900;\n"
             "            proxy_ssl_verify on;\n"

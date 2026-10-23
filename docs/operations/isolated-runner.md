@@ -98,8 +98,11 @@ player API, starts a broker unit and never starts a host-UID Node process.
 
 For global enforcement while Package Tracker is incompatible, set
 `APP_ENGINE_BLOCKED_APP_IDS=package-tracker` and
-`APP_ENGINE_PROCESS_ISOLATION=enforce`. Its managed preview and open endpoints
-must reject with `app_launch_blocked`; its source and data stay in place.
+`APP_ENGINE_PROCESS_ISOLATION=enforce`. Its managed preview must reject with
+`app_launch_blocked`. On the production VPS, `APP_ENGINE_PUBLIC_APPS` omits
+Package Tracker, so the open route returns 404 before lifecycle policy; if it
+is hosted later while still blocked, open returns `app_launch_blocked`. Its
+source and data stay in place.
 Verify no other process manifest exists, and retain Night City Table's exact
 standing approval. After Package Tracker has its own verified toolchain,
 network, browser, state, and owner-approved launch path, remove its block.

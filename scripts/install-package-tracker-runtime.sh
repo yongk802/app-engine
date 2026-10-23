@@ -136,6 +136,7 @@ PLAYWRIGHT_BROWSERS_PATH=/opt/package-tracker/browsers \
   /opt/package-tracker/venv/bin/python -m playwright install --with-deps chromium
 chown -R root:root /opt/package-tracker
 chmod -R go-w /opt/package-tracker
+chmod -R a+rX /opt/package-tracker
 
 install -m 0644 -o root -g root \
   "$engine_source/deploy/package-tracker/app-engine-package-proxy.service" "$proxy_unit"

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import threading
@@ -130,13 +131,16 @@ import pytest
 def test_failed_app_calls_release_gateway_lease(engine_client, monkeypatch, mode):
     import app_engine.app_tools as implementation
     module, client, admin = engine_client
-    monkeypatch.setattr(implementation, 'TOOL_TIMEOUT', .03 if mode == 'timeout' else 5, raising=False)
-    release_response = threading.Event()
+    monkeypatch.setattr(implementation, 'TOOL_TIMEOUT', .1 if mode == 'timeout' else 5, raising=False)
+    proxy_entered = threading.Event()
+    if mode == 'timeout':
+        async def blocked_proxy(*_args, **_kwargs):
+            proxy_entered.set()
+            await asyncio.Event().wait()
+        monkeypatch.setattr(module._app_runtime.gateway, 'proxy', blocked_proxy)
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers['Content-Length']))
-            if mode == 'timeout':
-                release_response.wait(2)
             body = b'x' * (257 * 1024) if mode == 'oversized' else b'bad' if mode == 'invalid_json' else b'{}'
             self.send_response(503 if mode == 'http_error' else 200)
             self.send_header('Content-Length', str(len(body)))
@@ -158,9 +162,10 @@ def test_failed_app_calls_release_gateway_lease(engine_client, monkeypatch, mode
         client.post('/api/app-engine/catalog/refresh', headers=admin)
         result = rpc(client, key(client, admin), 'tools/call', {'name': 'app__failing__act', 'arguments': {}}).json()['result']
         assert result['isError'], result
+        if mode == 'timeout':
+            assert proxy_entered.is_set()
         assert not module._app_runtime.gateway._sessions
     finally:
-        release_response.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)

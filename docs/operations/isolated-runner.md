@@ -85,18 +85,16 @@ approved webhook origins and its persisted room state has no webhook seats.
 The 2026-10-23 production snapshot had neither configured origins nor webhook
 seats; a later deployment must recheck both conditions.
 
-The VPS also has `package-tracker`, whose current `uv --with playwright`
-launch, carrier APIs, Atrium mail access, and browser page lookups require a
-separate compatibility design. During the pilot, keep the global mode at
-`audit` and set `APP_ENGINE_ISOLATED_APP_IDS=cyberpunk-tcg` after the owner
-approves that exact changed launch plan. A missing broker is a launch failure
-for the pilot, with no host-process fallback. Verify the pilot
+During the Night City Table pilot, keep the global mode at `audit` and set
+`APP_ENGINE_ISOLATED_APP_IDS=cyberpunk-tcg` after the owner approves that exact
+changed launch plan. A missing broker is a launch failure for the pilot, with
+no host-process fallback. Verify the pilot
 UI, price refresh, room tables, data persistence, crash/stop cleanup,
 configured SMTP, store catalog, both mTLS directions, and rejected
 non-loopback egress. Verify the host multiplayer route, including the remote
 player API, starts a broker unit and never starts a host-UID Node process.
 
-For global enforcement while Package Tracker is incompatible, set
+For global enforcement while Package Tracker remains blocked, set
 `APP_ENGINE_BLOCKED_APP_IDS=package-tracker` and
 `APP_ENGINE_PROCESS_ISOLATION=enforce`. Its managed preview must reject with
 `app_launch_blocked`. On the production VPS, `APP_ENGINE_PUBLIC_APPS` omits
@@ -104,7 +102,69 @@ Package Tracker, so the open route returns 404 before lifecycle policy; if it
 is hosted later while still blocked, open returns `app_launch_blocked`. Its
 source and data stay in place.
 Verify no other process manifest exists, and retain Night City Table's exact
-standing approval. After Package Tracker has its own verified toolchain,
-network, browser, state, and owner-approved launch path, remove its block.
+standing approval. The Package Tracker compatibility setup below does not
+remove its block. Remove the block only after the production gates pass and
+the owner approves the new exact launch-plan fingerprint.
 For rollback, restore the prior service override and restart app-engine in
 audit mode; leave the broker socket and gateway installed for diagnosis.
+
+## Stage Package Tracker compatibility while launch stays blocked
+
+The [Package Tracker design](../superpowers/specs/2026-10-23-package-tracker-isolation-design.md)
+uses a separately identified browser worker, an authenticated loopback CONNECT
+proxy, a fixed-origin carrier profile, and a dedicated mTLS client for Atrium's
+read-only mail routes. The browser receives no mail or carrier credentials.
+The broker grants these capabilities only to Package Tracker's start unit.
+
+Issue the role certificate on the Mac from the offline app-engine mTLS CA. The
+issuer's `--check` validates the requested paths and identity without writing.
+Keep the CA signing key on the Mac. Transfer only `ca.crt`,
+`package-tracker-client.crt`, and `package-tracker-client.key` to a root-only
+staging directory on the VPS. Avoid displaying the key or bearer token in logs.
+
+```bash
+bash scripts/issue-package-tracker-client.sh --check \
+  --ca-cert /Users/yongkim/.config/app-engine-mtls-v2/ca.crt \
+  --ca-key /Users/yongkim/.config/app-engine-mtls-v2.ca-offline/ca.key \
+  --output /Users/yongkim/.config/atrium/package-tracker-mtls-v1
+```
+
+On the VPS, extract reviewed app-engine and personal-apps commits into
+root-owned release directories. With the three certificate files staged in
+`/root/package-tracker-cert-staging`, check and install the pinned Playwright
+1.64.1 runtime, Chromium, service units, and broker policy:
+
+```bash
+sudo bash scripts/install-package-tracker-runtime.sh --check \
+  --cert-bundle /root/package-tracker-cert-staging \
+  --apps-source /root/personal-apps-release/package-tracker
+sudo bash scripts/install-package-tracker-runtime.sh --install \
+  --cert-bundle /root/package-tracker-cert-staging \
+  --apps-source /root/personal-apps-release/package-tracker
+```
+
+The installer backs up `/etc/app-engine-runner.json`, installs root-owned
+runtime code, and starts services on loopback ports 8788 and 8799. It prints
+the backup path. Keep that backup for rollback. Install the read-only mail
+routes on the Mac's existing health gateway with
+`install-package-tracker-mail-gateway.py --check`, then `--install`, using its
+existing Nginx config, prefix, binary, and local Atrium CA. The gateway
+installer tests a candidate config before reloading and saves a timestamped
+backup. The `/health` route remains restricted to `app-engine-client`; the mail
+routes require `package-tracker-client` plus a user API key with email scope.
+
+Back up the Mac's `~/.local/share/package-tracker` data before migration. Copy
+only the app's packages, seen IDs, and credential files to its scoped runtime
+data directory; do not start the app from source to perform migration. Reject
+symlinks, set all data directories to `appengine:appengine` mode 0770 and files
+to group `appengine` mode 0660, and verify the package count and seen-ID count.
+The app's atomic writes retain these modes across changing DynamicUser IDs.
+
+Before seeking exact launch approval, prove the proxy rejects unauthenticated,
+private, and unlisted-carrier CONNECT requests; prove the browser worker
+cannot use a direct external socket and can load a public HTTPS tracking page
+through the proxy; prove the dedicated mTLS mail route rejects the other client
+identity and non-GET requests, accepts the scoped mail API key, and keeps
+`/health` working. Check that Night City Table, SMTP, and the existing app-store
+and Atrium mTLS paths continue working. A failed gate leaves Package Tracker
+blocked; restore the saved policy and Nginx config when rolling back.

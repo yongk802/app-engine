@@ -1,0 +1,37 @@
+[Unit]
+Description=Package Tracker authenticated public HTTPS egress proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=browser-token:/etc/app-engine-package-tracker/browser-token
+LoadCredential=carrier-token:/etc/app-engine-package-tracker/carrier-token
+ExecStart=/usr/bin/python3 /usr/local/libexec/app-engine/package_tracker_egress.py --port 8788 --browser-token-file %d/browser-token --carrier-token-file %d/carrier-token
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectProc=invisible
+PrivateDevices=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=0.0.0.0/8
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=198.18.0.0/15
+IPAddressDeny=224.0.0.0/4
+IPAddressDeny=240.0.0.0/4
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+IPAddressAllow=localhost
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

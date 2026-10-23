@@ -49,10 +49,17 @@ read-only app source, writes price/cache files under `APP_DATA_DIR`, serves
 only its two public price files from there, and reaches the fixed gateway over
 loopback. Back up its existing source `data/` and runtime directory before
 copying any existing `prices.json`, `top20-prices.html`, and
-`sources/tcgcsv-pricing.json` into the runtime directory. Set that scoped
-directory and its `sources/` subdirectory to group `appengine` and mode 0775;
-the source remains read-only to the isolated unit. Its room server is a child
-of the web process and must remain functional on loopback.
+`sources/tcgcsv-pricing.json` into the runtime directory. Before the pilot
+switch, migrate **all** existing scoped runtime state, including `rooms/` and
+its JSON files. Audit-mode processes may have created directories at 0755 and
+files at 0600; a new dynamic UID cannot use those. Stop the pilot app, back
+up the runtime directory, reject symlinks in it, then set every directory to
+owner/group `appengine:appengine` and mode 0775 and every regular file to
+group `appengine` and mode 0660. Check the resulting modes and contents before
+restarting. The source remains read-only to the isolated unit. Its room
+server is a child of the web process and must remain functional on loopback.
+New state uses the unit's `UMask=0002` and group-readable atomic writes so it
+survives subsequent dynamic UID changes.
 
 The VPS also has `package-tracker`, whose current `uv --with playwright`
 launch, carrier APIs, Atrium mail access, and browser page lookups require a

@@ -61,6 +61,8 @@ def main() -> int:
     parser.add_argument("--apps-root", type=Path, action="append", required=True)
     parser.add_argument("--state-root", type=Path, required=True,
                         help="Runtime state root containing data/ and build/")
+    parser.add_argument("--multiplayer-root", type=Path,
+                        help="Existing room-state root (defaults to sibling multiplayer/)")
     parser.add_argument("--engine-user", default="appengine")
     parser.add_argument("--engine-group", default="appengine")
     action = parser.add_mutually_exclusive_group(required=True)
@@ -77,9 +79,14 @@ def main() -> int:
         parser.error("engine user or group does not exist")
     roots = [str(path.resolve(strict=True)) for path in args.apps_root]
     state = str(args.state_root.resolve(strict=True))
-    if any(not Path(path).is_dir() for path in (*roots, state)):
+    multiplayer_root = args.multiplayer_root or args.state_root.parent / "multiplayer"
+    if not multiplayer_root.is_dir():
+        parser.error("multiplayer root must be an existing directory")
+    multiplayer = str(multiplayer_root.resolve(strict=True))
+    if any(not Path(path).is_dir() for path in (*roots, state, multiplayer)):
         parser.error("app and state roots must be directories")
     policy = json.dumps({"apps_roots": roots, "state_root": state,
+                         "multiplayer_root": multiplayer,
                          "engine_user": args.engine_user,
                          "engine_group": args.engine_group},
                         sort_keys=True, indent=2).encode() + b"\n"
@@ -87,6 +94,8 @@ def main() -> int:
              for name in MODULES}
     files[LIB / "isolated_exec.py"] = REPO / "app_engine" / "isolated_exec.py"
     files[LIB / "tcgcsv_gateway.py"] = REPO / "app_engine" / "tcgcsv_gateway.py"
+    for source in (REPO / "app_engine" / "multiplayer").glob("*.mjs"):
+        files[LIB / "multiplayer" / source.name] = source
     socket_source = REPO / "scripts" / "systemd" / "app-engine-runner.socket"
     service_source = REPO / "scripts" / "systemd" / "app-engine-runner@.service"
     files[SYSTEMD / socket_source.name] = socket_source

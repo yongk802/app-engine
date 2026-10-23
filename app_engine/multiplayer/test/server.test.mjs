@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {spawn} from 'node:child_process';
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
@@ -10,12 +10,28 @@ import {engine} from './fake-rules.mjs';
 
 const here=fileURLToPath(new URL('.',import.meta.url));
 const compatibility={protocol:1,rulesVersion:engine.rulesVersion,catalogDigest:engine.catalogDigest};
-const start=(args,dir)=>new Promise((resolve,reject)=>{
- const child=spawn(process.execPath,[join(here,'..','server.mjs'),...args],{stdio:['ignore','pipe','pipe']});
+const start=(args,dir,env=process.env)=>new Promise((resolve,reject)=>{
+ const child=spawn(process.execPath,[join(here,'..','server.mjs'),...args],{stdio:['ignore','pipe','pipe'],env});
  let out='',err='';
  child.stdout.on('data',d=>{out+=d;const m=/listening on ([^:]+):(\d+)/.exec(out);if(m)resolve({child,host:m[1],port:Number(m[2])});});
  child.stderr.on('data',d=>{err+=d;});
  child.on('exit',code=>reject(new Error(`exited ${code}: ${err.trim()}`)));
+});
+
+test('isolated room state remains readable across dynamic identities',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'app-engine-mp-group-'));
+ let proc;
+ try{
+  proc=await start(['--rules',join(here,'fake-rules.mjs'),'--data-dir',dir,'--port','0'],dir,
+   {...process.env,APP_ENGINE_MULTIPLAYER_GROUP_SHARE:'1'});
+  const base='http://'+proc.host+':'+proc.port;
+  const created=await command(base,{op:'create',name:'Alex',...compatibility});
+  assert.equal(created.ok,true);
+  assert.equal((await stat(join(dir,'rooms.json'))).mode&0o777,0o660);
+  const friend=await command(base,{op:'friendRegister',name:'Alex',...compatibility});
+  assert.equal(friend.ok,true);
+  assert.equal((await stat(join(dir,'friends.json'))).mode&0o777,0o660);
+ }finally{proc?.child.kill('SIGTERM');await rm(dir,{recursive:true,force:true});}
 });
 const command=(base,body,token)=>fetch(`${base}/v1/command`,{method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(body)}).then(r=>r.json());
 

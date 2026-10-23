@@ -47,7 +47,7 @@ def decode_plan(raw: bytes, *, roots: tuple[Path, ...]) -> CommandPlan:
         raise ValueError("invalid working directory")
     try:
         resolved = path.resolve(strict=True)
-        allowed = tuple(root.resolve(strict=True) for root in roots)
+        allowed = tuple(root.resolve(strict=True) for root in roots if root.exists())
     except OSError as exc:
         raise ValueError("invalid working directory") from exc
     if not any(resolved == root or resolved.is_relative_to(root) for root in allowed):

@@ -7,6 +7,15 @@ a read-only app-source bind, writable scoped data/build binds, non-loopback IP
 deny, and a `BindsTo` relationship to its broker service. The broker socket is
 mode `0600` for `appengine` only.
 
+Apps with a host multiplayer manifest also start their app-supplied rules
+module through the broker when isolation is enforced. That unit gets the same
+network and identity boundary, the root-installed room server code read-only,
+and only its app's existing room state at
+`APP_ENGINE_STATE_DIR/multiplayer/<app-id>` writable. An external multiplayer
+override is rejected for an enforced app. The pilot requires an empty
+`APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS` setting; if callback origins are configured,
+the room service fails closed until a scoped notification gateway is installed.
+
 ## Install the socket without enabling enforcement
 
 Use the exact reviewed app-engine commit after its PR checks pass. Extract it
@@ -26,7 +35,10 @@ systemctl status app-engine-runner.socket
 ```
 
 The installer writes root-owned runner and fixed-origin TCGCSV gateway code,
-`/etc/app-engine-runner.json`, and their systemd units. It starts the socket and
+the room server modules, `/etc/app-engine-runner.json`, and their systemd units.
+The multiplayer root defaults to the `multiplayer/` sibling of the supplied
+runtime state root; use `--multiplayer-root` for a different state layout.
+It starts the socket and
 the loopback-only gateway on port 18792 but does not change app-engine's
 `APP_ENGINE_PROCESS_ISOLATION=audit` setting. The gateway accepts GET only for
 TCGCSV's timestamp, category, group, product, and price paths; it rejects
@@ -50,16 +62,21 @@ only its two public price files from there, and reaches the fixed gateway over
 loopback. Back up its existing source `data/` and runtime directory before
 copying any existing `prices.json`, `top20-prices.html`, and
 `sources/tcgcsv-pricing.json` into the runtime directory. Before the pilot
-switch, migrate **all** existing scoped runtime state, including `rooms/` and
-its JSON files. Audit-mode processes may have created directories at 0755 and
-files at 0600; a new dynamic UID cannot use those. Stop the pilot app, back
-up the runtime directory, reject symlinks in it, then set every directory to
-owner/group `appengine:appengine` and mode 0775 and every regular file to
-group `appengine` and mode 0660. Check the resulting modes and contents before
-restarting. The source remains read-only to the isolated unit. Its room
-server is a child of the web process and must remain functional on loopback.
-New state uses the unit's `UMask=0002` and group-readable atomic writes so it
-survives subsequent dynamic UID changes.
+switch, migrate **all** existing scoped runtime state, including any `rooms/`
+created by the game's backend. Also preserve the host room service's existing
+state at `APP_ENGINE_STATE_DIR/multiplayer/cyberpunk-tcg/`; do not move it to
+the game's runtime directory. Audit-mode processes may have created
+directories at 0755 and files at 0600; a new dynamic UID cannot use those.
+Stop the pilot app and room service, back up both state directories, reject
+symlinks in them, then set directories to owner/group `appengine:appengine`
+and mode 0775 (0770 for the host room directory), and regular files to group
+`appengine` and mode 0660. Check modes and contents before restarting. The
+source remains read-only to the isolated units. New room state uses
+group-readable atomic writes so it survives subsequent dynamic UID changes.
+Before switching the pilot, check the effective engine environment has no
+approved webhook origins and its persisted room state has no webhook seats.
+The 2026-10-23 production snapshot had neither configured origins nor webhook
+seats; a later deployment must recheck both conditions.
 
 The VPS also has `package-tracker`, whose current `uv --with playwright`
 launch, carrier APIs, Atrium mail access, and browser page lookups require a
@@ -70,7 +87,8 @@ other app stays in audit until its own gates pass. A missing broker is a
 launch failure for the pilot, with no host-process fallback. Verify the pilot
 UI, price refresh, room tables, data persistence, crash/stop cleanup,
 configured SMTP, store catalog, both mTLS directions, and rejected
-non-loopback egress.
+non-loopback egress. Verify the host multiplayer route, including the remote
+player API, starts a broker unit and never starts a host-UID Node process.
 
 Only after every managed app has a verified network/toolchain path should the
 global `APP_ENGINE_PROCESS_ISOLATION=enforce` setting replace the pilot. For

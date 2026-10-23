@@ -68,7 +68,7 @@ def decode_request(raw: bytes) -> BrokerRequest:
                 or len(supplied) > 4096 or any(char in supplied for char in (":", "\n", "\r", "\x00"))):
             raise ValueError("invalid broker scope path")
         paths.append(Path(supplied))
-    if value["phase"] not in {"install", "build", "start"}:
+    if value["phase"] not in {"install", "build", "start", "multiplayer"}:
         raise ValueError("invalid broker phase")
     if not _SAFE_APP_ID.fullmatch(value["app_id"]):
         raise ValueError("invalid broker app ID")
@@ -173,20 +173,22 @@ def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
     except json.JSONDecodeError as exc:
         raise ValueError("invalid runner policy JSON") from exc
     if (not isinstance(value, dict)
-            or set(value) != {"apps_roots", "state_root", "engine_user", "engine_group"}
+            or set(value) != {"apps_roots", "state_root", "multiplayer_root", "engine_user", "engine_group"}
             or not isinstance(value["apps_roots"], list)
             or not 1 <= len(value["apps_roots"]) <= 8
             or any(not isinstance(item, str) or not item.startswith("/")
                    for item in value["apps_roots"])
             or not isinstance(value["state_root"], str)
             or not value["state_root"].startswith("/")
+            or not isinstance(value["multiplayer_root"], str)
+            or not value["multiplayer_root"].startswith("/")
             or not isinstance(value["engine_user"], str)
             or not isinstance(value["engine_group"], str)):
         raise ValueError("invalid runner policy shape")
     user = pwd.getpwnam(value["engine_user"])
     return UnitBoundary(tuple(Path(item) for item in value["apps_roots"]),
                         Path(value["state_root"]), user.pw_uid,
-                        value["engine_group"])
+                        value["engine_group"], Path(value["multiplayer_root"]))
 
 
 def main() -> int:

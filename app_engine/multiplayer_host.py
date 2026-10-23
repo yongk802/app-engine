@@ -26,11 +26,14 @@ from pathlib import Path
 
 import httpx
 
+from .isolation_client import IsolatedProcess, command_request
+from .process_isolation import IsolationMode, ProcessIsolationPolicy
+
 MAX_BODY = 64 * 1024
 MAX_REPLY = 2 * 1024 * 1024
 HEALTH_TIMEOUT = 15.0
 COMMAND_TIMEOUT = 15.0
-_LISTENING = re.compile(r"listening on ([^:\s]+):(\d+)")
+_LISTENING = re.compile(r"listening on ([^:\s]+):(\d+)$")
 _APP_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -54,10 +57,11 @@ class MultiplayerUnavailable(Exception):
 @dataclass
 class RoomProcess:
     app_id: str
+    app_root: Path
     rules: Path
     ai: Path | None
     data_dir: Path
-    process: asyncio.subprocess.Process | None = None
+    process: asyncio.subprocess.Process | IsolatedProcess | None = None
     base_url: str = ""
     logs: deque = field(default_factory=lambda: deque(maxlen=200))
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -76,11 +80,13 @@ class MultiplayerHost:
         node: str | None = None,
         external: str | None = None,
         package: Path | None = None,
+        isolation_policy: ProcessIsolationPolicy | None = None,
     ):
         self.state_root = Path(state_root)
         self.node = node
         self.package = package or package_dir()
         self.external = self._parse_external(external if external is not None else os.environ.get("APP_ENGINE_MULTIPLAYER_SERVER", ""))
+        self.isolation_policy = isolation_policy or ProcessIsolationPolicy.from_environment()
         self._processes: dict[str, RoomProcess] = {}
         self._client: httpx.AsyncClient | None = None
 
@@ -122,19 +128,72 @@ class MultiplayerHost:
         if not _APP_ID.match(app_id):
             raise MultiplayerUnavailable("Unknown app.")
         external = self.external_url(app_id)
+        isolated = self.isolation_policy.mode_for(app_id) is IsolationMode.ENFORCE
         if external:
+            if isolated:
+                raise MultiplayerUnavailable("An isolated room service cannot use an external server override.")
             return external
         rules = (Path(app_root) / spec["rules"]).resolve()
         ai = (Path(app_root) / spec["ai"]).resolve() if spec.get("ai") else None
         record = self._processes.get(app_id)
         if record is None:
-            record = RoomProcess(app_id=app_id, rules=rules, ai=ai, data_dir=self.data_dir(app_id))
+            record = RoomProcess(app_id=app_id, app_root=await asyncio.to_thread(Path(app_root).resolve),
+                                 rules=rules, ai=ai, data_dir=self.data_dir(app_id))
             self._processes[app_id] = record
         async with record.lock:
             if record.alive:
                 return record.base_url
-            await self._start(record)
+            if isolated:
+                await self._start_isolated(record)
+            else:
+                await self._start(record)
             return record.base_url
+
+    async def _start_isolated(self, record: RoomProcess) -> None:
+        if os.environ.get("APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS", "").strip():
+            raise MultiplayerUnavailable("Isolated room webhook delivery needs a scoped gateway.")
+        node = self.node or shutil.which("node")
+        if not node or not Path(node).is_absolute():
+            raise MultiplayerUnavailable("Multiplayer needs Node.js on this computer.")
+        if not record.rules.is_file() or (record.ai and not record.ai.is_file()):
+            raise MultiplayerUnavailable("The room service rules module is missing.")
+        app_root = record.app_root
+        if not record.rules.is_relative_to(app_root) or (
+            record.ai is not None and not record.ai.is_relative_to(app_root)
+        ):
+            raise MultiplayerUnavailable("The room service rules module is outside the app.")
+        record.data_dir.mkdir(parents=True, exist_ok=True, mode=0o770)
+        if record.data_dir.is_symlink():
+            raise MultiplayerUnavailable("The room state directory is invalid.")
+        record.data_dir.chmod(0o770)
+        build_dir = self.state_root / "runtime" / "build" / record.app_id
+        build_dir.mkdir(parents=True, exist_ok=True)
+        if build_dir.is_symlink():
+            raise MultiplayerUnavailable("The app build directory is invalid.")
+        argv = [node, "/room-server/server.mjs", "--rules",
+                str(Path("/workspace") / record.rules.relative_to(app_root)),
+                "--data-dir", "/app-data", "--host", "127.0.0.1", "--port", "0"]
+        if record.ai is not None:
+            argv += ["--ai", str(Path("/workspace") / record.ai.relative_to(app_root))]
+        environment = self._environment()
+        environment.update({
+            "HOME": "/app-data",
+            "APP_ENGINE_MULTIPLAYER_GROUP_SHARE": "1",
+            # External callbacks need a separately reviewed egress gateway.
+            "APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS": "",
+        })
+        request = command_request(
+            app_id=record.app_id, phase="multiplayer", app_root=app_root,
+            data_dir=record.data_dir, build_dir=build_dir,
+            executable=Path(node), argv=tuple(argv), cwd=app_root,
+            env=environment,
+        )
+        record.base_url = ""
+        try:
+            record.process = await IsolatedProcess.start(request)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise MultiplayerUnavailable("The isolated room service could not be started.") from exc
+        await self._finish_start(record)
 
     async def _start(self, record: RoomProcess) -> None:
         node = self.node or shutil.which("node")
@@ -158,6 +217,9 @@ class MultiplayerHost:
         except OSError as exc:
             record.logs.append(f"spawn failed: {exc}")
             raise MultiplayerUnavailable("The room service could not be started.") from exc
+        await self._finish_start(record)
+
+    async def _finish_start(self, record: RoomProcess) -> None:
         base = await self._await_listening(record)
         record.base_url = base
         record.pump = asyncio.create_task(self._pump(record))
@@ -165,7 +227,7 @@ class MultiplayerHost:
         # Local tooling (a terminal-driven second seat, a smoke test) finds the service here;
         # the file is private to the user and removed when the service stops.
         address = record.data_dir / "address.json"
-        address.write_text(json.dumps({"url": base, "pid": record.process.pid}))
+        address.write_text(json.dumps({"url": base, "pid": getattr(record.process, "pid", None)}))
         address.chmod(0o600)
 
     @staticmethod
@@ -178,7 +240,7 @@ class MultiplayerHost:
     async def _await_listening(self, record: RoomProcess) -> str:
         process = record.process
         assert process is not None and process.stdout is not None
-        async def read_until_listening() -> str | None:
+        async def read_until_listening() -> tuple[str, int] | None:
             while True:
                 line = await process.stdout.readline()
                 if not line:
@@ -187,12 +249,17 @@ class MultiplayerHost:
                 record.logs.append(text)
                 match = _LISTENING.search(text)
                 if match:
-                    return f"http://{match.group(1)}:{match.group(2)}"
+                    port_text = match.group(2)
+                    return match.group(1), int(port_text) if len(port_text) <= 5 else 0
 
         try:
-            base = await asyncio.wait_for(read_until_listening(), HEALTH_TIMEOUT)
-            if base:
-                return base
+            listener = await asyncio.wait_for(read_until_listening(), HEALTH_TIMEOUT)
+            if listener:
+                host, port = listener
+                if host == "127.0.0.1" and 1 <= port <= 65535:
+                    return f"http://127.0.0.1:{port}"
+                await self._terminate(record)
+                raise MultiplayerUnavailable("The room service advertised a non-loopback listener.")
         except (asyncio.TimeoutError, TimeoutError):
             pass
         await self._terminate(record)
@@ -230,6 +297,9 @@ class MultiplayerHost:
         record.base_url = ""
         (record.data_dir / "address.json").unlink(missing_ok=True)
         if process is None or process.returncode is not None:
+            return
+        if isinstance(process, IsolatedProcess):
+            await process.stop()
             return
         process.terminate()
         try:

@@ -108,7 +108,7 @@ export class RoomService extends RoomServiceContract {
   async init() {
     if (this.initialized) return;
     try {
-      await mkdir(this.storageDir, {recursive: true, mode: 0o700});
+      await mkdir(this.storageDir, {recursive: true, mode: process.env.APP_ENGINE_MULTIPLAYER_GROUP_SHARE === '1' ? 0o770 : 0o700});
       let saved;
       try { saved = JSON.parse(await readFile(this.file, 'utf8')); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -208,7 +208,7 @@ export class RoomService extends RoomServiceContract {
     const temporary = path.join(this.storageDir, `.daily-${secret()}.tmp`);
     let handle;
     try {
-      handle = await open(temporary, 'wx', 0o600);
+      handle = await open(temporary, 'wx', process.env.APP_ENGINE_MULTIPLAYER_GROUP_SHARE === '1' ? 0o660 : 0o600);
       await handle.writeFile(data, 'utf8');
       await handle.sync();
       await handle.close(); handle = null;
@@ -498,7 +498,7 @@ export class RoomService extends RoomServiceContract {
     const temporary = path.join(this.storageDir, `.rooms-${secret()}.tmp`);
     let handle;
     try {
-      handle = await open(temporary, 'wx', 0o600);
+      handle = await open(temporary, 'wx', process.env.APP_ENGINE_MULTIPLAYER_GROUP_SHARE === '1' ? 0o660 : 0o600);
       await handle.writeFile(data, 'utf8');
       await handle.sync();
       await handle.close(); handle = null;

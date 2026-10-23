@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _SAFE_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\Z")
-_SAFE_UNIT = re.compile(r"ae-[a-zA-Z0-9_-]+-(?:install|build|start)-[a-f0-9]{3,32}\Z")
+_SAFE_UNIT = re.compile(r"ae-[a-zA-Z0-9_-]+-(?:install|build|start|multiplayer)-[a-f0-9]{3,32}\Z")
 _SAFE_BROKER_UNIT = re.compile(r"app-engine-runner@[A-Za-z0-9:._\\-]{1,200}\.service\Z")
 
 
@@ -28,12 +28,13 @@ class UnitBoundary:
     state_root: Path
     engine_uid: int
     engine_group: str
+    multiplayer_root: Path | None = None
 
     def command(self, unit_name: str, request: UnitRequest,
                 broker_unit_name: str) -> tuple[str, ...]:
         if not _SAFE_ID.fullmatch(request.app_id):
             raise ValueError("unsafe app ID")
-        if request.phase not in {"install", "build", "start"}:
+        if request.phase not in {"install", "build", "start", "multiplayer"}:
             raise ValueError("unsupported command phase")
         if not _SAFE_UNIT.fullmatch(unit_name) or not unit_name.startswith(
             f"ae-{request.app_id}-{request.phase}-"
@@ -45,6 +46,10 @@ class UnitBoundary:
             raise ValueError("invalid broker unit name")
         self._validate_paths(request)
 
+        room_bind = (("--property=BindReadOnlyPaths=/usr/local/libexec/app-engine/multiplayer:/room-server",)
+                     if request.phase == "multiplayer" else ())
+        build_bind = (() if request.phase == "multiplayer" else
+                      (f"--property=BindPaths={request.build_dir}:/app-build",))
         return (
             "systemd-run", "--quiet", "--collect", "--wait", "--pipe",
             f"--unit={unit_name}",
@@ -64,8 +69,9 @@ class UnitBoundary:
             "--property=IPAddressAllow=localhost",
             "--property=InaccessiblePaths=/run/app-engine-runner.sock",
             f"--property=BindReadOnlyPaths={request.app_root}:/workspace",
+            *room_bind,
             f"--property=BindPaths={request.data_dir}:/app-data",
-            f"--property=BindPaths={request.build_dir}:/app-build",
+            *build_bind,
             "--property=WorkingDirectory=/workspace",
             "/usr/bin/python3", "/usr/local/libexec/app-engine/isolated_exec.py",
         )
@@ -89,11 +95,18 @@ class UnitBoundary:
             raise ValueError("invalid app root manifest") from exc
         if not isinstance(declared, dict) or declared.get("id", app_root.name) != request.app_id:
             raise ValueError("app root manifest does not match app ID")
-        scope_digest = request.data_dir.name
-        if not re.fullmatch(r"[a-f0-9]{16}", scope_digest):
-            raise ValueError("invalid data directory")
+        if request.phase == "multiplayer":
+            if self.multiplayer_root is None:
+                raise ValueError("multiplayer root is not configured")
+            multiplayer = self.multiplayer_root.resolve(strict=True)
+            expected_data = multiplayer / request.app_id
+        else:
+            scope_digest = request.data_dir.name
+            if not re.fullmatch(r"[a-f0-9]{16}", scope_digest):
+                raise ValueError("invalid data directory")
+            expected_data = state / "data" / request.app_id / scope_digest
         required = (
-            (request.data_dir, state / "data" / request.app_id / scope_digest, "data directory"),
+            (request.data_dir, expected_data, "data directory"),
             (request.build_dir, state / "build" / request.app_id, "build directory"),
         )
         for supplied, expected, label in required:

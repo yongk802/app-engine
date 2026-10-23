@@ -23,6 +23,14 @@ def test_valid_plan_keeps_exact_argv_and_environment(tmp_path):
     assert plan.env["APP_SECRET"] == "canary"
 
 
+def test_plan_accepts_missing_optional_build_mount(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    plan = decode_plan(json.dumps(_plan(workspace)).encode(),
+                       roots=(workspace, tmp_path / "app-build"))
+    assert plan.cwd == workspace
+
+
 def test_plan_rejects_working_directory_symlink_escape(tmp_path):
     workspace = tmp_path / "workspace"
     private = tmp_path / "private"

@@ -43,7 +43,7 @@ export function installFriends(RoomService,{secret,digest,eqHash,text,object,cop
    const data=JSON.stringify({version:1,players:[...next.values()]});
    const temporary=path.join(this.storageDir,`.friends-${secret()}.tmp`);
    let handle;
-   try{handle=await open(temporary,'wx',0o600);await handle.writeFile(data,'utf8');await handle.sync();await handle.close();handle=null;await rename(temporary,this.friendFile);}
+   try{handle=await open(temporary,'wx',process.env.APP_ENGINE_MULTIPLAYER_GROUP_SHARE==='1'?0o660:0o600);await handle.writeFile(data,'utf8');await handle.sync();await handle.close();handle=null;await rename(temporary,this.friendFile);}
    catch{if(handle)await handle.close().catch(()=>{});await unlink(temporary).catch(()=>{});fail('STORAGE_FAILURE','The friend roster could not be saved. Please retry.',503);}
    this.players=next;
   },

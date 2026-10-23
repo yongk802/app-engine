@@ -121,3 +121,28 @@ def test_unit_rejects_untrusted_broker_service_name(tmp_path):
     with pytest.raises(ValueError, match="broker unit"):
         boundary.command("ae-demo-start-123", request,
                          "app-engine-runner@7.service;evil.service")
+
+
+def test_multiplayer_unit_uses_existing_room_state_and_private_room_code(tmp_path):
+    boundary, app, _data, build = _boundary(tmp_path)
+    room_root = tmp_path / "multiplayer"
+    rooms = room_root / "demo"
+    rooms.mkdir(parents=True)
+    boundary = UnitBoundary(boundary.apps_roots, boundary.state_root,
+                            boundary.engine_uid, boundary.engine_group, room_root)
+    request = UnitRequest("demo", "multiplayer", app, rooms, build, "")
+
+    argv = _command(boundary, "ae-demo-multiplayer-123", request)
+
+    assert f"--property=BindPaths={rooms}:/app-data" in argv
+    assert not any("/app-build" in part for part in argv)
+    assert "--property=BindReadOnlyPaths=/usr/local/libexec/app-engine/multiplayer:/room-server" in argv
+    assert "--property=IPAddressDeny=any" in argv
+    assert "--property=DynamicUser=yes" in argv
+
+    other = room_root / "other"
+    other.mkdir()
+    with pytest.raises(ValueError, match="data directory"):
+        _command(boundary, "ae-demo-multiplayer-123", UnitRequest(
+            "demo", "multiplayer", app, other, build, ""
+        ))

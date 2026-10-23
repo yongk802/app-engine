@@ -128,15 +128,15 @@ import pytest
 
 @pytest.mark.parametrize('mode', ['http_error', 'oversized', 'invalid_json', 'timeout'])
 def test_failed_app_calls_release_gateway_lease(engine_client, monkeypatch, mode):
-    import time
     import app_engine.app_tools as implementation
     module, client, admin = engine_client
     monkeypatch.setattr(implementation, 'TOOL_TIMEOUT', .03 if mode == 'timeout' else 5, raising=False)
+    release_response = threading.Event()
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers['Content-Length']))
             if mode == 'timeout':
-                time.sleep(.15)
+                release_response.wait(2)
             body = b'x' * (257 * 1024) if mode == 'oversized' else b'bad' if mode == 'invalid_json' else b'{}'
             self.send_response(503 if mode == 'http_error' else 200)
             self.send_header('Content-Length', str(len(body)))
@@ -160,6 +160,7 @@ def test_failed_app_calls_release_gateway_lease(engine_client, monkeypatch, mode
         assert result['isError'], result
         assert not module._app_runtime.gateway._sessions
     finally:
+        release_response.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)

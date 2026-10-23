@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import re
 import ssl
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import (
     HTTPRedirectHandler,
@@ -90,8 +91,34 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def make_server(port: int = 18792) -> HTTPServer:
-    return HTTPServer(("127.0.0.1", port), Handler)
+class BoundedHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 16
+
+    def __init__(self, address, handler):
+        self._slots = threading.BoundedSemaphore(16)
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            request.settimeout(10)
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def make_server(port: int = 18792) -> BoundedHTTPServer:
+    return BoundedHTTPServer(("127.0.0.1", port), Handler)
 
 
 def main() -> None:

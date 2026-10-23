@@ -1,5 +1,6 @@
 """The local price gateway grants only the Cyberpunk TCG public feed paths."""
 
+import socket
 from http.client import HTTPConnection
 from threading import Thread
 
@@ -45,6 +46,25 @@ def test_gateway_http_rejects_unlisted_paths_and_methods(monkeypatch):
         assert request("GET", "/tcgplayer/categories") == (200, b'{"success":true,"results":[]}')
         assert requests == ["/tcgplayer/categories"]
     finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_idle_local_connection_does_not_block_health():
+    server = tcgcsv_gateway.make_server(0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    idle = socket.create_connection(("127.0.0.1", server.server_port), timeout=2)
+    try:
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+        connection.request("GET", "/health")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.read() == b"ok"
+        connection.close()
+    finally:
+        idle.close()
         server.shutdown()
         server.server_close()
         thread.join()

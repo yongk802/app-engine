@@ -74,8 +74,10 @@ the game's runtime directory. Audit-mode processes may have created
 directories at 0755 and files at 0600; a new dynamic UID cannot use those.
 Stop the pilot app and room service, back up both state directories, reject
 symlinks in them, then set directories to owner/group `appengine:appengine`
-and mode 0775 (0770 for the host room directory), and regular files to group
-`appengine` and mode 0660. Check modes and contents before restarting. The
+and mode 0770, including nested runtime and host room directories, and regular
+files to group `appengine` and mode 0660. The scoped directory must not grant
+traversal to unrelated Unix identities: DynamicUser UIDs are recycled after
+units stop. Check modes and contents before restarting. The
 source remains read-only to the isolated units. New room state uses
 group-readable atomic writes so it survives subsequent dynamic UID changes.
 Before switching the pilot, check the effective engine environment has no

@@ -26,6 +26,7 @@ class ProcessDecision:
 class ProcessIsolationPolicy:
     mode: IsolationMode
     pilot_app_ids: frozenset[str] = frozenset()
+    blocked_app_ids: frozenset[str] = frozenset()
 
     @classmethod
     def from_value(cls, value: str) -> ProcessIsolationPolicy:
@@ -39,11 +40,14 @@ class ProcessIsolationPolicy:
     @classmethod
     def from_environment(cls) -> ProcessIsolationPolicy:
         mode = cls.from_value(os.environ.get("APP_ENGINE_PROCESS_ISOLATION", "legacy")).mode
-        raw = os.environ.get("APP_ENGINE_ISOLATED_APP_IDS", "")
-        ids = tuple(item.strip() for item in raw.split(",")) if raw else ()
-        if any(not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", item) for item in ids):
-            raise ValueError("APP_ENGINE_ISOLATED_APP_IDS contains an invalid app ID")
-        return cls(mode, frozenset(ids))
+        return cls(
+            mode,
+            _app_ids_from_environment("APP_ENGINE_ISOLATED_APP_IDS"),
+            _app_ids_from_environment("APP_ENGINE_BLOCKED_APP_IDS"),
+        )
+
+    def is_blocked(self, app_id: str) -> bool:
+        return app_id in self.blocked_app_ids
 
     def mode_for(self, app_id: str | None = None) -> IsolationMode:
         return (IsolationMode.ENFORCE if app_id in self.pilot_app_ids
@@ -53,6 +57,13 @@ class ProcessIsolationPolicy:
         if phase not in {"install", "build", "start"}:
             raise ValueError(f"unsupported managed process phase: {phase}")
         mode = self.mode_for(app_id)
+        if app_id is not None and self.is_blocked(app_id):
+            return ProcessDecision(
+                mode=mode,
+                allowed=False,
+                execution_class="blocked",
+                reason="This app is blocked by the operator.",
+            )
         if mode is IsolationMode.ENFORCE:
             return ProcessDecision(
                 mode=mode,
@@ -66,6 +77,14 @@ class ProcessIsolationPolicy:
             execution_class="host_process",
             reason="Managed command executes on the service host.",
         )
+
+
+def _app_ids_from_environment(name: str) -> frozenset[str]:
+    raw = os.environ.get(name, "")
+    ids = tuple(item.strip() for item in raw.split(",")) if raw else ()
+    if any(not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", item) for item in ids):
+        raise ValueError(f"{name} contains an invalid app ID")
+    return frozenset(ids)
 
 
 __all__ = ["IsolationMode", "ProcessDecision", "ProcessIsolationPolicy"]

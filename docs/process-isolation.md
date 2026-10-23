@@ -8,6 +8,11 @@ Set `APP_ENGINE_PROCESS_ISOLATION` before starting app-engine:
 | `audit` | Run on the service host and log one structured `managed_process_isolation` record before each execution. |
 | `enforce` | Run managed commands through the installed isolated broker; fail closed if it is unavailable. |
 
+`APP_ENGINE_BLOCKED_APP_IDS` is an optional comma-separated list of app IDs
+whose managed preview and launch operations are rejected before commands run.
+Use it to hold an incompatible app during a global `enforce` rollout. Removing
+an ID is an operator change and does not approve that app's exact launch plan.
+
 `audit` records contain the app ID, target ID, phase, mode, and execution class.
 They omit argv, working directory, environment values, and app configuration
 secrets. Capture the app-engine process logs while piloting this mode. Cached

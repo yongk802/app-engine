@@ -52,4 +52,5 @@ def test_nginx_reload_uses_signal_and_reload_argument(monkeypatch):
     calls = []
     monkeypatch.setattr(gateway.subprocess, "run", lambda argv, **_kwargs: calls.append(argv))
     gateway._nginx("nginx", Path("/gateway"), Path("/gateway/nginx.conf"), "reload")
-    assert calls == [["nginx", "-p", "/gateway", "-c", "/gateway/nginx.conf", "-s", "reload"]]
+    assert calls == [["nginx", "-p", str(Path("/gateway")), "-c",
+                      str(Path("/gateway/nginx.conf")), "-s", "reload"]]

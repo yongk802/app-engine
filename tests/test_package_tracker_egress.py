@@ -1,5 +1,6 @@
 """Package Tracker's outbound proxy must reject private destinations."""
 
+import os
 import socket
 import threading
 from contextlib import contextmanager
@@ -122,6 +123,7 @@ def test_connect_proxy_pins_validated_ip_and_tunnels_bytes():
     assert [(d.hostname, d.ip, d.port) for d in dialed] == [("tracking.example", "8.8.8.8", 443)]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Unix file ownership and modes")
 def test_token_reader_rejects_world_readable_or_symlinked_secret(tmp_path):
     secret = tmp_path / "token"
     secret.write_text("a" * 64 + "\n")

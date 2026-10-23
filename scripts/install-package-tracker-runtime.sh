@@ -44,6 +44,8 @@ key_public="$(openssl pkey -in "$cert_bundle/package-tracker-client.key" -pubout
 [[ "$cert_public" == "$key_public" ]] || { echo 'Certificate key does not match.' >&2; exit 78; }
 for source in \
   "$engine_source/app_engine/package_tracker_egress.py" \
+  "$engine_source/app_engine/isolation_broker.py" \
+  "$engine_source/app_engine/isolated_units.py" \
   "$engine_source/deploy/package-tracker/app-engine-package-proxy.service" \
   "$engine_source/deploy/package-tracker/app-engine-package-browser.service" \
   "$apps_source/browser_worker.py" "$apps_source/page_lookup.py" "$apps_source/carriers.py"; do
@@ -64,6 +66,7 @@ config_dir='/etc/app-engine-package-tracker'
 mtls_dir='/root/app-engine-package-tracker/mtls'
 browser_dir='/usr/local/libexec/package-tracker-browser'
 proxy_file='/usr/local/libexec/app-engine/package_tracker_egress.py'
+broker_dir='/usr/local/libexec/app-engine/app_engine'
 policy_file='/etc/app-engine-runner.json'
 proxy_unit='/etc/systemd/system/app-engine-package-proxy.service'
 browser_unit='/etc/systemd/system/app-engine-package-browser.service'
@@ -72,6 +75,9 @@ install -d -m 0700 -o root -g root "$backup_dir"
 cp -p "$policy_file" "$backup_dir/app-engine-runner.json"
 [[ ! -e "$proxy_unit" ]] || cp -p "$proxy_unit" "$backup_dir/app-engine-package-proxy.service"
 [[ ! -e "$browser_unit" ]] || cp -p "$browser_unit" "$backup_dir/app-engine-package-browser.service"
+for name in isolation_broker.py isolated_units.py package_tracker_egress.py; do
+  [[ ! -e "$broker_dir/$name" ]] || cp -p "$broker_dir/$name" "$backup_dir/$name"
+done
 
 rollback() {
   local code=$?
@@ -89,6 +95,13 @@ rollback() {
   else
     [[ ! -e "$browser_unit" ]] || unlink "$browser_unit"
   fi
+  for name in isolation_broker.py isolated_units.py package_tracker_egress.py; do
+    if [[ -f "$backup_dir/$name" ]]; then
+      cp -p "$backup_dir/$name" "$broker_dir/$name"
+    else
+      [[ ! -e "$broker_dir/$name" ]] || unlink "$broker_dir/$name"
+    fi
+  done
   systemctl daemon-reload >/dev/null 2>&1 || true
   exit "$code"
 }
@@ -106,8 +119,12 @@ install -d -m 0710 -o root -g appengine "$mtls_dir"
 for name in ca.crt package-tracker-client.crt package-tracker-client.key; do
   install -m 0640 -o root -g appengine "$cert_bundle/$name" "$mtls_dir/$name"
 done
-install -d -m 0755 -o root -g root "$browser_dir" /usr/local/libexec/app-engine /opt/package-tracker
+install -d -m 0755 -o root -g root "$browser_dir" "$broker_dir" /opt/package-tracker
 install -m 0644 -o root -g root "$engine_source/app_engine/package_tracker_egress.py" "$proxy_file"
+for name in isolation_broker.py isolated_units.py package_tracker_egress.py; do
+  install -m 0644 -o root -g root "$engine_source/app_engine/$name" "$broker_dir/$name"
+done
+PYTHONPATH=/usr/local/libexec/app-engine /usr/bin/python3 -B -c 'import app_engine.isolation_broker'
 for name in browser_worker.py page_lookup.py carriers.py; do
   install -m 0644 -o root -g root "$apps_source/$name" "$browser_dir/$name"
 done

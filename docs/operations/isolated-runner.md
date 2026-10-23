@@ -143,8 +143,9 @@ sudo bash scripts/install-package-tracker-runtime.sh --install \
   --apps-source /root/personal-apps-release/package-tracker
 ```
 
-The installer backs up `/etc/app-engine-runner.json`, installs root-owned
-runtime code, and starts services on loopback ports 8788 and 8799. It prints
+The installer backs up `/etc/app-engine-runner.json` and the installed broker
+modules, replaces them from the reviewed release, installs root-owned runtime
+code, and starts services on loopback ports 8788 and 8799. It prints
 the backup path. Keep that backup for rollback. Install the read-only mail
 routes on the Mac's existing health gateway with
 `install-package-tracker-mail-gateway.py --check`, then `--install`, using its

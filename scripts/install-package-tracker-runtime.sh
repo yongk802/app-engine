@@ -147,6 +147,28 @@ systemctl daemon-reload
 systemctl enable --now app-engine-package-proxy.service app-engine-package-browser.service
 systemctl is-active --quiet app-engine-package-proxy.service
 systemctl is-active --quiet app-engine-package-browser.service
+python3 - <<'PY'
+import socket
+import time
+
+checks = (
+    (8788, b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", b"HTTP/1.1 405"),
+    (8799, b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n", b"HTTP/1.0 200"),
+)
+deadline = time.monotonic() + 15
+for port, request, expected in checks:
+    while True:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as conn:
+                conn.sendall(request)
+                if conn.recv(128).startswith(expected):
+                    break
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            raise SystemExit(f"Package Tracker service on port {port} did not respond")
+        time.sleep(0.25)
+PY
 
 python3 - "$policy_file" "$mtls_dir" "$config_dir" <<'PY'
 import json, os, sys, tempfile

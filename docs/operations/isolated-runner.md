@@ -154,12 +154,25 @@ installer tests a candidate config before reloading and saves a timestamped
 backup. The `/health` route remains restricted to `app-engine-client`; the mail
 routes require `package-tracker-client` plus a user API key with email scope.
 
-Back up the Mac's `~/.local/share/package-tracker` data before migration. Copy
-only the app's packages, seen IDs, and credential files to its scoped runtime
-data directory; do not start the app from source to perform migration. Reject
-symlinks, set all data directories to `appengine:appengine` mode 0770 and files
-to group `appengine` mode 0660, and verify the package count and seen-ID count.
-The app's atomic writes retain these modes across changing DynamicUser IDs.
+Back up the Mac's `~/.local/share/package-tracker` data in a private archive
+containing exactly `packages.json`, `settings.json`, `merchants.json`, and
+`credentials.json`, then transfer it to root-only VPS staging. Migrate it with
+the reviewed release script while launch is still blocked:
+
+```bash
+sudo python3 scripts/migrate-package-tracker-state.py --check \
+  --archive /root/package-tracker-cert-staging/state-backup.tar.gz \
+  --state-root /home/appengine/state/runtime
+sudo python3 scripts/migrate-package-tracker-state.py --apply \
+  --archive /root/package-tracker-cert-staging/state-backup.tar.gz \
+  --state-root /home/appengine/state/runtime
+```
+
+The script rejects unexpected archive members, symlinks, and an existing
+target; it derives the shared web scope from the same `ScopeKey` type as the
+engine, installs state atomically, sets the directory to `appengine:appengine`
+mode 0770 and files to group mode 0660, and prints only record counts. The
+app's atomic writes retain these modes across changing DynamicUser IDs.
 
 Before seeking exact launch approval, prove the proxy rejects unauthenticated,
 private, and unlisted-carrier CONNECT requests; prove the browser worker

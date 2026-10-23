@@ -19,8 +19,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .isolated_units import UnitBoundary, UnitRequest
+from .isolated_units import PackageTrackerCapability, UnitBoundary, UnitRequest
 from .isolation_wire import MAX_REQUEST_BYTES, recv_request, send_event
+from .package_tracker_egress import read_token_file
 
 _REQUEST_FIELDS = {"version", "app_id", "phase", "app_root", "data_dir",
                    "build_dir", "plan"}
@@ -96,6 +97,9 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
     sock.settimeout(10)
     require_peer_uid(sock, boundary.engine_uid)
     request = decode_request(recv_request(sock)).unit
+    prepare = getattr(boundary, "prepare_request", None)
+    if prepare is not None:
+        request = prepare(request)
     unit_name = f"ae-{request.app_id}-{request.phase}-{secrets.token_hex(8)}"
     command = boundary.command(unit_name, request, broker_unit_name)
     process = subprocess.Popen(command, stdin=subprocess.PIPE,
@@ -153,10 +157,52 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
                 process.wait(timeout=5)
 
 
+def parse_tracker_capability(value: object, *, owner_uid: int,
+                             engine_gid: int) -> PackageTrackerCapability:
+    """Validate root-owned credentials before allowing an app-specific mount."""
+    keys = {"mtls_dir", "carrier_token_file", "worker_token_file",
+            "carrier_proxy_port", "browser_worker_port"}
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError("invalid Package Tracker capability policy")
+    ports = (value["carrier_proxy_port"], value["browser_worker_port"])
+    if any(type(port) is not int or not 1024 <= port <= 65535 for port in ports) or ports[0] == ports[1]:
+        raise ValueError("invalid Package Tracker port")
+    names = ("mtls_dir", "carrier_token_file", "worker_token_file")
+    if any(not isinstance(value[name], str) or not value[name].startswith("/")
+           or any(char in value[name] for char in (":", "\n", "\r", "\x00"))
+           for name in names):
+        raise ValueError("invalid Package Tracker credential path")
+    mtls, carrier, worker = (Path(value[name]) for name in names)
+    for path in (mtls, carrier, worker):
+        if path.resolve(strict=True) != path or path.is_symlink():
+            raise ValueError("invalid Package Tracker credential path")
+    directory = mtls.stat()
+    if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != owner_uid
+            or directory.st_gid != engine_gid or directory.st_mode & 0o027
+            or not directory.st_mode & 0o010):
+        raise ValueError("invalid Package Tracker certificate directory")
+    for name in ("ca.crt", "package-tracker-client.crt", "package-tracker-client.key"):
+        path = mtls / name
+        if path.is_symlink() or path.resolve(strict=True) != path:
+            raise ValueError("invalid Package Tracker certificate")
+        status = path.stat()
+        if (not stat.S_ISREG(status.st_mode) or status.st_uid != owner_uid
+                or status.st_gid != engine_gid or status.st_mode & 0o027
+                or not status.st_mode & 0o040):
+            raise ValueError("invalid Package Tracker certificate")
+    for path in (carrier, worker):
+        status = path.stat()
+        if status.st_uid != owner_uid or status.st_mode & 0o077:
+            raise ValueError("invalid Package Tracker token")
+        read_token_file(path)
+    return PackageTrackerCapability(mtls, carrier, worker, ports[0], ports[1])
+
+
 def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
     """Read only a root-owned, non-writable runner policy file."""
     if os.name != "posix":
         raise ValueError("isolated broker requires Unix peer credentials")
+    import grp
     import pwd
 
     if path.is_symlink():
@@ -172,8 +218,10 @@ def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ValueError("invalid runner policy JSON") from exc
+    required = {"apps_roots", "state_root", "multiplayer_root", "engine_user", "engine_group"}
     if (not isinstance(value, dict)
-            or set(value) != {"apps_roots", "state_root", "multiplayer_root", "engine_user", "engine_group"}
+            or not required <= set(value)
+            or set(value) - required - {"package_tracker"}
             or not isinstance(value["apps_roots"], list)
             or not 1 <= len(value["apps_roots"]) <= 8
             or any(not isinstance(item, str) or not item.startswith("/")
@@ -186,9 +234,14 @@ def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
             or not isinstance(value["engine_group"], str)):
         raise ValueError("invalid runner policy shape")
     user = pwd.getpwnam(value["engine_user"])
+    capability = (parse_tracker_capability(
+        value["package_tracker"], owner_uid=0,
+        engine_gid=grp.getgrnam(value["engine_group"]).gr_gid)
+        if "package_tracker" in value else None)
     return UnitBoundary(tuple(Path(item) for item in value["apps_roots"]),
                         Path(value["state_root"]), user.pw_uid,
-                        value["engine_group"], Path(value["multiplayer_root"]))
+                        value["engine_group"], Path(value["multiplayer_root"]),
+                        capability)
 
 
 def main() -> int:

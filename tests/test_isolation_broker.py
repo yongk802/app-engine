@@ -7,6 +7,7 @@ import struct
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -15,6 +16,7 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="Linux systemd broker")
 
 from app_engine.isolation_broker import (
     decode_request,
+    parse_tracker_capability,
     require_peer_uid,
     serve_connection,
 )
@@ -121,6 +123,67 @@ def test_broker_streams_output_and_exact_exit(tmp_path, monkeypatch):
         assert errors == []
     finally:
         client.close()
+
+
+def test_broker_uses_boundary_prepared_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr("app_engine.isolation_broker.require_peer_uid", lambda *_: None)
+
+    class TestBoundary:
+        engine_uid = 999
+
+        def prepare_request(self, request):
+            return replace(request, payload='{"prepared":true}')
+
+        def command(self, _unit, _request, _broker_unit):
+            return (sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())")
+
+    client, broker = socket.socketpair()
+    worker = threading.Thread(
+        target=lambda: serve_connection(broker, TestBoundary(),
+                                        "app-engine-runner@7.service"), daemon=True)
+    worker.start()
+    try:
+        send_request(client, json.dumps(request(tmp_path)).encode())
+        events = []
+        while True:
+            event = recv_event(client)
+            events.append(event)
+            if event[0] == b"X":
+                break
+        assert (b"O", b'{"prepared":true}') in events
+        assert events[-1] == (b"X", b"0")
+    finally:
+        client.close()
+        broker.close()
+        worker.join(timeout=2)
+
+
+def test_tracker_capability_policy_requires_private_files(tmp_path):
+    mtls = tmp_path / "mtls"
+    mtls.mkdir(mode=0o710)
+    mtls.chmod(0o710)
+    for name in ("ca.crt", "package-tracker-client.crt", "package-tracker-client.key"):
+        file = mtls / name
+        file.write_text("certificate fixture")
+        file.chmod(0o640)
+    carrier = tmp_path / "carrier-token"
+    worker = tmp_path / "worker-token"
+    for path, token in ((carrier, "a" * 64), (worker, "b" * 64)):
+        path.write_text(token)
+        path.chmod(0o600)
+    policy = {"mtls_dir": str(mtls), "carrier_token_file": str(carrier),
+              "worker_token_file": str(worker), "carrier_proxy_port": 8788,
+              "browser_worker_port": 8799}
+    cap = parse_tracker_capability(policy, owner_uid=os.getuid(), engine_gid=os.getgid())
+    assert cap.mtls_dir == mtls
+
+    (mtls / "package-tracker-client.key").chmod(0o644)
+    with pytest.raises(ValueError, match="certificate"):
+        parse_tracker_capability(policy, owner_uid=os.getuid(), engine_gid=os.getgid())
+    (mtls / "package-tracker-client.key").chmod(0o640)
+    with pytest.raises(ValueError, match="port"):
+        parse_tracker_capability(dict(policy, carrier_proxy_port=80),
+                                 owner_uid=os.getuid(), engine_gid=os.getgid())
 
 
 def test_client_disconnect_stops_exact_unit(tmp_path, monkeypatch):

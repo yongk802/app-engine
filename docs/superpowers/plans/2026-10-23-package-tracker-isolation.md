@@ -14,7 +14,7 @@
 
 - `app_engine/package_tracker_egress.py`: CONNECT authentication, authority and DNS validation, pinned-IP tunneling.
 - `app_engine/isolation_broker.py`, `app_engine/isolated_units.py`: app/phase-specific secret injection and mTLS read-only mounts.
-- `tests/test_package_tracker_egress.py`, `tests/test_isolated_runner.py`: proxy and broker negative/positive gates.
+- `tests/test_package_tracker_egress.py`, `tests/test_isolated_units.py`, `tests/test_isolation_broker.py`: proxy and broker negative/positive gates.
 - `scripts/install-package-tracker-runtime.sh`: root-owned pinned toolchain and service installation; preflight-only mode.
 - `package-tracker/browser_worker.py`: secret-free lookup HTTP worker.
 - `package-tracker/page_lookup.py`, `package-tracker/server.py`: remote lookup client and browser proxy configuration.
@@ -31,7 +31,7 @@
 
 ## Task 2: Broker capability scope (app-engine)
 
-- Add failing tests in `tests/test_isolated_runner.py`: only `package-tracker` phase `start` receives the two app credentials and three read-only mTLS file mounts; another app and install/build phases receive none; absent/unsafe root policy fails closed. Verify credentials never appear in `systemd-run` argv.
+- Add failing tests in `tests/test_isolated_units.py` and `tests/test_isolation_broker.py`: only `package-tracker` phase `start` receives the two app credentials and the read-only mTLS directory mount; another app and install/build phases receive none; absent/unsafe root policy fails closed. Verify credentials never appear in `systemd-run` argv.
 - Run the focused tests and observe the expected failure.
 - Extend the root-owned runner policy with an optional Package Tracker capability file, validate regular root ownership and non-writable mode, inject only into the executor stdin plan, and build fixed read-only mounts for its certificate, key, and CA. Keep source secrets under root-only directories.
 - Run focused tests, `python -m compileall`, and commit the broker change.

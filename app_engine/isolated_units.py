@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+from .package_tracker_egress import read_token_file
 
 _SAFE_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\Z")
 _SAFE_UNIT = re.compile(r"ae-[a-zA-Z0-9_-]+-(?:install|build|start|multiplayer)-[a-f0-9]{3,32}\Z")
@@ -23,12 +25,52 @@ class UnitRequest:
 
 
 @dataclass(frozen=True)
+class PackageTrackerCapability:
+    mtls_dir: Path
+    carrier_token_file: Path
+    worker_token_file: Path
+    carrier_proxy_port: int
+    browser_worker_port: int
+
+
+@dataclass(frozen=True)
 class UnitBoundary:
     apps_roots: tuple[Path, ...]
     state_root: Path
     engine_uid: int
     engine_group: str
     multiplayer_root: Path | None = None
+    package_tracker: PackageTrackerCapability | None = None
+
+    def prepare_request(self, request: UnitRequest) -> UnitRequest:
+        """Give only Package Tracker's start command its scoped capabilities."""
+        cap = self.package_tracker
+        if request.app_id != "package-tracker" or request.phase != "start" or cap is None:
+            return request
+        try:
+            plan = json.loads(request.payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid Package Tracker plan") from exc
+        if not isinstance(plan, dict) or not isinstance(plan.get("env"), dict):
+            raise ValueError("invalid Package Tracker plan")
+        plan = dict(plan)
+        environment = dict(plan["env"])
+        environment.update({
+            "PACKAGE_TRACKER_CARRIER_PROXY_URL": f"http://127.0.0.1:{cap.carrier_proxy_port}",
+            "PACKAGE_TRACKER_CARRIER_PROXY_USER": "carrier",
+            "PACKAGE_TRACKER_CARRIER_PROXY_TOKEN": read_token_file(cap.carrier_token_file),
+            "PACKAGE_TRACKER_BROWSER_WORKER_URL": f"http://127.0.0.1:{cap.browser_worker_port}",
+            "PACKAGE_TRACKER_BROWSER_WORKER_TOKEN": read_token_file(cap.worker_token_file),
+            "ATRIUM_BASE_URL": "https://atrium-status.localhost:9444",
+            "ATRIUM_CA_FILE": "/run/package-tracker/mtls/ca.crt",
+            "ATRIUM_CERT_FILE": "/run/package-tracker/mtls/package-tracker-client.crt",
+            "ATRIUM_KEY_FILE": "/run/package-tracker/mtls/package-tracker-client.key",
+        })
+        plan["env"] = environment
+        payload = json.dumps(plan, separators=(",", ":"), ensure_ascii=False)
+        if len(payload.encode("utf-8")) > 256 * 1024:
+            raise ValueError("Package Tracker plan too large")
+        return replace(request, payload=payload)
 
     def command(self, unit_name: str, request: UnitRequest,
                 broker_unit_name: str) -> tuple[str, ...]:
@@ -50,6 +92,11 @@ class UnitBoundary:
                      if request.phase == "multiplayer" else ())
         build_bind = (() if request.phase == "multiplayer" else
                       (f"--property=BindPaths={request.build_dir}:/app-build",))
+        tracker_bind = (
+            (f"--property=BindReadOnlyPaths={self.package_tracker.mtls_dir}:/run/package-tracker/mtls",)
+            if (self.package_tracker is not None and request.app_id == "package-tracker"
+                and request.phase == "start") else ()
+        )
         return (
             "systemd-run", "--quiet", "--collect", "--wait", "--pipe",
             f"--unit={unit_name}",
@@ -70,6 +117,7 @@ class UnitBoundary:
             "--property=InaccessiblePaths=/run/app-engine-runner.sock",
             f"--property=BindReadOnlyPaths={request.app_root}:/workspace",
             *room_bind,
+            *tracker_bind,
             f"--property=BindPaths={request.data_dir}:/app-data",
             *build_bind,
             "--property=WorkingDirectory=/workspace",

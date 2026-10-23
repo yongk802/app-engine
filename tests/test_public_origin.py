@@ -436,11 +436,11 @@ def make_managed_game(apps: Path, app_id: str = "game") -> Path:
     root.mkdir(parents=True)
     (root / "index.html").write_text("<!doctype html><title>game</title>")
     (root / "server.py").write_text(
-        "import os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "import os\nfrom http.server import BaseHTTPRequestHandler\nfrom socketserver import TCPServer\n"
         "class H(BaseHTTPRequestHandler):\n"
         "    def do_GET(self):\n        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
         "    def log_message(self, *a): pass\n"
-        "HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
+        "TCPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
     (root / "app.json").write_text(json.dumps({
         "manifest_version": 2, "label": "Game", "icon": "g", "default_target": "web",
         "targets": {"web": {"kind": "web", "runtime": {"driver": "process", "scope": "shared",

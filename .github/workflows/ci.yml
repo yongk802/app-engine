@@ -13,7 +13,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macos-latest (macOS 26 ARM) currently times out all subprocess
+        # loopback health checks, including on main. Keep full macOS coverage
+        # on the stable Intel image while investigating that runner regression.
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
         python: ['3.10', '3.11', '3.12', '3.13']
     runs-on: ${{ matrix.os }}
     steps:
@@ -34,7 +37,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: python -m pytest tests/ -q
+      - run: python scripts/ci-loopback-probe.py
+        if: runner.os == 'macOS'
+        working-directory: app-engine
+      - run: python -m pytest tests/ -vv --timeout=60
         working-directory: app-engine
       - run: node --test "app_engine/multiplayer/test/*.test.mjs"
         working-directory: app-engine

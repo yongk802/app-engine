@@ -49,6 +49,7 @@ export async function createService({rules, ai = null, dataDir, now}) {
 }
 
 export async function main(args = process.argv.slice(2)) {
+  if (process.env.APP_ENGINE_MULTIPLAYER_GROUP_SHARE === '1') process.umask(0o002);
   const options = {host: '127.0.0.1', port: 18791, dataDir: defaultStorageDir(), rules: null, ai: null};
   const names = {'--host': 'host', '--port': 'port', '--data-dir': 'dataDir', '--rules': 'rules', '--ai': 'ai'};
   for (let i = 0; i < args.length; i += 2) {

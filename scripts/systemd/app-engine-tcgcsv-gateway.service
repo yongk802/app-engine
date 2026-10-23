@@ -1,0 +1,25 @@
+[Unit]
+Description=Fixed-origin TCGCSV gateway for isolated Night City Table
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/bin/python3 /usr/local/libexec/app-engine/tcgcsv_gateway.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectHome=yes
+ProtectSystem=strict
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=128M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

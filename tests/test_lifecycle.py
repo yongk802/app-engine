@@ -27,9 +27,9 @@ from app_engine.contracts import (
     AppId,
     AppManifest,
     AppMetadata,
+    ApprovalReceipt,
     AppSource,
     AppStateStore,
-    ApprovalReceipt,
     Authorization,
     AuthorizationError,
     BrowserPolicy,
@@ -184,8 +184,9 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from socketserver import ThreadingTCPServer
 
 delay = float(os.environ.get("READY_DELAY", "0"))
 if delay:
@@ -211,7 +212,9 @@ if child_record:
 crash_record = os.environ.get("CRASH_RECORD")
 if crash_record and not Path(crash_record).exists():
     Path(crash_record).write_text("first", encoding="utf-8")
-    threading.Timer(0.75 if os.name == "nt" else 0.15, lambda: os._exit(7)).start()
+    # The first health probe must observe READY before the planned crash.
+    # Busy macOS CI runners can need more than 150 ms to issue that probe.
+    threading.Timer(0.75, lambda: os._exit(7)).start()
 
 for number in range(int(os.environ.get("LOG_LINES", "0"))):
     print(f"stdout-{number}", flush=True)
@@ -235,7 +238,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
-server = ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), Handler)
+server = ThreadingTCPServer(("127.0.0.1", int(os.environ["PORT"])), Handler)
 
 def stop(signum, frame):
     marker = os.environ.get("STOP_RECORD")
@@ -477,6 +480,37 @@ async def test_enforce_mode_refuses_start_before_any_host_command(tmp_path):
     assert caught.value.code == "isolated_runner_unavailable"
     assert not argv_record.exists()
     assert host.recorded_events[-1].failure.code == "isolated_runner_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_enforce_mode_never_falls_back_when_broker_fails(tmp_path, monkeypatch):
+    from app_engine import lifecycle
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "server.py").write_text("raise RuntimeError('must not execute')\n")
+    manager = _manager(
+        tmp_path,
+        _manifest(root, start=CommandStep(argv=(sys.executable, "server.py"))),
+        isolation_policy=ProcessIsolationPolicy.from_value("enforce"),
+    )
+    attempted = []
+
+    async def broker_failure(request):
+        attempted.append(request)
+        raise ConnectionRefusedError("broker unavailable")
+
+    async def forbidden_host_spawn(*args, **kwargs):
+        pytest.fail("enforce used the host subprocess path")
+
+    monkeypatch.setattr(lifecycle.IsolatedProcess, "start", broker_failure)
+    monkeypatch.setattr(lifecycle.asyncio, "create_subprocess_exec", forbidden_host_spawn)
+    with pytest.raises(LaunchError, match="isolated runner"):
+        await manager.launch(_request(), approval=None)
+    assert len(attempted) == 1
+    assert attempted[0]["phase"] == "start"
+    assert attempted[0]["plan"]["cwd"] == "/workspace"
 
 
 def _request(

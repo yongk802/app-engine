@@ -6,11 +6,17 @@ import importlib
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app_engine.multiplayer_host import MultiplayerHost
+from app_engine.multiplayer_host import (
+    MultiplayerHost,
+    MultiplayerUnavailable,
+    RoomProcess,
+)
+from app_engine.process_isolation import IsolationMode, ProcessIsolationPolicy
 
 FAKE_RULES = Path(__file__).resolve().parents[1] / "app_engine" / "multiplayer" / "test" / "fake-rules.mjs"
 COMPAT = {"protocol": 1, "rulesVersion": "fake-rules-1", "catalogDigest": "fakecafe"}
@@ -157,6 +163,73 @@ def test_external_server_override_relays_instead_of_spawning(tmp_path, monkeypat
     assert mapped.external_url("cards") == "http://10.0.0.5:18791"
     assert mapped.external_url("dice") is None
     assert MultiplayerHost(tmp_path, external="{bad json").external is None
+
+
+def test_enforced_multiplayer_fails_closed_when_broker_is_unavailable(tmp_path, monkeypatch):
+    root = make_game(tmp_path / "apps", "cards")
+    requests = []
+
+    async def unavailable(request):
+        requests.append(request)
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr("app_engine.multiplayer_host.IsolatedProcess.start", unavailable)
+    fake_node = tmp_path / "node"
+    host = MultiplayerHost(tmp_path / "state", node=str(fake_node), isolation_policy=ProcessIsolationPolicy(
+        IsolationMode.AUDIT, frozenset({"cards"})
+    ))
+
+    async def run():
+        try:
+            with pytest.raises(Exception, match="isolated room service"):
+                await host.ensure("cards", root, {"rules": "rules.mjs"})
+        finally:
+            await host.close()
+
+    asyncio.run(run())
+    assert len(requests) == 1
+    assert requests[0]["phase"] == "multiplayer"
+    assert requests[0]["data_dir"] == str(tmp_path / "state" / "multiplayer" / "cards")
+    assert requests[0]["plan"]["argv"][:2] == [str(fake_node), "/room-server/server.mjs"]
+
+
+def test_enforced_room_rejects_configured_external_webhooks(tmp_path, monkeypatch):
+    root = make_game(tmp_path / "apps", "cards")
+    monkeypatch.setenv("APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS", "https://alerts.example")
+    host = MultiplayerHost(tmp_path / "state", node=str(tmp_path / "node"), isolation_policy=ProcessIsolationPolicy(
+        IsolationMode.AUDIT, frozenset({"cards"})
+    ))
+
+    async def run():
+        try:
+            with pytest.raises(MultiplayerUnavailable, match="webhook"):
+                await host.ensure("cards", root, {"rules": "rules.mjs"})
+        finally:
+            await host.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("listener", [
+    "198.51.100.10:443", "127.0.0.1:0", "127.0.0.1:65536",
+    "127.0.0.1:" + "9" * 5000,
+])
+def test_room_listener_rejects_app_advertised_egress(tmp_path, listener):
+    host = MultiplayerHost(tmp_path)
+
+    async def run():
+        stdout = asyncio.StreamReader()
+        stdout.feed_data(f"multiplayer rooms listening on {listener}\n".encode())
+        stdout.feed_eof()
+        record = RoomProcess("cards", tmp_path, tmp_path, None, tmp_path)
+        record.process = SimpleNamespace(stdout=stdout, returncode=0)
+        try:
+            with pytest.raises(MultiplayerUnavailable, match="loopback"):
+                await host._await_listening(record)
+        finally:
+            await host.close()
+
+    asyncio.run(run())
 
 
 @needs_node

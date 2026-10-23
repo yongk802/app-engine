@@ -36,7 +36,7 @@ export function installTournaments(RoomService,{secret,digest,eqHash,text,object
    const data=JSON.stringify({version:1,rulesVersion:this.rulesVersion,catalogDigest:this.catalogDigest,tournaments:[...next.values()]});
    const temporary=path.join(this.storageDir,`.tournaments-${secret()}.tmp`);
    let handle;
-   try{handle=await open(temporary,'wx',0o600);await handle.writeFile(data,'utf8');await handle.sync();await handle.close();handle=null;await rename(temporary,this.tournamentFile);}
+   try{handle=await open(temporary,'wx',process.env.APP_ENGINE_MULTIPLAYER_GROUP_SHARE==='1'?0o660:0o600);await handle.writeFile(data,'utf8');await handle.sync();await handle.close();handle=null;await rename(temporary,this.tournamentFile);}
    catch{if(handle)await handle.close().catch(()=>{});await unlink(temporary).catch(()=>{});fail('STORAGE_FAILURE','The tournament could not be saved. Please retry.',503);}
    this.tournaments=next;
   },

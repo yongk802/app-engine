@@ -1,0 +1,12 @@
+[Unit]
+Description=Socket for isolated app-engine command units
+
+[Socket]
+ListenStream=/run/app-engine-runner.sock
+SocketUser=appengine
+SocketMode=0600
+Accept=yes
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

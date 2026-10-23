@@ -79,6 +79,7 @@ def test_connect_proxy_requires_its_profile_secret():
     with proxy_server() as address:
         denied = response(address, b"CONNECT tracking.example:443 HTTP/1.1\r\nHost: tracking.example:443\r\n\r\n")
         assert b" 407 " in denied.split(b"\r\n", 1)[0]
+        assert b'Proxy-Authenticate: Basic realm="package-tracker"' in denied
 
 
 def test_connect_proxy_does_not_forward_plain_http():

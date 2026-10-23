@@ -211,7 +211,9 @@ if child_record:
 crash_record = os.environ.get("CRASH_RECORD")
 if crash_record and not Path(crash_record).exists():
     Path(crash_record).write_text("first", encoding="utf-8")
-    threading.Timer(0.75 if os.name == "nt" else 0.15, lambda: os._exit(7)).start()
+    # The first health probe must observe READY before the planned crash.
+    # Busy macOS CI runners can need more than 150 ms to issue that probe.
+    threading.Timer(0.75, lambda: os._exit(7)).start()
 
 for number in range(int(os.environ.get("LOG_LINES", "0"))):
     print(f"stdout-{number}", flush=True)

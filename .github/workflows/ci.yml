@@ -37,6 +37,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: python scripts/ci-loopback-probe.py
+        if: runner.os == 'macOS'
+        working-directory: app-engine
       - run: python -m pytest tests/ -vv --timeout=60
         working-directory: app-engine
       - run: node --test "app_engine/multiplayer/test/*.test.mjs"

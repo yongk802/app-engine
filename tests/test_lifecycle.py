@@ -184,8 +184,9 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from socketserver import ThreadingTCPServer
 
 delay = float(os.environ.get("READY_DELAY", "0"))
 if delay:
@@ -237,7 +238,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
-server = ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), Handler)
+server = ThreadingTCPServer(("127.0.0.1", int(os.environ["PORT"])), Handler)
 
 def stop(signum, frame):
     marker = os.environ.get("STOP_RECORD")

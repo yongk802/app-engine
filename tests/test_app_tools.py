@@ -72,7 +72,8 @@ def test_managed_tool_requires_approval_and_idle_releases_process(engine_client)
     root.mkdir()
     (root / 'server.py').write_text('''import json, os
 from pathlib import Path
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
+from socketserver import TCPServer
 Path('started').write_text('yes')
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -81,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
         self.rfile.read(int(self.headers['Content-Length']))
         self.send_response(200); self.end_headers(); self.wfile.write(b'{"done": true}')
     def log_message(self, *args): pass
-HTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()
+TCPServer(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()
 ''')
     runtime = {'driver': 'process', 'start': {'argv': [sys.executable, 'server.py']}, 'health': {'path': '/health', 'timeout_seconds': 3, 'interval_seconds': 0.02}, 'idle_timeout_seconds': 0.05}
     (root / 'app.json').write_text(json.dumps({'manifest_version': 2, 'id': 'managed', 'label': 'Managed', 'icon': 'M', 'default_target': 'web', 'targets': {'web': {'kind': 'web', 'runtime': runtime}}}))

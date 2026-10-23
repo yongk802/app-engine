@@ -9,7 +9,8 @@ import sys
 import time
 
 CHILD = """
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+from socketserver import ThreadingTCPServer
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -18,8 +19,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b'ok')
     def log_message(self, *args):
         pass
-server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-print(server.server_port, flush=True)
+server = ThreadingTCPServer(('127.0.0.1', 0), Handler)
+print(server.server_address[1], flush=True)
 server.handle_request()
 server.server_close()
 """

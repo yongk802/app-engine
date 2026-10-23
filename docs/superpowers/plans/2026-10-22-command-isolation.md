@@ -39,7 +39,9 @@ runner acceptance test.
    broker validates every request against its own allowlist and manifest,
    creates a random transient-unit name, passes the command plan on the
    unit's standard input, and streams bounded stdout/stderr frames back to
-   the client. Disconnect, timeout, and stop requests stop the exact unit;
+   the client. Each transient unit `BindsTo` its socket-activated broker
+   instance, so a broker crash also stops the app unit. Disconnect, timeout,
+   and stop requests stop the exact unit;
    a stale unit is reaped on broker startup. The broker never executes an
    arbitrary client-supplied host command.
 4. An engine-side runner client exposes `spawn`, `wait`, `communicate`, and
@@ -66,7 +68,12 @@ Check that the app cannot read the engine's private home or broker socket.
 Before production enforce, migrate only the pilot app's state and build
 directories to appengine-group read/write permissions, preserving a backup.
 The pilot is `cyberpunk-tcg`, whose live manifest has a process `start` step
-and no install/build steps. Obtain owner approval for its exact launch plan;
+and no install/build steps. Its live price-refresh path does fetch TCGCSV over
+HTTPS and writes `data/` inside the app source tree, so applying egress deny
+without a fixed-origin fetch operation and a scoped writable data mapping would
+break a production feature. The multiplayer room service runs as a child on
+loopback and must remain in the same unit/cgroup. Add these compatibility gates
+before using the pilot. Obtain owner approval for its exact launch plan;
 do not synthesize or auto-approve that authority token. After the approved
 launch, verify the app UI, data persistence, crash/stop cleanup, engine SMTP,
 store catalog, both mTLS directions, and rejected non-loopback egress. Keep

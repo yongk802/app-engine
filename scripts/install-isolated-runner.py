@@ -80,6 +80,24 @@ def _check_broker_traversal(paths: list[str]) -> None:
         )
 
 
+def _configure_unit_source(source: Path, content: bytes,
+                           engine_user: str, engine_group: str) -> bytes:
+    systemd = REPO / "scripts" / "systemd"
+    replacements = {
+        systemd / "app-engine-runner.socket": (
+            b"SocketUser=appengine", f"SocketUser={engine_user}".encode()),
+        systemd / "app-engine-runner@.service": (
+            b"SupplementaryGroups=appengine",
+            f"SupplementaryGroups={engine_group}".encode()),
+    }
+    if source not in replacements:
+        return content
+    marker, replacement = replacements[source]
+    if content.count(marker) != 1:
+        raise ValueError(f"runner unit source is missing {marker.decode()}")
+    return content.replace(marker, replacement)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apps-root", type=Path, action="append", required=True)
@@ -142,10 +160,11 @@ def main() -> int:
     for source in files.values():
         _trusted_source(source)
     for destination, source in files.items():
-        content = source.read_bytes()
-        if source == socket_source:
-            content = content.replace(b"SocketUser=appengine",
-                                      f"SocketUser={args.engine_user}".encode())
+        try:
+            content = _configure_unit_source(
+                source, source.read_bytes(), args.engine_user, args.engine_group)
+        except ValueError as exc:
+            parser.error(str(exc))
         _install(destination, content, 0o644)
     _install(LIB / "app_engine" / "__init__.py", b"", 0o644)
     _install(CONFIG, policy, 0o600)

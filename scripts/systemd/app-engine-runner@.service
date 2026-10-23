@@ -5,6 +5,7 @@ Description=Isolated app-engine command broker connection %i
 Type=exec
 User=root
 Group=root
+SupplementaryGroups=appengine
 WorkingDirectory=/usr/local/libexec/app-engine
 Environment=PYTHONPATH=/usr/local/libexec/app-engine
 ExecStart=/usr/bin/python3 -m app_engine.isolation_broker %n

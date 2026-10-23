@@ -9,6 +9,7 @@ DynamicUser=yes
 LoadCredential=browser-token:/etc/app-engine-package-tracker/browser-token
 LoadCredential=worker-token:/etc/app-engine-package-tracker/worker-token
 Environment=PORT=8799
+Environment=HOME=/tmp
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/package-tracker/browsers
 Environment=PACKAGE_TRACKER_BROWSER_PROXY_URL=http://127.0.0.1:8788
 Environment=PACKAGE_TRACKER_BROWSER_PROXY_TOKEN_FILE=%d/browser-token

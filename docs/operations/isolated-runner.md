@@ -179,6 +179,8 @@ mode 0770 and files to group mode 0660, and prints only record counts. The
 app's atomic writes retain these modes across changing DynamicUser IDs.
 Migration replaces the Mac-local Atrium address in `credentials.json` with
 the verified VPS loopback mTLS tunnel; the API key is preserved.
+The root broker retains the engine group as a supplementary group so its
+capability-stripped process can inspect the group's private scoped directory.
 
 Before seeking exact launch approval, prove the proxy rejects unauthenticated,
 private, and unlisted-carrier CONNECT requests; prove the browser worker

@@ -27,10 +27,10 @@ test('isolated room state remains readable across dynamic identities',async()=>{
   const base='http://'+proc.host+':'+proc.port;
   const created=await command(base,{op:'create',name:'Alex',...compatibility});
   assert.equal(created.ok,true);
-  assert.equal((await stat(join(dir,'rooms.json'))).mode&0o777,0o660);
+  if(process.platform!=='win32')assert.equal((await stat(join(dir,'rooms.json'))).mode&0o777,0o660);
   const friend=await command(base,{op:'friendRegister',name:'Alex',...compatibility});
   assert.equal(friend.ok,true);
-  assert.equal((await stat(join(dir,'friends.json'))).mode&0o777,0o660);
+  if(process.platform!=='win32')assert.equal((await stat(join(dir,'friends.json'))).mode&0o777,0o660);
  }finally{proc?.child.kill('SIGTERM');await rm(dir,{recursive:true,force:true});}
 });
 const command=(base,body,token)=>fetch(`${base}/v1/command`,{method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(body)}).then(r=>r.json());

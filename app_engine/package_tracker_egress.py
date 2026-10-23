@@ -179,8 +179,11 @@ def read_token_file(path: Path) -> str:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as stream:
             status = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(status.st_mode) or status.st_uid not in {0, os.geteuid()}
-                    or status.st_mode & 0o077 or status.st_size > 128):
+            private_owner = (status.st_uid == os.geteuid() and not status.st_mode & 0o077)
+            systemd_credential = (status.st_uid == 0 and not status.st_mode & 0o037)
+            if (not stat.S_ISREG(status.st_mode)
+                    or not (private_owner or systemd_credential)
+                    or status.st_size > 128):
                 raise ValueError("invalid proxy token file")
             raw = stream.read(129)
         token = raw.removesuffix(b"\n").decode("ascii")

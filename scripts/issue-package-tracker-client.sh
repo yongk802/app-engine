@@ -21,7 +21,10 @@ done
 [[ -f "$ca_cert" && -f "$ca_key" && ! -L "$ca_cert" && ! -L "$ca_key" ]] || {
   echo 'CA certificate and offline key are required.' >&2; exit 78;
 }
-[[ ! -e "$output" ]] || { echo 'Output directory already exists.' >&2; exit 78; }
+if [[ "$mode" == --issue && -e "$output" ]]; then
+  echo 'Output directory already exists.' >&2
+  exit 78
+fi
 openssl x509 -in "$ca_cert" -noout >/dev/null
 openssl pkey -in "$ca_key" -noout >/dev/null
 echo 'Will issue CN=package-tracker-client with clientAuth only and a one-year lifetime.'

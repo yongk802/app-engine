@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Linux systemd units")
+
 from app_engine.isolated_units import UnitBoundary, UnitRequest
 
 

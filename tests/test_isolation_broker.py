@@ -1,6 +1,7 @@
 """The root broker accepts only a scoped app request."""
 
 import json
+import os
 import socket
 import struct
 import subprocess
@@ -9,6 +10,8 @@ import threading
 from unittest.mock import Mock
 
 import pytest
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Linux systemd broker")
 
 from app_engine.isolation_broker import (
     decode_request,

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import pwd
 import re
 import secrets
 import selectors
@@ -156,6 +155,10 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
 
 def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
     """Read only a root-owned, non-writable runner policy file."""
+    if os.name != "posix":
+        raise ValueError("isolated broker requires Unix peer credentials")
+    import pwd
+
     if path.is_symlink():
         raise ValueError("runner policy is a symlink")
     status = path.stat()

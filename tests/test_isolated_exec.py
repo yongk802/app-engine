@@ -1,8 +1,11 @@
 """The transient unit refuses malformed command plans before exec."""
 
 import json
+import os
 
 import pytest
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Linux scoped paths")
 
 from app_engine.isolated_exec import decode_plan
 

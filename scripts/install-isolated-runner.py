@@ -113,7 +113,8 @@ def main() -> int:
     _install(CONFIG, policy, 0o600)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "app-engine-runner.socket"], check=True)
-    subprocess.run(["systemctl", "enable", "--now", "app-engine-tcgcsv-gateway.service"], check=True)
+    subprocess.run(["systemctl", "enable", "app-engine-tcgcsv-gateway.service"], check=True)
+    subprocess.run(["systemctl", "restart", "app-engine-tcgcsv-gateway.service"], check=True)
     print("Isolated runner socket and price gateway installed; app-engine mode is unchanged.")
     return 0
 

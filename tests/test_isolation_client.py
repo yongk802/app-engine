@@ -1,11 +1,14 @@
 """The engine client only accepts a bounded authenticated broker transcript."""
 
 import asyncio
+import os
 import socket
 import struct
 from unittest.mock import Mock
 
 import pytest
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Unix broker socket")
 
 from app_engine.isolation_client import (
     IsolatedProcess,

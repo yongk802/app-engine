@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import struct
 from pathlib import Path, PurePosixPath
@@ -94,9 +95,12 @@ class IsolatedProcess:
                              ensure_ascii=False, allow_nan=False).encode("utf-8")
         if not payload or len(payload) > MAX_REQUEST_BYTES:
             raise ValueError("isolated command request too large")
-        if not hasattr(asyncio, "open_unix_connection"):
+        if os.name != "posix" or not hasattr(asyncio, "open_unix_connection"):
             raise RuntimeError("isolated broker requires Unix sockets")
-        reader, writer = await asyncio.open_unix_connection(BROKER_SOCKET)
+        try:
+            reader, writer = await asyncio.open_unix_connection(BROKER_SOCKET)
+        except NotImplementedError as exc:
+            raise RuntimeError("isolated broker requires Unix sockets") from exc
         try:
             _require_root_peer(writer)
             writer.write(struct.pack("!I", len(payload)) + payload)

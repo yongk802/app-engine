@@ -110,6 +110,15 @@ def test_client_rejects_nonroot_broker_peer(monkeypatch):
         _require_root_peer(writer)
 
 
+def test_client_rejects_event_loop_without_unix_transport(monkeypatch):
+    async def unsupported(_path):
+        raise NotImplementedError("event loop has no Unix transport")
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", unsupported)
+    with pytest.raises(RuntimeError, match="requires Unix sockets"):
+        asyncio.run(IsolatedProcess.start({"version": 1}))
+
+
 def test_command_request_maps_only_scoped_paths(tmp_path):
     app = tmp_path / "apps" / "demo"
     data = tmp_path / "state" / "data" / "demo" / ("a" * 16)

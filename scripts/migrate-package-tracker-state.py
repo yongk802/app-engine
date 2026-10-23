@@ -18,6 +18,7 @@ from app_engine.contracts import AppId, ScopeKey, TargetId  # noqa: E402
 
 FILES = frozenset({"packages.json", "settings.json", "merchants.json", "credentials.json"})
 MAX_FILE = 2 * 1024 * 1024
+ATRIUM_TUNNEL_URL = "https://atrium-status.localhost:9444"
 
 
 def scoped_dir(state_root: Path) -> Path:
@@ -52,6 +53,17 @@ def read_archive(path: Path) -> tuple[dict[str, bytes], int, int]:
             or not isinstance(values["credentials.json"], dict)):
         raise ValueError("invalid Package Tracker state")
     return files, len(packages), len(settings["seen_ids"])
+
+
+def set_atrium_tunnel_url(files: dict[str, bytes], url: str) -> dict[str, bytes]:
+    """Replace the Mac-local Atrium address with the VPS mTLS tunnel address."""
+    if url != ATRIUM_TUNNEL_URL:
+        raise ValueError("Atrium URL must be the verified loopback mTLS tunnel")
+    credentials = json.loads(files["credentials.json"])
+    if not isinstance(credentials, dict):
+        raise ValueError("invalid Package Tracker credentials")
+    credentials["ATRIUM_BASE_URL"] = url
+    return {**files, "credentials.json": (json.dumps(credentials, indent=1) + "\n").encode()}
 
 
 def install(files: dict[str, bytes], destination: Path) -> None:
@@ -97,12 +109,14 @@ def main() -> int:
     mode.add_argument("--apply", action="store_true")
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--state-root", type=Path, required=True)
+    parser.add_argument("--atrium-base-url", default=ATRIUM_TUNNEL_URL)
     args = parser.parse_args()
     if (args.state_root.is_symlink() or not args.state_root.is_dir()
             or args.state_root.resolve(strict=True) != args.state_root):
         parser.error("absolute, non-symlinked runtime state root required")
     try:
         files, packages, seen = read_archive(args.archive)
+        files = set_atrium_tunnel_url(files, args.atrium_base_url)
         destination = scoped_dir(args.state_root)
         if args.apply:
             install(files, destination)

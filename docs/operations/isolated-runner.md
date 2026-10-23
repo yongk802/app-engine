@@ -164,10 +164,12 @@ the reviewed release script while launch is still blocked:
 ```bash
 sudo python3 scripts/migrate-package-tracker-state.py --check \
   --archive /root/package-tracker-cert-staging/state-backup.tar.gz \
-  --state-root /home/appengine/state/runtime
+  --state-root /home/appengine/state/runtime \
+  --atrium-base-url https://atrium-status.localhost:9444
 sudo python3 scripts/migrate-package-tracker-state.py --apply \
   --archive /root/package-tracker-cert-staging/state-backup.tar.gz \
-  --state-root /home/appengine/state/runtime
+  --state-root /home/appengine/state/runtime \
+  --atrium-base-url https://atrium-status.localhost:9444
 ```
 
 The script rejects unexpected archive members, symlinks, and an existing
@@ -175,6 +177,8 @@ target; it derives the shared web scope from the same `ScopeKey` type as the
 engine, installs state atomically, sets the directory to `appengine:appengine`
 mode 0770 and files to group mode 0660, and prints only record counts. The
 app's atomic writes retain these modes across changing DynamicUser IDs.
+Migration replaces the Mac-local Atrium address in `credentials.json` with
+the verified VPS loopback mTLS tunnel; the API key is preserved.
 
 Before seeking exact launch approval, prove the proxy rejects unauthenticated,
 private, and unlisted-carrier CONNECT requests; prove the browser worker

@@ -9,16 +9,19 @@ import sys
 import time
 
 CHILD = """
-import socket
-s = socket.socket()
-s.bind(('127.0.0.1', 0))
-s.listen(1)
-print(s.getsockname()[1], flush=True)
-c, _ = s.accept()
-c.recv(4096)
-c.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok')
-c.close()
-s.close()
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Length', '2')
+        self.end_headers()
+        self.wfile.write(b'ok')
+    def log_message(self, *args):
+        pass
+server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+print(server.server_port, flush=True)
+server.handle_request()
+server.server_close()
 """
 
 

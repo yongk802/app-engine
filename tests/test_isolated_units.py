@@ -8,7 +8,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="Linux systemd units")
 
-from app_engine.isolated_units import UnitBoundary, UnitRequest
+from app_engine.isolated_units import PackageTrackerCapability, UnitBoundary, UnitRequest
 
 
 def _boundary(tmp_path: Path) -> tuple[UnitBoundary, Path, Path, Path]:
@@ -146,3 +146,46 @@ def test_multiplayer_unit_uses_existing_room_state_and_private_room_code(tmp_pat
         _command(boundary, "ae-demo-multiplayer-123", UnitRequest(
             "demo", "multiplayer", app, other, build, ""
         ))
+
+
+def test_package_tracker_capabilities_apply_only_to_its_start_phase(tmp_path):
+    boundary, _app, _data, _build = _boundary(tmp_path)
+    apps, state = boundary.apps_roots[0], boundary.state_root
+    tracker = apps / "package-tracker"
+    data = state / "data" / "package-tracker" / ("a" * 16)
+    build = state / "build" / "package-tracker"
+    for path in (tracker, data, build):
+        path.mkdir(parents=True)
+    (tracker / "app.json").write_text(json.dumps({"id": "package-tracker"}))
+    carrier = tmp_path / "carrier-token"
+    worker = tmp_path / "worker-token"
+    for path, token in ((carrier, "a" * 64), (worker, "b" * 64)):
+        path.write_text(token + "\n")
+        path.chmod(0o600)
+    mtls = tmp_path / "mtls"
+    mtls.mkdir()
+    cap = PackageTrackerCapability(mtls, carrier, worker, 8788, 8799)
+    boundary = UnitBoundary(boundary.apps_roots, state, boundary.engine_uid,
+                            boundary.engine_group, package_tracker=cap)
+    request = UnitRequest("package-tracker", "start", tracker, data, build,
+                          json.dumps({"version": 1, "argv": ["/usr/bin/python3"],
+                                      "cwd": "/workspace", "env": {}}))
+    prepared = boundary.prepare_request(request)
+    env = json.loads(prepared.payload)["env"]
+    assert env["PACKAGE_TRACKER_CARRIER_PROXY_TOKEN"] == "a" * 64
+    assert env["PACKAGE_TRACKER_BROWSER_WORKER_TOKEN"] == "b" * 64
+    assert env["ATRIUM_BASE_URL"] == "https://atrium-status.localhost:9444"
+    assert env["PACKAGE_TRACKER_SHARED_STATE"] == "1"
+    argv = _command(boundary, "ae-package-tracker-start-123", prepared)
+    assert f"--property=BindReadOnlyPaths={mtls}:/run/package-tracker/mtls" in argv
+    assert "a" * 64 not in " ".join(argv)
+    assert "b" * 64 not in " ".join(argv)
+
+    install = UnitRequest("package-tracker", "install", tracker, data, build, request.payload)
+    assert boundary.prepare_request(install) == install
+    assert not any("/run/package-tracker/mtls" in item for item in _command(
+        boundary, "ae-package-tracker-install-123", install))
+    demo = UnitRequest("demo", "start", _app, _data, _build, request.payload)
+    assert boundary.prepare_request(demo) == demo
+    assert not any("/run/package-tracker/mtls" in item for item in _command(
+        boundary, "ae-demo-start-123", demo))

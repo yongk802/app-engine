@@ -1,0 +1,32 @@
+[Unit]
+Description=Package Tracker isolated page lookup worker
+After=app-engine-package-proxy.service
+Requires=app-engine-package-proxy.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=browser-token:/etc/app-engine-package-tracker/browser-token
+LoadCredential=worker-token:/etc/app-engine-package-tracker/worker-token
+Environment=PORT=8799
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/package-tracker/browsers
+Environment=PACKAGE_TRACKER_BROWSER_PROXY_URL=http://127.0.0.1:8788
+Environment=PACKAGE_TRACKER_BROWSER_PROXY_TOKEN_FILE=%d/browser-token
+Environment=PACKAGE_TRACKER_BROWSER_WORKER_TOKEN_FILE=%d/worker-token
+ExecStart=/opt/package-tracker/venv/bin/python /usr/local/libexec/package-tracker-browser/browser_worker.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectProc=invisible
+PrivateDevices=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=1536M
+
+[Install]
+WantedBy=multi-user.target

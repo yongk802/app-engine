@@ -34,7 +34,7 @@ runner acceptance test.
    syntax, maps the working directory into the three bound roots, closes
    standard input, and `execve`s the exact executable without a shell.
 3. A root-owned socket-activated broker listens at
-   `/run/app-engine-runner/runner.sock` with socket owner `appengine` and mode
+   `/run/app-engine-runner.sock` with socket owner `appengine` and mode
    `0600`. It also checks `SO_PEERCRED` for the configured engine UID. The
    broker validates every request against its own allowlist and manifest,
    creates a random transient-unit name, passes the command plan on the

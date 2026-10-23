@@ -41,7 +41,7 @@ def test_unit_confines_identity_files_and_external_network(tmp_path):
     assert f"--property=BindPaths={data}:/app-data" in argv
     assert f"--property=BindPaths={build}:/app-build" in argv
     assert "secret-canary" not in " ".join(argv)
-    assert "--property=InaccessiblePaths=/run/app-engine-runner" in argv
+    assert "--property=InaccessiblePaths=/run/app-engine-runner.sock" in argv
 
 
 def test_unit_rejects_app_symlink_outside_allowlist(tmp_path):

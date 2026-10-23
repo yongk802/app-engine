@@ -56,7 +56,7 @@ class UnitBoundary:
             "--property=RestrictSUIDSGID=yes",
             "--property=IPAddressDeny=any",
             "--property=IPAddressAllow=localhost",
-            "--property=InaccessiblePaths=/run/app-engine-runner",
+            "--property=InaccessiblePaths=/run/app-engine-runner.sock",
             f"--property=BindPaths={request.app_root}:/workspace",
             f"--property=BindPaths={request.data_dir}:/app-data",
             f"--property=BindPaths={request.build_dir}:/app-build",

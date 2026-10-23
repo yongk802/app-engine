@@ -3,8 +3,9 @@
 The runner uses a root-owned socket service to start one systemd transient unit
 per managed command. App-engine connects as its `appengine` Unix user. The broker
 checks kernel peer credentials, and each app unit has a distinct Unix UID,
-scoped filesystem binds, non-loopback IP deny, and a `BindsTo` relationship to
-its broker service. The broker socket is mode `0600` for `appengine` only.
+a read-only app-source bind, writable scoped data/build binds, non-loopback IP
+deny, and a `BindsTo` relationship to its broker service. The broker socket is
+mode `0600` for `appengine` only.
 
 ## Install the socket without enabling enforcement
 
@@ -24,9 +25,13 @@ sudo python3 /root/app-engine-runner-release/scripts/install-isolated-runner.py 
 systemctl status app-engine-runner.socket
 ```
 
-The installer writes only root-owned runner code, `/etc/app-engine-runner.json`,
-and two systemd units. It starts the socket but does not change app-engine's
-`APP_ENGINE_PROCESS_ISOLATION=audit` setting. Re-running `--apply` from a newer
+The installer writes root-owned runner and fixed-origin TCGCSV gateway code,
+`/etc/app-engine-runner.json`, and their systemd units. It starts the socket and
+the loopback-only gateway on port 18792 but does not change app-engine's
+`APP_ENGINE_PROCESS_ISOLATION=audit` setting. The gateway accepts GET only for
+TCGCSV's timestamp, category, group, product, and price paths; it rejects
+redirects and responses over 20 MB. Check `curl -fsS http://127.0.0.1:18792/health`
+and verify an unlisted path returns 404. Re-running `--apply` from a newer
 reviewed archive replaces each installed file atomically.
 
 ## Verify before enforce
@@ -38,15 +43,29 @@ command stop/disconnect removes the exact unit, and a prepared command can
 write only to its scoped paths. Exercise the real production app paths and
 environment in audit before changing the mode.
 
-`cyberpunk-tcg` requires a fixed-origin TCGCSV refresh operation and a writable
-mapping for its in-tree `data/` before enforce. Its room server is a child of
-the web process and must remain functional on loopback. Review and approve its
-exact app-engine launch plan as owner; the security rollout never grants that
-approval automatically. Also verify configured SMTP, store catalog, both mTLS
-directions, and the public app after the pilot.
+The staged `cyberpunk-tcg` manifest runs `/usr/bin/python3 scripts/serve.py`
+with `NIGHT_CITY_TCGCSV_GATEWAY=1`. The game reads its catalog from the
+read-only app source, writes price/cache files under `APP_DATA_DIR`, serves
+only its two public price files from there, and reaches the fixed gateway over
+loopback. Back up its existing source `data/` and runtime directory before
+copying any existing `prices.json`, `top20-prices.html`, and
+`sources/tcgcsv-pricing.json` into the runtime directory. Set that scoped
+directory and its `sources/` subdirectory to group `appengine` and mode 0775;
+the source remains read-only to the isolated unit. Its room server is a child
+of the web process and must remain functional on loopback.
 
-Only after those gates pass, set `APP_ENGINE_ISOLATED_RUNNER_SOCKET` to
-`/run/app-engine-runner.sock` and `APP_ENGINE_PROCESS_ISOLATION=enforce` in the
-app-engine service configuration, then restart the service. A missing or
-unhealthy socket must fail closed. For rollback, restore audit mode and restart
-app-engine; leave the broker socket installed for diagnosis.
+The VPS also has `package-tracker`, whose current `uv --with playwright`
+launch, carrier APIs, Atrium mail access, and browser page lookups require a
+separate compatibility design. Keep the global mode at `audit`. After the
+owner approves the exact changed `cyberpunk-tcg` launch plan, set
+`APP_ENGINE_ISOLATED_APP_IDS=cyberpunk-tcg` to enforce only that pilot; the
+other app stays in audit until its own gates pass. A missing broker is a
+launch failure for the pilot, with no host-process fallback. Verify the pilot
+UI, price refresh, room tables, data persistence, crash/stop cleanup,
+configured SMTP, store catalog, both mTLS directions, and rejected
+non-loopback egress.
+
+Only after every managed app has a verified network/toolchain path should the
+global `APP_ENGINE_PROCESS_ISOLATION=enforce` setting replace the pilot. For
+rollback, remove the pilot app ID and restart app-engine in audit mode; leave
+the broker socket and gateway installed for diagnosis.

@@ -19,11 +19,12 @@ import socket
 import subprocess
 import uuid
 from collections import deque
+from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import AsyncIterator, Any
+from typing import Any
 from urllib.parse import urlsplit
 
 from .contracts import (
@@ -64,8 +65,8 @@ from .contracts import (
     TargetSpec,
     ToolchainError,
 )
+from .isolation_client import IsolatedProcess, command_request
 from .process_isolation import IsolationMode, ProcessIsolationPolicy
-
 
 _SAFE_PARENT_ENVIRONMENT = (
     "HOME",
@@ -119,7 +120,7 @@ class _LaunchRecord:
     manifest: AppManifest
     target: TargetSpec
     configuration: ResolvedConfiguration
-    process: asyncio.subprocess.Process | None = None
+    process: asyncio.subprocess.Process | IsolatedProcess | None = None
     process_group_id: int | None = None
     state: RuntimeState = RuntimeState.STARTING
     endpoint: TargetEndpoint | None = None
@@ -776,22 +777,35 @@ class ProcessLifecycleManager(LifecycleManager):
                 resolved.command, configuration, reserved={}
             )
             try:
-                process = await asyncio.create_subprocess_exec(
-                    str(resolved.executable),
-                    *resolved.command.argv[1:],
-                    cwd=str(resolved.cwd),
-                    env=environment,
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    start_new_session=True,
-                )
+                if self._isolation_policy.mode_for(str(manifest.app_id)) is IsolationMode.ENFORCE:
+                    data_dir, build_dir = self._runtime_dirs(plan, manifest)
+                    process = await IsolatedProcess.start(command_request(
+                        app_id=str(manifest.app_id), phase=resolved.phase,
+                        app_root=manifest.root, data_dir=data_dir,
+                        build_dir=build_dir, executable=resolved.executable,
+                        argv=resolved.command.argv, cwd=resolved.cwd,
+                        env=environment,
+                    ))
+                else:
+                    process = await asyncio.create_subprocess_exec(
+                        str(resolved.executable),
+                        *resolved.command.argv[1:],
+                        cwd=str(resolved.cwd),
+                        env=environment,
+                        stdin=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        start_new_session=True,
+                    )
                 try:
                     _stdout, _stderr = await asyncio.wait_for(
                         process.communicate(), timeout=resolved.command.timeout_seconds
                     )
                 except asyncio.TimeoutError as exc:
-                    self._signal_group(process, _FORCE_SIGNAL)
+                    if isinstance(process, IsolatedProcess):
+                        await process.stop()
+                    else:
+                        self._signal_group(process, _FORCE_SIGNAL)
                     await process.wait()
                     raise PreparationError(
                         "preparation_timeout",
@@ -799,14 +813,20 @@ class ProcessLifecycleManager(LifecycleManager):
                         remediation="Increase its timeout or make the step complete sooner.",
                     ) from exc
                 except asyncio.CancelledError:
-                    self._signal_group(process, _FORCE_SIGNAL)
+                    if isinstance(process, IsolatedProcess):
+                        await process.stop()
+                    else:
+                        self._signal_group(process, _FORCE_SIGNAL)
                     await process.wait()
                     raise
-            except OSError as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
+                isolated = self._isolation_policy.mode_for(str(manifest.app_id)) is IsolationMode.ENFORCE
                 raise PreparationError(
-                    "preparation_spawn_failed",
-                    f"The {resolved.phase} step could not start.",
-                    remediation="Check the executable, argv, and working directory.",
+                    "isolated_runner_unavailable" if isolated else "preparation_spawn_failed",
+                    ("The isolated runner could not start the " + resolved.phase + " step."
+                     if isolated else f"The {resolved.phase} step could not start."),
+                    remediation=("Check the broker socket, policy, and scoped paths."
+                                 if isolated else "Check the executable, argv, and working directory."),
                 ) from exc
             if process.returncode != 0:
                 raise PreparationError(
@@ -840,11 +860,7 @@ class ProcessLifecycleManager(LifecycleManager):
         assert runtime is not None
         start = next(step for step in plan.steps if step.phase == "start")
         port = self._free_port()
-        scope_digest = hashlib.sha256(repr(plan.scope_key).encode()).hexdigest()[:16]
-        data_dir = self._runtime_root / "data" / str(manifest.app_id) / scope_digest
-        build_dir = self._runtime_root / "build" / str(manifest.app_id)
-        data_dir.mkdir(parents=True, exist_ok=True)
-        build_dir.mkdir(parents=True, exist_ok=True)
+        data_dir, build_dir = self._runtime_dirs(plan, manifest)
         base_url = f"http://127.0.0.1:{port}/"
         reserved = {
             "PORT": str(port),
@@ -856,24 +872,36 @@ class ProcessLifecycleManager(LifecycleManager):
         }
         environment = self._environment(start.command, configuration, reserved)
         try:
-            process = await asyncio.create_subprocess_exec(
-                str(start.executable),
-                *start.command.argv[1:],
-                cwd=str(start.cwd),
-                env=environment,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-        except OSError as exc:
+            if self._isolation_policy.mode_for(str(manifest.app_id)) is IsolationMode.ENFORCE:
+                process = await IsolatedProcess.start(command_request(
+                    app_id=str(manifest.app_id), phase="start", app_root=manifest.root,
+                    data_dir=data_dir, build_dir=build_dir,
+                    executable=start.executable, argv=start.command.argv,
+                    cwd=start.cwd, env=environment,
+                ))
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    str(start.executable),
+                    *start.command.argv[1:],
+                    cwd=str(start.cwd),
+                    env=environment,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
+                )
+        except (OSError, RuntimeError, ValueError) as exc:
+            isolated = self._isolation_policy.mode_for(str(manifest.app_id)) is IsolationMode.ENFORCE
             raise LaunchError(
-                "process_spawn_failed",
-                "The app process could not be started.",
-                remediation="Check its executable, argv, and working directory.",
+                "isolated_runner_unavailable" if isolated else "process_spawn_failed",
+                ("The isolated runner could not start the app process."
+                 if isolated else "The app process could not be started."),
+                remediation=("Check the broker socket, policy, and scoped paths."
+                             if isolated else "Check its executable, argv, and working directory."),
             ) from exc
         record.process = process
-        record.process_group_id = process.pid
+        record.process_group_id = (None if isinstance(process, IsolatedProcess)
+                                   else process.pid)
         record.started_at = _now()
         record.endpoint = TargetEndpoint("http", "127.0.0.1", port, "/")
         assert process.stdout is not None and process.stderr is not None
@@ -883,7 +911,7 @@ class ProcessLifecycleManager(LifecycleManager):
         ]
 
     def _check_isolation(self, plan: LaunchPlan, phase: str) -> None:
-        decision = self._isolation_policy.decide(phase)
+        decision = self._isolation_policy.decide(phase, str(plan.scope_key.app_id))
         if decision.mode is not IsolationMode.LEGACY:
             _isolation_log.warning(
                 "managed_process_isolation %s",
@@ -903,12 +931,23 @@ class ProcessLifecycleManager(LifecycleManager):
             raise error_type(
                 "isolated_runner_unavailable",
                 "A verified isolated runner is required for managed app commands.",
-                remediation=(
-                    "Configure a verified isolated runner or switch to audit mode "
-                    "after reviewing the host-execution risk."
-                ),
+                remediation="Configure a verified isolated runner.",
                 context=(("phase", phase),),
             )
+
+    def _runtime_dirs(self, plan: LaunchPlan,
+                      manifest: AppManifest) -> tuple[Path, Path]:
+        scope_digest = hashlib.sha256(repr(plan.scope_key).encode()).hexdigest()[:16]
+        data_dir = self._runtime_root / "data" / str(manifest.app_id) / scope_digest
+        build_dir = self._runtime_root / "build" / str(manifest.app_id)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        build_dir.mkdir(parents=True, exist_ok=True)
+        if self._isolation_policy.mode_for(str(manifest.app_id)) is IsolationMode.ENFORCE:
+            # DynamicUser changes on every unit. Persisted state must remain
+            # writable by the broker's stable, appengine-owned group.
+            data_dir.chmod(0o775)
+            build_dir.chmod(0o775)
+        return data_dir, build_dir
 
     @staticmethod
     def _environment(
@@ -974,7 +1013,7 @@ class ProcessLifecycleManager(LifecycleManager):
             await asyncio.sleep(max(0.001, health.interval_seconds))
         logging.getLogger(__name__).warning(
             "managed health timeout: pid=%s returncode=%s last_result=%s",
-            record.process.pid if record.process else None,
+            getattr(record.process, "pid", None),
             record.process.returncode if record.process else None,
             last_result,
         )
@@ -1189,6 +1228,9 @@ class ProcessLifecycleManager(LifecycleManager):
 
     async def _terminate_process(self, record: _LaunchRecord) -> None:
         process = record.process
+        if isinstance(process, IsolatedProcess):
+            await process.stop()
+            return
         group_id = record.process_group_id
         if process is None or group_id is None:
             return

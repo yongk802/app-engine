@@ -1,12 +1,9 @@
-"""Operator policy for managed app command execution.
-
-There is currently no verified isolated runner. Enforce mode therefore denies
-every managed command rather than falling back to a host subprocess.
-"""
+"""Operator policy for managed app command execution."""
 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -28,6 +25,7 @@ class ProcessDecision:
 @dataclass(frozen=True)
 class ProcessIsolationPolicy:
     mode: IsolationMode
+    pilot_app_ids: frozenset[str] = frozenset()
 
     @classmethod
     def from_value(cls, value: str) -> ProcessIsolationPolicy:
@@ -40,22 +38,30 @@ class ProcessIsolationPolicy:
 
     @classmethod
     def from_environment(cls) -> ProcessIsolationPolicy:
-        return cls.from_value(
-            os.environ.get("APP_ENGINE_PROCESS_ISOLATION", "legacy")
-        )
+        mode = cls.from_value(os.environ.get("APP_ENGINE_PROCESS_ISOLATION", "legacy")).mode
+        raw = os.environ.get("APP_ENGINE_ISOLATED_APP_IDS", "")
+        ids = tuple(item.strip() for item in raw.split(",")) if raw else ()
+        if any(not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", item) for item in ids):
+            raise ValueError("APP_ENGINE_ISOLATED_APP_IDS contains an invalid app ID")
+        return cls(mode, frozenset(ids))
 
-    def decide(self, phase: str) -> ProcessDecision:
+    def mode_for(self, app_id: str | None = None) -> IsolationMode:
+        return (IsolationMode.ENFORCE if app_id in self.pilot_app_ids
+                else self.mode)
+
+    def decide(self, phase: str, app_id: str | None = None) -> ProcessDecision:
         if phase not in {"install", "build", "start"}:
             raise ValueError(f"unsupported managed process phase: {phase}")
-        if self.mode is IsolationMode.ENFORCE:
+        mode = self.mode_for(app_id)
+        if mode is IsolationMode.ENFORCE:
             return ProcessDecision(
-                mode=self.mode,
-                allowed=False,
-                execution_class="denied",
-                reason="No verified isolated runner is configured; host execution is forbidden.",
+                mode=mode,
+                allowed=True,
+                execution_class="isolated_unit",
+                reason="The authenticated local broker must start a scoped unit.",
             )
         return ProcessDecision(
-            mode=self.mode,
+            mode=mode,
             allowed=True,
             execution_class="host_process",
             reason="Managed command executes on the service host.",

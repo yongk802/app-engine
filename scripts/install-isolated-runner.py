@@ -86,10 +86,13 @@ def main() -> int:
     files = {LIB / "app_engine" / name: REPO / "app_engine" / name
              for name in MODULES}
     files[LIB / "isolated_exec.py"] = REPO / "app_engine" / "isolated_exec.py"
+    files[LIB / "tcgcsv_gateway.py"] = REPO / "app_engine" / "tcgcsv_gateway.py"
     socket_source = REPO / "scripts" / "systemd" / "app-engine-runner.socket"
     service_source = REPO / "scripts" / "systemd" / "app-engine-runner@.service"
     files[SYSTEMD / socket_source.name] = socket_source
     files[SYSTEMD / service_source.name] = service_source
+    gateway_source = REPO / "scripts" / "systemd" / "app-engine-tcgcsv-gateway.service"
+    files[SYSTEMD / gateway_source.name] = gateway_source
     for source in files.values():
         if not source.is_file():
             parser.error(f"missing runner source file: {source}")
@@ -110,7 +113,8 @@ def main() -> int:
     _install(CONFIG, policy, 0o600)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "app-engine-runner.socket"], check=True)
-    print("Isolated runner socket installed; app-engine mode is unchanged.")
+    subprocess.run(["systemctl", "enable", "--now", "app-engine-tcgcsv-gateway.service"], check=True)
+    print("Isolated runner socket and price gateway installed; app-engine mode is unchanged.")
     return 0
 
 

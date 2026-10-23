@@ -144,7 +144,9 @@ class IsolatedProcess:
             self._writer.close()
 
     async def wait(self) -> int:
-        return await self._finished
+        # Preparation timeouts cancel communicate(); that must not cancel the
+        # process-completion signal needed by stop() and broker cleanup.
+        return await asyncio.shield(self._finished)
 
     async def communicate(self) -> tuple[bytes, bytes]:
         stdout, stderr, _code = await asyncio.gather(

@@ -27,6 +27,7 @@ _REQUEST_FIELDS = {"version", "app_id", "phase", "app_root", "data_dir",
                    "build_dir", "plan"}
 _SAFE_APP_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\Z")
 _CONFIG_PATH = Path("/etc/app-engine-runner.json")
+_MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,7 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
         os.set_blocking(process.stdin.fileno(), False)
         send_event(sock, b"S", b"")
         with selectors.DefaultSelector() as selected:
+            output_bytes = 0
             selected.register(sock, selectors.EVENT_READ, "control")
             selected.register(process.stdin, selectors.EVENT_WRITE, "input")
             selected.register(process.stdout, selectors.EVENT_READ, b"O")
@@ -134,6 +136,10 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
                         continue
                     chunk = os.read(key.fileobj.fileno(), 16 * 1024)
                     if chunk:
+                        output_bytes += len(chunk)
+                        if output_bytes > _MAX_COMMAND_OUTPUT_BYTES:
+                            send_event(sock, b"E", b"Isolated command output limit exceeded.\n")
+                            return
                         send_event(sock, key.data, chunk)
                     else:
                         selected.unregister(key.fileobj)

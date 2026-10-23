@@ -69,6 +69,34 @@ def test_client_rejects_oversized_event(monkeypatch):
     asyncio.run(run())
 
 
+def test_cancelled_communicate_can_still_stop_unit(monkeypatch):
+    async def run():
+        client, broker = socket.socketpair()
+        monkeypatch.setattr("app_engine.isolation_client._require_root_peer", lambda *_: None)
+
+        async def connect(_path):
+            return await asyncio.open_connection(sock=client)
+
+        monkeypatch.setattr("app_engine.isolation_client.asyncio.open_unix_connection",
+                            connect)
+
+        def serve():
+            recv_request(broker)
+            send_event(broker, b"S", b"")
+            assert broker.recv(1) == b"T"
+            broker.close()
+
+        server = asyncio.create_task(asyncio.to_thread(serve))
+        process = await IsolatedProcess.start({"version": 1})
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(process.communicate(), timeout=.02)
+        await process.stop()
+        assert await process.wait() == 70
+        await server
+
+    asyncio.run(run())
+
+
 def test_client_rejects_nonroot_broker_peer(monkeypatch):
     monkeypatch.setattr(socket, "SO_PEERCRED", 17, raising=False)
     peer = Mock()

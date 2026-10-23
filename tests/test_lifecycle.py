@@ -27,9 +27,9 @@ from app_engine.contracts import (
     AppId,
     AppManifest,
     AppMetadata,
+    ApprovalReceipt,
     AppSource,
     AppStateStore,
-    ApprovalReceipt,
     Authorization,
     AuthorizationError,
     BrowserPolicy,
@@ -477,6 +477,37 @@ async def test_enforce_mode_refuses_start_before_any_host_command(tmp_path):
     assert caught.value.code == "isolated_runner_unavailable"
     assert not argv_record.exists()
     assert host.recorded_events[-1].failure.code == "isolated_runner_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_enforce_mode_never_falls_back_when_broker_fails(tmp_path, monkeypatch):
+    from app_engine import lifecycle
+    from app_engine.process_isolation import ProcessIsolationPolicy
+
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "server.py").write_text("raise RuntimeError('must not execute')\n")
+    manager = _manager(
+        tmp_path,
+        _manifest(root, start=CommandStep(argv=(sys.executable, "server.py"))),
+        isolation_policy=ProcessIsolationPolicy.from_value("enforce"),
+    )
+    attempted = []
+
+    async def broker_failure(request):
+        attempted.append(request)
+        raise ConnectionRefusedError("broker unavailable")
+
+    async def forbidden_host_spawn(*args, **kwargs):
+        pytest.fail("enforce used the host subprocess path")
+
+    monkeypatch.setattr(lifecycle.IsolatedProcess, "start", broker_failure)
+    monkeypatch.setattr(lifecycle.asyncio, "create_subprocess_exec", forbidden_host_spawn)
+    with pytest.raises(LaunchError, match="isolated runner"):
+        await manager.launch(_request(), approval=None)
+    assert len(attempted) == 1
+    assert attempted[0]["phase"] == "start"
+    assert attempted[0]["plan"]["cwd"] == "/workspace"
 
 
 def _request(

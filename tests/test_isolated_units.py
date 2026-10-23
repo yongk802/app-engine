@@ -41,7 +41,7 @@ def test_unit_confines_identity_files_and_external_network(tmp_path):
     assert "--property=ProtectSystem=strict" in argv
     assert "--property=IPAddressDeny=any" in argv
     assert "--property=IPAddressAllow=localhost" in argv
-    assert f"--property=BindPaths={app}:/workspace" in argv
+    assert f"--property=BindReadOnlyPaths={app}:/workspace" in argv
     assert f"--property=BindPaths={data}:/app-data" in argv
     assert f"--property=BindPaths={build}:/app-build" in argv
     assert "secret-canary" not in " ".join(argv)
@@ -74,7 +74,7 @@ def test_unit_accepts_store_root_with_custom_folder_and_matching_manifest(tmp_pa
     argv = _command(boundary, "ae-demo-start-123", UnitRequest(
         "demo", "start", custom, data, build, ""
     ))
-    assert f"--property=BindPaths={custom}:/workspace" in argv
+    assert f"--property=BindReadOnlyPaths={custom}:/workspace" in argv
 
     (custom / "app.json").write_text(json.dumps({"id": "other"}))
     with pytest.raises(ValueError, match="app root"):

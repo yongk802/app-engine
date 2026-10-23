@@ -78,7 +78,11 @@ trusted toolchain or a reviewed manifest change is also required. Add these comp
 before using the pilot. Obtain owner approval for its exact launch plan;
 do not synthesize or auto-approve that authority token. After the approved
 launch, verify the app UI, data persistence, crash/stop cleanup, engine SMTP,
-store catalog, both mTLS directions, and rejected non-loopback egress. Keep
-`APP_ENGINE_PROCESS_ISOLATION=audit` until every required gate passes. The
-production flip and rollback procedure must be documented with the reviewed
-PR and tested on the VPS before calling isolation complete.
+store catalog, both mTLS directions, and rejected non-loopback egress. The
+production inventory also has `package-tracker`; it needs Playwright, carrier
+API and merchant-page access, and Atrium mail access, so global enforce must
+wait for that separate compatibility path. Keep
+`APP_ENGINE_PROCESS_ISOLATION=audit` and, after the pilot's exact launch plan
+is owner-approved, use `APP_ENGINE_ISOLATED_APP_IDS=cyberpunk-tcg` to isolate
+only that app. The production flip and rollback procedure must be documented
+with the reviewed PR and tested on the VPS before calling isolation complete.

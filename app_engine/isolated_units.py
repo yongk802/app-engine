@@ -9,6 +9,7 @@ from pathlib import Path
 
 _SAFE_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\Z")
 _SAFE_UNIT = re.compile(r"ae-[a-zA-Z0-9_-]+-(?:install|build|start)-[a-f0-9]{3,32}\Z")
+_SAFE_BROKER_UNIT = re.compile(r"app-engine-runner@[A-Za-z0-9:._\\-]{1,200}\.service\Z")
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,8 @@ class UnitBoundary:
     engine_uid: int
     engine_group: str
 
-    def command(self, unit_name: str, request: UnitRequest) -> tuple[str, ...]:
+    def command(self, unit_name: str, request: UnitRequest,
+                broker_unit_name: str) -> tuple[str, ...]:
         if not _SAFE_ID.fullmatch(request.app_id):
             raise ValueError("unsafe app ID")
         if request.phase not in {"install", "build", "start"}:
@@ -39,11 +41,15 @@ class UnitBoundary:
             raise ValueError("invalid unit name")
         if not _SAFE_ID.fullmatch(self.engine_group):
             raise ValueError("invalid engine group")
+        if not _SAFE_BROKER_UNIT.fullmatch(broker_unit_name):
+            raise ValueError("invalid broker unit name")
         self._validate_paths(request)
 
         return (
             "systemd-run", "--quiet", "--collect", "--wait", "--pipe",
             f"--unit={unit_name}",
+            f"--property=BindsTo={broker_unit_name}",
+            f"--property=After={broker_unit_name}",
             "--property=DynamicUser=yes",
             f"--property=Group={self.engine_group}",
             "--property=UMask=0002",

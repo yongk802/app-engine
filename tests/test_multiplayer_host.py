@@ -174,7 +174,8 @@ def test_enforced_multiplayer_fails_closed_when_broker_is_unavailable(tmp_path, 
         raise RuntimeError("broker unavailable")
 
     monkeypatch.setattr("app_engine.multiplayer_host.IsolatedProcess.start", unavailable)
-    host = MultiplayerHost(tmp_path / "state", node="/usr/bin/node", isolation_policy=ProcessIsolationPolicy(
+    fake_node = tmp_path / "node"
+    host = MultiplayerHost(tmp_path / "state", node=str(fake_node), isolation_policy=ProcessIsolationPolicy(
         IsolationMode.AUDIT, frozenset({"cards"})
     ))
 
@@ -189,13 +190,13 @@ def test_enforced_multiplayer_fails_closed_when_broker_is_unavailable(tmp_path, 
     assert len(requests) == 1
     assert requests[0]["phase"] == "multiplayer"
     assert requests[0]["data_dir"] == str(tmp_path / "state" / "multiplayer" / "cards")
-    assert requests[0]["plan"]["argv"][:2] == ["/usr/bin/node", "/room-server/server.mjs"]
+    assert requests[0]["plan"]["argv"][:2] == [str(fake_node), "/room-server/server.mjs"]
 
 
 def test_enforced_room_rejects_configured_external_webhooks(tmp_path, monkeypatch):
     root = make_game(tmp_path / "apps", "cards")
     monkeypatch.setenv("APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS", "https://alerts.example")
-    host = MultiplayerHost(tmp_path / "state", node="/usr/bin/node", isolation_policy=ProcessIsolationPolicy(
+    host = MultiplayerHost(tmp_path / "state", node=str(tmp_path / "node"), isolation_policy=ProcessIsolationPolicy(
         IsolationMode.AUDIT, frozenset({"cards"})
     ))
 

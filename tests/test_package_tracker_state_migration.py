@@ -45,3 +45,19 @@ def test_archive_rejects_traversal_members(tmp_path):
     archive(source, unsafe=True)
     with pytest.raises(ValueError, match="members"):
         migration.read_archive(source)
+
+
+def test_migration_replaces_mac_local_atrium_url_without_changing_key(tmp_path):
+    source = tmp_path / "backup.tar.gz"
+    archive(source)
+    files, _, _ = migration.read_archive(source)
+    credentials = {"ATRIUM_API_KEY": "private-key", "ATRIUM_BASE_URL": "https://127.0.0.1:9900"}
+    files["credentials.json"] = json.dumps(credentials).encode()
+    updated = migration.set_atrium_tunnel_url(files, migration.ATRIUM_TUNNEL_URL)
+    assert json.loads(updated["credentials.json"]) == {
+        "ATRIUM_API_KEY": "private-key",
+        "ATRIUM_BASE_URL": "https://atrium-status.localhost:9444",
+    }
+    assert files["credentials.json"] == json.dumps(credentials).encode()
+    with pytest.raises(ValueError, match="verified loopback"):
+        migration.set_atrium_tunnel_url(files, "https://127.0.0.1:9900")

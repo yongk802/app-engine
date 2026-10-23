@@ -87,7 +87,9 @@ The reverse SSH tunnel remains loopback on both machines.
 Back up the Mac's current 15 package records, settings, merchant memory, seen
 message IDs, and credential file before migration. Install them in the VPS
 app-engine scoped shared data directory with directory mode 0770 and file mode
-0600; new writes keep files private. Do not copy mail message bodies. Preserve
+0660 for the fixed `appengine` group, so a new DynamicUser UID can read them;
+new writes retain that mode. Local, non-isolated files use mode 0600. Other
+units cannot mount the Package Tracker directory. Do not copy mail message bodies. Preserve
 the current `cyberpunk-tcg` process and configured SMTP. Keep the public app
 allowlist unchanged until Package Tracker is explicitly authorized for public
 access.

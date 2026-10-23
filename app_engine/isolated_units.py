@@ -61,6 +61,7 @@ class UnitBoundary:
             "PACKAGE_TRACKER_CARRIER_PROXY_TOKEN": read_token_file(cap.carrier_token_file),
             "PACKAGE_TRACKER_BROWSER_WORKER_URL": f"http://127.0.0.1:{cap.browser_worker_port}",
             "PACKAGE_TRACKER_BROWSER_WORKER_TOKEN": read_token_file(cap.worker_token_file),
+            "PACKAGE_TRACKER_SHARED_STATE": "1",
             "ATRIUM_BASE_URL": "https://atrium-status.localhost:9444",
             "ATRIUM_CA_FILE": "/run/package-tracker/mtls/ca.crt",
             "ATRIUM_CERT_FILE": "/run/package-tracker/mtls/package-tracker-client.crt",

@@ -175,6 +175,7 @@ def test_package_tracker_capabilities_apply_only_to_its_start_phase(tmp_path):
     assert env["PACKAGE_TRACKER_CARRIER_PROXY_TOKEN"] == "a" * 64
     assert env["PACKAGE_TRACKER_BROWSER_WORKER_TOKEN"] == "b" * 64
     assert env["ATRIUM_BASE_URL"] == "https://atrium-status.localhost:9444"
+    assert env["PACKAGE_TRACKER_SHARED_STATE"] == "1"
     argv = _command(boundary, "ae-package-tracker-start-123", prepared)
     assert f"--property=BindReadOnlyPaths={mtls}:/run/package-tracker/mtls" in argv
     assert "a" * 64 not in " ".join(argv)

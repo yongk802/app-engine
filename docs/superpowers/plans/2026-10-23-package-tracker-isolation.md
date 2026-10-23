@@ -45,7 +45,7 @@
 
 ## Task 4: Carrier, mail, and private state (personal-apps)
 
-- Add failing tests for explicit carrier proxy auth and exact fixed hosts, rejection of carrier redirects, verified Atrium CA/client certificate loading, no unverified loopback TLS, and mode 0600 for all written state files. Use an HTTPS local test server for TLS behavior rather than mocking SSLContext calls.
+- Add failing tests for explicit carrier proxy auth and exact fixed hosts, rejection of carrier redirects, verified Atrium CA/client certificate loading, no unverified loopback TLS, and state mode 0600 locally or 0660 in isolated shared state. Use an HTTPS local test server for TLS behavior where practical, followed by a live mTLS gateway gate.
 - Run the tests and confirm the expected failures.
 - Change the manifest start to `python3 server.py`, wire carrier requests through the carrier proxy only when configured, deny redirects, and load an explicit Atrium mTLS SSLContext from mounted CA/cert/key paths. Make state writes atomic with mode 0600. Preserve local use with system-trusted Atrium TLS and optional installed Playwright.
 - Run all Package Tracker tests and commit the app changes.
@@ -55,7 +55,7 @@
 - Add a checked deployment script in app-engine that pins the Playwright Python version and Chromium revision, installs both in root-owned `/opt/package-tracker`, and installs separate proxy/worker systemd units with DynamicUser, read-only mounts, and denied direct external IPs. Add a `--check` mode that validates config and reports planned changes without applying them.
 - Test the script's `--check` mode on a disposable directory, then install on the VPS after backing up unit files and current data. Keep `APP_ENGINE_BLOCKED_APP_IDS=package-tracker` and `APP_ENGINE_PUBLIC_APPS=cyberpunk-tcg` in force.
 - Issue a distinct `package-tracker-client` certificate from the offline CA, install only its role files, add exactly three GET mail locations to the Mac nginx gateway, run `nginx -t`, reload that gateway, and verify wrong certificate/method/path fail while valid certificate plus existing scoped API key reads accounts and a message. Never expose the key in command output.
-- Back up Mac Package Tracker data and transfer it to the VPS scoped data directory with mode 0600. Independently exercise live carrier, mail, and browser worker calls and negative private/metadata/redirect/subresource paths while the app launch block remains active.
+- Back up Mac Package Tracker data and transfer it to the VPS scoped data directory with group-private mode 0660. Independently exercise live carrier, mail, and browser worker calls and negative private/metadata/redirect/subresource paths while the app launch block remains active.
 - Recheck Night City Table, app-store, SMTP configuration, engine and mTLS health. Present the exact Package Tracker launch preview and fingerprint for owner approval. After approval, remove the block, activate Package Tracker, run integrated persistence and lookup gates, and add it to the public allowlist only if requested. Roll back units and data from the saved backup if any gate fails.
 
 ## Review and publication

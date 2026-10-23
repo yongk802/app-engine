@@ -72,7 +72,9 @@ and no install/build steps. Its live price-refresh path does fetch TCGCSV over
 HTTPS and writes `data/` inside the app source tree, so applying egress deny
 without a fixed-origin fetch operation and a scoped writable data mapping would
 break a production feature. The multiplayer room service runs as a child on
-loopback and must remain in the same unit/cgroup. Add these compatibility gates
+loopback and must remain in the same unit/cgroup. Its start command resolves
+`uv` through `/usr/local/bin/uv` into the hidden engine home, so a visible
+trusted toolchain or a reviewed manifest change is also required. Add these compatibility gates
 before using the pilot. Obtain owner approval for its exact launch plan;
 do not synthesize or auto-approve that authority token. After the approved
 launch, verify the app UI, data persistence, crash/stop cleanup, engine SMTP,

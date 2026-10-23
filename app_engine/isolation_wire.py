@@ -28,9 +28,25 @@ def recv_request(sock: socket.socket) -> bytes:
     return _read_exact(sock, size)
 
 
+def send_request(sock: socket.socket, payload: bytes) -> None:
+    if not payload or len(payload) > MAX_REQUEST_BYTES:
+        raise ValueError("broker request too large or empty")
+    sock.sendall(struct.pack("!I", len(payload)) + payload)
+
+
 def send_event(sock: socket.socket, kind: bytes, payload: bytes) -> None:
     if kind not in {b"S", b"O", b"E", b"X"}:
         raise ValueError("invalid broker event")
     if len(payload) > MAX_EVENT_BYTES:
         raise ValueError("broker event too large")
     sock.sendall(kind + struct.pack("!I", len(payload)) + payload)
+
+
+def recv_event(sock: socket.socket) -> tuple[bytes, bytes]:
+    kind = _read_exact(sock, 1)
+    if kind not in {b"S", b"O", b"E", b"X"}:
+        raise ValueError("invalid broker event")
+    size = struct.unpack("!I", _read_exact(sock, 4))[0]
+    if size > MAX_EVENT_BYTES:
+        raise ValueError("broker event too large")
+    return kind, _read_exact(sock, size)

@@ -153,6 +153,8 @@ existing Nginx config, prefix, binary, and local Atrium CA. The gateway
 installer tests a candidate config before reloading and saves a timestamped
 backup. The `/health` route remains restricted to `app-engine-client`; the mail
 routes require `package-tracker-client` plus a user API key with email scope.
+Their query strings are restricted to Package Tracker's account, INBOX header,
+and message reads; Atrium's `mark_seen` option is rejected at the gateway.
 
 Back up the Mac's `~/.local/share/package-tracker` data in a private archive
 containing exactly `packages.json`, `settings.json`, `merchants.json`, and

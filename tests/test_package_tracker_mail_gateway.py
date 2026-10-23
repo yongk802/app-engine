@@ -36,11 +36,20 @@ def test_renderer_adds_only_three_get_mail_routes_with_separate_client_identity(
     assert "location ~ ^/api/email/accounts/[^/]+/message/[^/]+$ {" in rendered
     assert rendered.count("limit_except GET { deny all; }") == 4
     assert rendered.count("access_log off;") == 3
+    assert all(rendered.count(guard) == 1 for guard in gateway.QUERY_GUARDS)
     assert "proxy_ssl_verify off;" not in rendered
     assert rendered.count("proxy_ssl_trusted_certificate /secure/atrium-local-ca.pem;") == 4
     assert '"CN=app-engine-client"' in rendered
     assert rendered.count("location / { return 404; }") == 1
     assert gateway.render(rendered, "/secure/atrium-local-ca.pem") == rendered
+
+
+def test_renderer_upgrades_existing_mail_gateway_without_losing_health_route():
+    target = gateway.render(EXISTING, "/secure/atrium-local-ca.pem")
+    previous = target.replace(gateway.MARKER, gateway.OLD_MARKER)
+    for guard in gateway.QUERY_GUARDS:
+        previous = previous.replace(guard, "")
+    assert gateway.render(previous, "/secure/atrium-local-ca.pem") == target
 
 
 def test_renderer_rejects_an_unexpected_gateway_shape():

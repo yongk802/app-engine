@@ -6,6 +6,7 @@ import json
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from .response_headers import nonce_page
 from .store_contracts import StoreError
 
 
@@ -114,6 +115,7 @@ def create_store_router(bridge, runtime, *, require_owner, require_owner_action,
         require_read(request)
         html = files('app_engine').joinpath('store_ui/index.html').read_text('utf-8')
         html = html.replace('__APP_ENGINE_ADMIN_CAPABILITY__', admin_capability)
-        return HTMLResponse(html, headers={**headers, 'Content-Security-Policy': "frame-ancestors 'none'"})
+        html, page_headers = nonce_page(html)
+        return HTMLResponse(html, headers={**headers, **page_headers})
 
     return router

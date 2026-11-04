@@ -131,6 +131,11 @@ async def test_reusable_router_exposes_catalog_studio_assets_and_static_session(
             assert "app-engine-csrf-url" in studio.text
             assert "o.entry_url||o.url" in studio.text
             assert "approval_required" in studio.text
+            policy = studio.headers["content-security-policy"]
+            assert "frame-ancestors 'none'" in policy and "script-src-attr 'none'" in policy
+            nonce = policy.split("'nonce-", 1)[1].split("'", 1)[0]
+            assert studio.text.count("<script") == studio.text.count(f'<script nonce="{nonce}">')
+            assert " onclick=" not in studio.text, "inline handlers would be blocked by script-src-attr"
 
             opened = await client.post("/api/app-engine/apps/demo/open", json={})
             assert opened.status_code == 200

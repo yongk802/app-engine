@@ -1,15 +1,35 @@
-"""Mark every JSON response ``X-Content-Type-Options: nosniff``.
+"""Response headers shared by the engine's own pages and its JSON API.
 
-The launcher page already sends it; the JSON API did not. Without it an old
-or permissive browser may sniff an API answer that echoes user text as HTML
-or script when a page loads it in a frame or a ``<script>`` tag.
+``JsonNosniff`` marks every JSON response ``X-Content-Type-Options: nosniff``:
+the launcher page already sent it, the JSON API did not, so an old or
+permissive browser might sniff an answer that echoes user text as HTML or
+script. ``nonce_page`` gives a self-contained management page (store, studio)
+a script policy that runs only its own inline block.
 """
 
 from __future__ import annotations
 
+import secrets
+
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _NOSNIFF = (b"x-content-type-options", b"nosniff")
+
+_PAGE_CSP = ("default-src 'self'; script-src 'self' 'nonce-{nonce}'; script-src-attr 'none'; "
+             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; "
+             "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+
+def nonce_page(html: str) -> tuple[str, dict[str, str]]:
+    """Stamp each ``<script>`` with a fresh nonce; return the page and its headers.
+
+    Everything else (an injected inline script, an ``onclick=`` attribute, a
+    foreign script, a frame around the page) is refused by the browser.
+    """
+    nonce = secrets.token_urlsafe(18)
+    html = html.replace("<script>", f'<script nonce="{nonce}">')
+    return html, {"Content-Security-Policy": _PAGE_CSP.format(nonce=nonce),
+                  "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
 
 
 class JsonNosniff:

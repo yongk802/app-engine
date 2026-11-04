@@ -31,6 +31,7 @@ from .contracts import (
     StopReason,
     TargetId,
 )
+from .response_headers import nonce_page
 from .runtime import DefaultAppEngineRuntime
 from .search import category_counts, search_apps
 
@@ -499,8 +500,8 @@ def create_app_engine_router(
     @router.get("/studio/", response_class=HTMLResponse)
     async def studio_ui(subject: HostSubject = Depends(authenticate)):
         del subject
-        html = files("app_engine").joinpath("studio/index.html").read_text("utf-8")
-        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+        html, page_headers = nonce_page(files("app_engine").joinpath("studio/index.html").read_text("utf-8"))
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache", **page_headers})
 
     return router
 

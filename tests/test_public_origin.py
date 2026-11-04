@@ -28,7 +28,8 @@ def load_engine(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("APP_ENGINE_APPS_DIR", str(tmp_path / "apps"))
     for name in ("APP_ENGINE_PUBLIC_ORIGIN", "APP_ENGINE_ADMIN_SECRET", "APP_ENGINE_TRUST_PROXY",
-                 "APP_ENGINE_MCP_PROXY_SECRET", "APP_ENGINE_MCP_URL", "APP_ENGINE_OUTBOUND_MTLS_CONFIG"):
+                 "APP_ENGINE_MCP_PROXY_SECRET", "APP_ENGINE_MCP_URL", "APP_ENGINE_OUTBOUND_MTLS_CONFIG",
+                 "APP_ENGINE_ALLOWED_HOSTS", "APP_ENGINE_FRAME_ANCESTORS"):
         monkeypatch.delenv(name, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -133,7 +134,9 @@ def test_loopback_mode_is_unchanged(tmp_path, monkeypatch):
         assert client.get("/admin").status_code == 404
         listing = client.get("/api/apps").json()
         assert listing[0]["url"].startswith("http://notes.localhost/apps/notes/#atrium_state_token=")
-        assert "frame-ancestors *" in client.get("/apps/notes/", headers={"host": "notes.localhost"}).headers["content-security-policy"]
+        framing = client.get("/apps/notes/", headers={"host": "notes.localhost"}).headers["content-security-policy"]
+        assert "frame-ancestors 'self' http://127.0.0.1:* http://localhost:*" in framing
+        assert "*" not in framing.replace(":*", ""), "no web page outside this computer may frame an app"
 
 
 def test_everything_needs_the_owner_session_in_public_mode(tmp_path, monkeypatch):

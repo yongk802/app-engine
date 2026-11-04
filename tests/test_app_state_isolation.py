@@ -43,7 +43,7 @@ def test_missing_or_forged_capability_is_denied_even_without_referer(tmp_path, m
         }).status_code == 403
         assert client.get("/api/app-state/notes", headers={
             "host": "evil.example", "x-app-state-token": module._app_capability("notes")
-        }).status_code == 403
+        }).status_code == 421
 
 
 def test_app_listing_uses_isolated_origin_and_fragment_capability(tmp_path, monkeypatch):

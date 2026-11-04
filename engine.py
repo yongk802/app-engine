@@ -75,6 +75,7 @@ from app_engine.public_origin import (
 from app_engine.proxy_headers import forward_app_headers
 from app_engine.outbound_tls import OutboundTlsPolicy
 from app_engine.atrium_status import AtriumStatusProbe
+from app_engine.host_gate import LocalHostGate
 from app_engine.listener_gate import LoopbackListenerGate
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
@@ -93,6 +94,22 @@ STATE_DIR = Path(
     os.environ.get("APP_ENGINE_STATE_DIR", "~/.config/app-engine/app-state")
 ).expanduser()
 STORE_APPS_DIR = STATE_DIR / "store-apps"
+
+
+def _close_state_dir(path: Path) -> None:
+    """Saves, player hashes and store connections are nobody else's business.
+
+    Other users lose access to the whole tree through its top directory; group
+    bits stay, because an isolated runner may share a group with the engine.
+    """
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        mode = path.stat().st_mode & 0o777
+        if mode & 0o007:
+            path.chmod(mode & ~0o007)
+
+
+_close_state_dir(STATE_DIR)
 _outbound_tls_file = os.environ.get("APP_ENGINE_OUTBOUND_MTLS_CONFIG", "").strip()
 _outbound_tls = (OutboundTlsPolicy.from_file(Path(_outbound_tls_file))
                  if _outbound_tls_file else OutboundTlsPolicy())
@@ -196,11 +213,19 @@ async def lifespan(_: FastAPI):
     await _store_bridge.close()
 
 
-app = FastAPI(title="app-engine", lifespan=lifespan)
+# No /docs, /redoc or /openapi.json: nothing uses them, and they hand anyone who
+# can reach the port a map of every route.
+app = FastAPI(title="app-engine", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 if _PUBLIC:
     app.add_middleware(OwnerGate, accounts=_accounts, enabled=True,
                        mcp_proxy_secret=_MCP_PROXY_SECRET)
     app.add_middleware(RemoteApiCors)
+else:
+    app.add_middleware(
+        LocalHostGate,
+        extra=frozenset(h.strip().lower() for h in os.environ.get("APP_ENGINE_ALLOWED_HOSTS", "").split(",") if h.strip()),
+        trusted=lambda scope: _is_mtls_request(Request(scope)),
+    )
 app.add_middleware(LoopbackListenerGate)
 
 
@@ -559,12 +584,27 @@ async def state(request: Request) -> JSONResponse:
 
 # ── Chat proxy (OpenAI-compatible; Ollama by default) ─────────────────────────
 
+def _require_json_from_this_site(request: Request) -> None:
+    """A cookie- or address-authenticated POST must be a JSON fetch from this site.
+
+    ``request.json()`` parses any body, so without this a hostile page could send
+    the same call as a ``text/plain`` form post, which needs no CORS preflight.
+    """
+    if not re.match(r"^application/json(?:\s*;|$)", request.headers.get("content-type", ""), re.I):
+        raise HTTPException(415, "application/json required")
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(403, "cross-site requests are refused")
+
+
 @app.post("/api/app-chat")
 async def app_chat(request: Request):
     _deny_public_local_ai()
+    _require_json_from_this_site(request)
     try:
         body = await request.json()
     except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
     app_id = (body.get("app_id") or "").strip()
@@ -649,6 +689,7 @@ async def set_local_ai_profile(request: Request) -> JSONResponse:
 
 @app.get("/api/local-ai/install-plan")
 async def local_ai_install_plan() -> JSONResponse:
+    _deny_public_local_ai()
     try:
         return JSONResponse(asdict(_ollama_manager.installation_plan()))
     except OllamaOperationError as exc:
@@ -750,8 +791,13 @@ async def local_ai_diagnostics() -> JSONResponse:
 
 _SEC_HEADERS = {
     "X-Content-Type-Options": "nosniff",
-    # Apps are framed by the launcher; in public mode only by the public launcher.
-    "Content-Security-Policy": f"frame-ancestors {_PUBLIC.origin}" if _PUBLIC else "frame-ancestors *",
+    # Apps are framed by the launcher; in public mode only by the public launcher,
+    # locally only by a launcher on this computer, never by some other web page.
+    "Content-Security-Policy": f"frame-ancestors {_PUBLIC.origin}" if _PUBLIC else (
+        # CSP host-sources cannot name an IPv6 literal, so a launcher on [::1] is not listed.
+        "frame-ancestors 'self' http://127.0.0.1:* http://localhost:* "
+        "https://127.0.0.1:* https://localhost:*"
+        + "".join(f" {o}" for o in os.environ.get("APP_ENGINE_FRAME_ANCESTORS", "").split() if o)),
 }
 
 
@@ -910,6 +956,14 @@ async def api_apps_rejected(request: Request) -> JSONResponse:
                          if (APPS_DIR / item["dir"]).resolve() not in accepted])
 
 
+_LAUNCHER_CSP = ("default-src 'self'; script-src 'self' 'nonce-{nonce}'; script-src-attr 'none'; "
+                 "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; "
+                 "media-src 'self' blob: data:; connect-src 'self' http: https:; frame-src http: https:; "
+                 "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+_LAUNCHER_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                     "Referrer-Policy": "no-referrer"}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def launcher(request: Request) -> HTMLResponse:
     if not _is_launcher_host(request):
@@ -921,7 +975,12 @@ async def launcher(request: Request) -> HTMLResponse:
     html = html.replace("__APP_ENGINE_STORES_AVAILABLE__", "true" if _stores_available() else "false")
     html = html.replace("__APP_ENGINE_ROLE__", "player" if session.role == "player" else ("owner" if _PUBLIC else "local"))
     html = html.replace("__APP_ENGINE_USER__", session.name.replace("<", "").replace(">", "").replace("'", ""))
-    return HTMLResponse(html, headers={"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"})
+    # The launcher holds the owner's capability, so only its own scripts may run:
+    # the one inline block carries this response's nonce, everything else is 'self'.
+    nonce = secrets.token_urlsafe(18)
+    html = html.replace("<script>", f'<script nonce="{nonce}">')
+    return HTMLResponse(html, headers={**_LAUNCHER_HEADERS,
+                                       "Content-Security-Policy": _LAUNCHER_CSP.format(nonce=nonce)})
 
 
 # ── Owner sign-in and players (public-origin mode only) ───────────────────────
@@ -1086,6 +1145,7 @@ async def chat_read(request: Request) -> JSONResponse:
 @app.post("/api/chat")
 async def chat_post(request: Request) -> JSONResponse:
     _require_public()
+    _require_json_from_this_site(request)
     return await _chat_post(_session(request), request)
 
 

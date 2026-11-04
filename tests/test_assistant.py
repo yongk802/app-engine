@@ -59,7 +59,7 @@ def test_mcp_auth_origin_protocol_and_revocation(engine_client):
     assert result.status_code == 200, result.text
     assert result.json()['result']['protocolVersion'] == '2025-11-25'
     assert rpc(client, token, 'tools/list', Origin='https://evil.example').status_code == 403
-    assert rpc(client, token, 'tools/list', Host='evil.example').status_code == 403
+    assert rpc(client, token, 'tools/list', Host='evil.example').status_code == 421
     assert rpc(client, token, 'tools/list', **{'MCP-Protocol-Version': 'future'}).status_code == 400
     rotated = key(client, admin)
     assert rpc(client, token, 'tools/list').status_code == 401

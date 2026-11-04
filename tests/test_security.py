@@ -139,10 +139,11 @@ def test_dns_rebinding_host_cannot_reach_launcher_or_admin(tmp_path, monkeypatch
     module = load_engine(tmp_path, monkeypatch)
     hostile = {"host": "attacker.example", **_admin(module)}
     with TestClient(module.app) as client:
-        assert client.get("/", headers={"host": "attacker.example"}).status_code == 403
-        assert client.get("/api/apps", headers={"host": "attacker.example"}).status_code == 403
+        # The host gate refuses an unknown name before any route sees it.
+        assert client.get("/", headers={"host": "attacker.example"}).status_code == 421
+        assert client.get("/api/apps", headers={"host": "attacker.example"}).status_code == 421
         assert client.put("/api/local-ai/profile", json={"profile_id": "compatibility"},
-                          headers=hostile).status_code == 403
+                          headers=hostile).status_code == 421
 
 
 def test_local_ai_config_rejects_lan_and_public_endpoints(tmp_path):

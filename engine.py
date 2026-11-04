@@ -81,6 +81,7 @@ from app_engine.proxy_headers import forward_app_headers
 from app_engine.outbound_tls import OutboundTlsPolicy
 from app_engine.atrium_status import AtriumStatusProbe
 from app_engine.host_gate import LocalHostGate
+from app_engine.response_headers import JsonNosniff
 from app_engine.listener_gate import LoopbackListenerGate
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
@@ -235,6 +236,7 @@ else:
         trusted=lambda scope: _is_mtls_request(Request(scope)),
     )
 app.add_middleware(LoopbackListenerGate)
+app.add_middleware(JsonNosniff)
 
 
 def _session(request: Request) -> Session:

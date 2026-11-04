@@ -154,3 +154,15 @@ def test_local_ai_config_rejects_lan_and_public_endpoints(tmp_path):
         except InvalidEndpointError:
             continue
         raise AssertionError(f"accepted non-loopback endpoint {endpoint}")
+
+
+def test_json_api_answers_are_never_sniffed(tmp_path, monkeypatch):
+    module = load_engine(tmp_path, monkeypatch)
+    with TestClient(module.app) as client:
+        for response in (client.get("/api/apps"), client.get("/api/engine"),
+                         client.get("/api/apps/nope-not-here/health")):
+            assert response.headers["content-type"].startswith("application/json")
+            assert response.headers["x-content-type-options"] == "nosniff"
+        page = client.get("/")
+        assert page.headers["x-content-type-options"] == "nosniff"
+        assert page.headers.get_list("x-content-type-options") == ["nosniff"], "never doubled"

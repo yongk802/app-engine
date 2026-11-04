@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import threading
+import urllib.error
 import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -224,9 +225,15 @@ if int(os.environ.get("LOG_LINES", "0")):
     time.sleep(0.05)
 print("stderr-final", file=sys.stderr, flush=True)
 
+token_record = os.environ.get("TOKEN_RECORD")
+if token_record:
+    Path(token_record).write_text(os.environ["APP_PROXY_TOKEN"], encoding="utf-8")
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/health":
+        if token_record and self.headers.get("X-App-Proxy-Token") != os.environ["APP_PROXY_TOKEN"]:
+            self.send_error(403)
+        elif self.path == "/health":
             body = b"ok"
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
@@ -672,6 +679,44 @@ async def test_web_launch_assigns_a_free_port_and_reports_ready_endpoint(tmp_pat
             1,
         )
         assert response.read() == b"ok"
+    finally:
+        await manager.stop(handle.launch_id, StopReason.USER)
+
+
+@pytest.mark.asyncio
+async def test_launch_hands_the_app_a_proxy_token_and_health_presents_it(tmp_path):
+    token_record = tmp_path / "token"
+    start = CommandStep(
+        argv=(sys.executable, "server.py"),
+        environment=(
+            EnvironmentBinding(
+                "TOKEN_RECORD", EnvironmentSource.LITERAL, str(token_record)
+            ),
+            EnvironmentBinding(
+                "APP_PROXY_TOKEN", EnvironmentSource.LITERAL, "manifest-chosen"
+            ),
+        ),
+    )
+    manager = _manager(tmp_path, _manifest(tmp_path / "app", start=start))
+
+    # The app refuses any request without the token, so READY proves the
+    # health probe sent it.
+    handle = await manager.launch(_request(), approval=None)
+    try:
+        status = await manager.status(handle.launch_id)
+        assert status.state is RuntimeState.READY
+        token = token_record.read_text(encoding="utf-8")
+        assert len(token) >= 40 and token != "manifest-chosen"
+        assert status.endpoint.proxy_token == token
+        assert token not in repr(status)
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            await asyncio.to_thread(
+                urllib.request.urlopen,
+                f"http://127.0.0.1:{status.endpoint.port}/health",
+                None,
+                1,
+            )
+        assert refused.value.code == 403
     finally:
         await manager.stop(handle.launch_id, StopReason.USER)
 

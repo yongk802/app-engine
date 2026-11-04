@@ -8,6 +8,10 @@ This template is deliberately language neutral. Supply an executable named
 - `APP_INSTANCE_ID`: scoped runtime instance
 - `APP_DATA_DIR`: writable persistent data directory
 - `APP_BASE_URL`: the app's public base URL
+- `APP_PROXY_TOKEN`: a per-launch secret. The engine sends it as the
+  `X-App-Proxy-Token` header on every request it forwards, health checks
+  included; an app may refuse requests without it, so other local programs
+  cannot reach its port around the engine's login
 
 The process must listen on `127.0.0.1:$PORT`, return HTTP success from
 `GET /health`, and remain in the foreground. Keep language-specific install or

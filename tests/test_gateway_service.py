@@ -583,7 +583,9 @@ async def test_proxy_preserves_stream_status_body_and_query_but_strips_hop_heade
             stream=stream,
         )
 
-    lifecycle = _Lifecycle(TargetEndpoint("http", "localhost", 8912))
+    lifecycle = _Lifecycle(
+        TargetEndpoint("http", "localhost", 8912, proxy_token="launch-secret")
+    )
     gateway = _gateway_type()(
         catalog=_Catalog(_manifest(tmp_path, managed=True)),
         lifecycle=lifecycle,
@@ -605,6 +607,7 @@ async def test_proxy_preserves_stream_status_body_and_query_but_strips_hop_heade
                 ("X-Client-Hop", "remove-me"),
                 ("X-Client", "keep-me"),
                 ("Host", "untrusted.example"),
+                ("X-App-Proxy-Token", "forged"),
             ),
             body=_body(b"hello", b" world"),
         ),
@@ -621,6 +624,7 @@ async def test_proxy_preserves_stream_status_body_and_query_but_strips_hop_heade
     assert "keep-alive" not in upstream_headers
     assert "x-client-hop" not in upstream_headers
     assert upstream_headers["host"] == "127.0.0.1:8912"
+    assert upstream_headers["x-app-proxy-token"] == "launch-secret"
 
     response_headers = {key.lower(): value for key, value in response.headers}
     assert response_headers["content-type"] == "text/event-stream"

@@ -11,13 +11,14 @@ import os
 import stat
 import uuid
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode, urlparse
 
 import httpx
 
 from .contracts import (
+    PROXY_TOKEN_HEADER,
     AppCatalog,
     AppGateway,
     AppManifest,
@@ -250,7 +251,10 @@ class DefaultAppGateway(AppGateway):
             )
 
         url = _proxy_url(endpoint, request.path, request.query)
-        headers = forward_app_headers(_strip_hop_headers(request.headers, remove_host=True))
+        headers = _with_proxy_token(
+            forward_app_headers(_strip_hop_headers(request.headers, remove_host=True)),
+            endpoint,
+        )
         upstream_request = self._client.build_request(
             request.method,
             url,
@@ -580,9 +584,7 @@ def _normalize_loopback_endpoint(endpoint: TargetEndpoint) -> TargetEndpoint:
                 context=(("host", endpoint.host),),
             )
         host = address.compressed
-    return TargetEndpoint(
-        endpoint.scheme, host, endpoint.port, endpoint.base_path
-    )
+    return replace(endpoint, host=host)
 
 
 def _scope_key(
@@ -640,6 +642,19 @@ def _proxy_url(
     encoded_query = urlencode(query)
     suffix = f"?{encoded_query}" if encoded_query else ""
     return f"{endpoint.scheme}://{authority_host}:{endpoint.port}{base}{path}{suffix}"
+
+
+def _with_proxy_token(
+    headers: tuple[tuple[str, str], ...], endpoint: TargetEndpoint
+) -> tuple[tuple[str, str], ...]:
+    """Replace any caller-supplied proxy token with the launch's own."""
+    kept = tuple(
+        (key, value) for key, value in headers
+        if key.lower() != PROXY_TOKEN_HEADER.lower()
+    )
+    if endpoint.proxy_token is None:
+        return kept
+    return kept + ((PROXY_TOKEN_HEADER, endpoint.proxy_token),)
 
 
 def _strip_hop_headers(

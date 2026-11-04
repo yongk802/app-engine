@@ -13,6 +13,7 @@ import http.client
 import json
 import logging
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -28,6 +29,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .contracts import (
+    PROXY_TOKEN_ENV,
+    PROXY_TOKEN_HEADER,
     AppCatalog,
     AppManifest,
     ApprovalReceipt,
@@ -868,7 +871,9 @@ class ProcessLifecycleManager(LifecycleManager):
         port = self._free_port()
         data_dir, build_dir = self._runtime_dirs(plan, manifest)
         base_url = f"http://127.0.0.1:{port}/"
+        proxy_token = secrets.token_urlsafe(32)
         reserved = {
+            PROXY_TOKEN_ENV: proxy_token,
             "PORT": str(port),
             "APP_ID": str(manifest.app_id),
             "APP_INSTANCE_ID": str(plan.scope_key.instance_id or ""),
@@ -909,7 +914,9 @@ class ProcessLifecycleManager(LifecycleManager):
         record.process_group_id = (None if isinstance(process, IsolatedProcess)
                                    else process.pid)
         record.started_at = _now()
-        record.endpoint = TargetEndpoint("http", "127.0.0.1", port, "/")
+        record.endpoint = TargetEndpoint(
+            "http", "127.0.0.1", port, "/", proxy_token=proxy_token
+        )
         assert process.stdout is not None and process.stderr is not None
         record.stream_tasks = [
             asyncio.create_task(self._capture(record, "stdout", process.stdout)),
@@ -1017,7 +1024,9 @@ class ProcessLifecycleManager(LifecycleManager):
                     remediation="Check the app logs and start command.",
                 )
             try:
-                status = await asyncio.to_thread(self._health_status, url)
+                status = await asyncio.to_thread(
+                    self._health_status, url, record.endpoint.proxy_token
+                )
                 last_result = f"HTTP {status}"
                 if 200 <= status < 300:
                     return
@@ -1037,7 +1046,7 @@ class ProcessLifecycleManager(LifecycleManager):
         )
 
     @staticmethod
-    def _health_status(url: str) -> int:
+    def _health_status(url: str, proxy_token: str | None = None) -> int:
         # Use a direct socket so OS proxy discovery cannot redirect or stall
         # an engine-managed loopback health probe.
         parsed = urlsplit(url)
@@ -1048,7 +1057,8 @@ class ProcessLifecycleManager(LifecycleManager):
             path += f"?{parsed.query}"
         connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=0.2)
         try:
-            connection.request("GET", path)
+            headers = {PROXY_TOKEN_HEADER: proxy_token} if proxy_token else {}
+            connection.request("GET", path, headers=headers)
             return connection.getresponse().status
         finally:
             connection.close()

@@ -6,7 +6,7 @@ signatures independently. Concrete services live in focused sibling modules.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -377,6 +377,14 @@ class TargetEndpoint:
     host: str
     port: int
     base_path: str = "/"
+    # Per-launch secret the host sends as PROXY_TOKEN_HEADER on every
+    # forwarded request; the app reads it from PROXY_TOKEN_ENV and may refuse
+    # local callers that reach its port without going through the host.
+    proxy_token: str | None = field(default=None, repr=False, compare=False)
+
+
+PROXY_TOKEN_ENV = "APP_PROXY_TOKEN"
+PROXY_TOKEN_HEADER = "X-App-Proxy-Token"
 
 
 @dataclass(frozen=True)

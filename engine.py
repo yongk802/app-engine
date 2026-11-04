@@ -272,6 +272,13 @@ async def _runtime_authenticate(request: Request) -> HostSubject:
         r'/api/app-engine/plans/[^/]+/approve', request.url.path
     ):
         _require_owner_action(request)
+    # Studio create and manifest apply write into the apps folder, and their plan
+    # fingerprints are derivable, so a cross-site text/plain post must not reach
+    # them. Only POST can be sent cross-site without a CORS preflight, and the
+    # admin header forces one too, so those requests are already same-site.
+    if (request.method == 'POST' and gateway_request is None
+            and 'x-app-engine-admin' not in request.headers):
+        _require_json_from_this_site(request)
     match = _PLAYER_ROUTE.match(request.url.path)
     if match and match.group("app") and _PUBLIC_APPS and match.group("app") not in _PUBLIC_APPS:
         raise HTTPException(404)   # not hosted here, for anyone

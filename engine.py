@@ -929,9 +929,10 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
 
 # ── Launcher UI ───────────────────────────────────────────────────────────────
 
-def _app_listing() -> list[dict]:
+def _app_listing(discovered: dict[str, App] | None = None) -> list[dict]:
     """Discovered apps merged with managed catalog targets, without URLs."""
-    listing = {a.id: asdict(a) for a in discover().values()}
+    discovered = discover() if discovered is None else discovered
+    listing = {a.id: asdict(a) for a in discovered.values()}
     for item in _app_runtime.catalog.snapshot(_app_runtime.catalog_key).apps:
         manifest = item.manifest
         target = next(t for t in manifest.targets if t.target_id == manifest.default_target)
@@ -960,12 +961,13 @@ async def api_apps(
     if not _is_launcher_host(request):
         raise HTTPException(403, "launcher origin required")
     session = _session(request)
-    apps = [a for a in search_apps(_app_listing(), q, category) if session.may_open(a["id"])]
+    discovered = discover()   # one scan of the apps folder per request, not one per app
+    apps = [a for a in search_apps(_app_listing(discovered), q, category) if session.may_open(a["id"])]
     for a in apps:
         a["url"] = f"{_app_origin(request, a['id'])}/apps/{a['id']}/#atrium_state_token={_app_capability(session, a['id'])}"
         if _PUBLIC:
             a["chat_enabled"] = False   # Local AI is not served publicly
-        app_obj = discover().get(a["id"])
+        app_obj = discovered.get(a["id"])
         a["servers"] = list((app_obj.multiplayer or {}).get("servers", [])) if app_obj else []
     return JSONResponse(apps)
 

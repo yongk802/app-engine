@@ -134,3 +134,16 @@ def test_launcher_api_searches_and_counts_categories(tmp_path, monkeypatch):
         assert ids(client.get("/api/apps", params={"category": "ai", "q": "tiny"}).json()) == ["nano-llm"]
         counts = {c["id"]: c["count"] for c in client.get("/api/apps/categories").json()}
     assert counts["ai"] == 2 and counts["games"] == 1 and counts["security"] == 0
+
+
+def test_the_app_list_scans_the_apps_folder_once_per_request(tmp_path, monkeypatch):
+    for app in APPS:
+        make_app(tmp_path / "apps", app["id"], {**app, "icon": "x", "version": "1.0.0"})
+    module = load_engine(tmp_path, monkeypatch)
+    scans = []
+    real = module.inspect_apps
+    monkeypatch.setattr(module, "inspect_apps", lambda: scans.append(1) or real())
+    with TestClient(module.app) as client:
+        scans.clear()
+        assert ids(client.get("/api/apps").json()) == ids(APPS)
+    assert len(scans) == 1

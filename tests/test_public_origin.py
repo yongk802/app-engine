@@ -176,6 +176,7 @@ def test_everything_needs_the_owner_session_in_public_mode(tmp_path, monkeypatch
         assert client.get("https://notes.evil.example.com/apps/notes/", headers={"cookie": ok.headers["set-cookie"].split(";")[0]}).status_code == 403
         assert client.get(f"{LAUNCHER}/api/local-ai/status").status_code == 403, "Local AI never leaves the owner's computer"
         assert client.post(f"{LAUNCHER}/api/app-chat", json={"app_id": "notes", "messages": []}).status_code == 403
+        assert client.post(f"{LAUNCHER}/api/speech", json={"text": "hi"}).status_code == 403, "the read-aloud voice is the owner's own GPU"
         assert client.get(f"{LAUNCHER}/admin", follow_redirects=False).headers["location"] == "/", "signed in owners skip the form"
 
         out = client.post(f"{LAUNCHER}/admin/sign-out", follow_redirects=False)

@@ -12,6 +12,7 @@ The host<->app contract it implements (identical to Atrium's):
   GET  /api/app-state/{app_id}   -> per-app JSON blob (localStorage replacement)
   PUT  /api/app-state/{app_id}   -> persist per-app JSON blob
   POST /api/app-chat             -> SSE proxy to any OpenAI-compatible LLM
+  POST /api/speech               -> one chunk of a reply as WAV (APP_ENGINE_TTS_URL)
   GET  /apps/{file}              -> shared root files (e.g. app-state-bridge.js)
   GET  /apps/{app_id}/{path}     -> app static files, OR reverse-proxy to
                                     the app's `entry_point` backend
@@ -22,6 +23,10 @@ Config via env:
   APP_ENGINE_STATE_DIR  where per-app state JSON is stored
                         (default: ~/.config/app-engine/app-state)
   APP_ENGINE_HOST/PORT  bind address (default 127.0.0.1:8770)
+  APP_ENGINE_TTS_URL    optional Qwen3-TTS service that reads tutor replies
+                        aloud (e.g. http://192.168.1.173:8895); unset uses
+                        the browser's own voice. APP_ENGINE_TTS_VOICE picks
+                        the preset speaker.
 """
 from __future__ import annotations
 
@@ -84,6 +89,7 @@ from app_engine.runtime import DefaultAppEngineRuntime, LocalHostAdapter
 from app_engine.store_bridge import StoreBridge
 from app_engine.store_routes import create_store_router
 from app_engine.search import category_counts, search_apps
+from app_engine.speech import SpeechService, SpeechSettings, SpeechUnavailable
 from app_engine.system_probe import SystemProbe
 from app_engine.contracts import HostSubject
 
@@ -211,6 +217,8 @@ async def lifespan(_: FastAPI):
     await _ollama_manager.close()
     await _multiplayer.close()
     await _store_bridge.close()
+    if _speech:
+        await _speech.close()
 
 
 # No /docs, /redoc or /openapi.json: nothing uses them, and they hand anyone who
@@ -286,6 +294,8 @@ _config = ConfigStore(STATE_DIR)
 _probe = SystemProbe()
 _os_name = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}.get(platform.system(), platform.system().lower())
 _ollama_manager = OllamaManager(_registry, _config, os_name=_os_name)
+_speech_settings = SpeechSettings.from_env()
+_speech = SpeechService(_speech_settings) if _speech_settings else None
 
 
 def _client() -> httpx.AsyncClient:
@@ -642,6 +652,38 @@ async def app_chat(request: Request):
             await runtime.close()
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ── Read-aloud (optional Qwen3-TTS service) ──────────────────────────────────
+
+@app.get("/api/speech/status")
+async def speech_status() -> JSONResponse:
+    """Which voice the ▶ button uses: the configured service, else the browser's."""
+    _deny_public_local_ai()
+    if _speech is None:
+        return JSONResponse({"engine": "browser", "voices": []})
+    return JSONResponse({"engine": "qwen", "voice": _speech.settings.voice, "voices": await _speech.voices()})
+
+
+@app.post("/api/speech")
+async def speech(request: Request) -> Response:
+    """One chunk of a reply (at most 500 characters) rendered as WAV."""
+    _deny_public_local_ai()
+    if _speech is None:
+        return JSONResponse({"error": "no voice service configured"}, status_code=404)
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    body = body if isinstance(body, dict) else {}
+    text, voice = body.get("text"), body.get("voice")
+    if not isinstance(text, str) or not text.strip():
+        return JSONResponse({"error": "text required"}, status_code=400)
+    try:
+        audio = await _speech.synthesize(text, voice if isinstance(voice, str) else None)
+    except SpeechUnavailable as error:
+        return JSONResponse({"error": f"voice service failed: {error}"[:300]}, status_code=502)
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 # ── Local AI setup and model management ──────────────────────────────────────

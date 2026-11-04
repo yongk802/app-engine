@@ -507,7 +507,7 @@ function buildChat(app) {
 // The engine's voice service (APP_ENGINE_TTS_URL, e.g. Qwen3-TTS on a GPU box)
 // renders one chunk at a time; without one, the browser's own voice speaks.
 // One reply speaks at a time, and the speed is shared and remembered.
-/* global fetch, localStorage, URL, Audio, speechSynthesis, SpeechSynthesisUtterance */
+/* global fetch, localStorage, URL, Audio, speechSynthesis, SpeechSynthesisUtterance, confirm */
 const SPEECH_RATE_KEY='app-engine:speech-rate', SPEECH_RATES=[0.75,1,1.25,1.5,1.75,2,2.5,3];
 const speech={engine:null, rate:1, current:null};
 try{ const saved=parseFloat(localStorage.getItem(SPEECH_RATE_KEY)); if(SPEECH_RATES.includes(saved)) speech.rate=saved; }catch{}
@@ -792,6 +792,10 @@ function setupChatDock(){
 }
 // ── Players (owner of a public-origin engine) ─────────────────────────────
 async function playersRequest(path,options){ const response=await fetch(path,adminOptions(options)); if(!response.ok){ let message=`HTTP ${response.status}`; try{ message=(await response.json()).detail||message; }catch{} throw new Error(message); } return response.status===204?null:response.json(); }
+// A fresh invitation is a reset: the player's password and sessions stop working.
+function confirmReset(player){
+  return !player.has_password || confirm(`${player.name} will be signed out everywhere and their password stops working until they open the new invitation. Continue?`);
+}
 async function renderPlayers(){
   const data=await playersRequest('/admin/players',{});
   const list=$('#players-list'); list.replaceChildren();
@@ -801,9 +805,9 @@ async function renderPlayers(){
     const name=element('strong'); name.textContent=player.name+(player.name!==player.username?` (${player.username})`:''); row.append(name);
     const status=element('small'); status.textContent=player.disabled?'disabled':player.invite_pending?'invitation pending':player.has_password?(player.signed_in?'signed in':'has not signed in yet'):'invitation expired'; row.append(status);
     for(const appId of player.apps){ const tag=element('span','tag'); tag.textContent=appId; row.append(tag); }
-    const invite=element('button'); invite.textContent='New invitation'; invite.onclick=async()=>{ const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/invite`,{method:'POST'}); showInviteLink(r.invite); }; row.append(invite);
+    const invite=element('button'); invite.textContent='New invitation'; invite.onclick=async()=>{ if(!confirmReset(player))return; const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/invite`,{method:'POST'}); showInviteLink(r.invite); }; row.append(invite);
     const email=element('button'); email.textContent='Email invitation'; email.onclick=async()=>{
-      const to=prompt(`Email a fresh invitation for ${player.name} to:`); if(!to)return;
+      if(!confirmReset(player))return; const to=prompt(`Email a fresh invitation for ${player.name} to:`); if(!to)return;
       try{ const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/email`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,from_name:ENGINE_USER==='owner'?'':ENGINE_USER})});
         const box=$('#invite-link'); box.hidden=false; box.replaceChildren();
         if(r.sent){ box.textContent=`Sent to ${r.to}: "${r.subject}". Each address gets at most three invitations a day.`; }

@@ -495,7 +495,10 @@ app-engine-players list | disable rook | enable rook | reinvite rook | remove ro
 ```
 
 An invitation is a one-time link (`/join/<code>`, valid seven days) where the
-player chooses a password (stored as a salted PBKDF2 hash). A player then
+player chooses a password (stored as a salted PBKDF2 hash). A new invitation
+for an existing player (`reinvite`, **New invitation**, **Email invitation**)
+is a reset: it signs them out everywhere and voids their old password until
+they open the new link. A player then
 signs in with username and password — at `/sign-in` for the launcher on the
 server, or **from inside a game on their own computer**: games list the servers
 they know in `app.json` (`multiplayer.servers`, name + https origin), call

@@ -355,6 +355,28 @@ def test_remote_game_clients_sign_in_with_a_password_and_use_bearer_tokens(tmp_p
         assert remote.get(f"{LAUNCHER}/api/apps").status_code == 401, "the cookie surface is untouched by the remote API"
 
 
+def test_a_new_invitation_ends_the_old_password_and_sessions(tmp_path, monkeypatch):
+    make_app(tmp_path / "apps", "cards")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    owner, admin = owner_client(module)
+    created = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["cards"]}, headers=admin).json()
+    with public_client(module) as guest:
+        guest.post(created["invite"], data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
+    with TestClient(module.app, base_url="https://someones-laptop.example") as remote:
+        old = remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).json()
+        bearer = {"authorization": f"Bearer {old['token']}"}
+        assert remote.get(f"{LAUNCHER}/api/players/me", headers=bearer).status_code == 200
+
+        reinvite = owner.post(f"{LAUNCHER}/admin/players/{created['player']['id']}/invite", headers=admin)
+        assert reinvite.status_code == 200
+        assert remote.get(f"{LAUNCHER}/api/players/me", headers=bearer).status_code == 401, "old sessions end"
+        assert remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).status_code == 403, "the old password ends"
+        with public_client(module) as guest:
+            guest.post(reinvite.json()["invite"], data={"password": "a brand new phrase", "confirm": "a brand new phrase"}, follow_redirects=False)
+        assert remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "a brand new phrase"}).status_code == 200
+    owner.close()
+
+
 def test_players_cli_changes_are_seen_by_a_running_engine(tmp_path, monkeypatch, capsys):
     from app_engine.__main__ import players_main
 

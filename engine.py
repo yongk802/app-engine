@@ -671,6 +671,7 @@ async def speech(request: Request) -> Response:
     _deny_public_local_ai()
     if _speech is None:
         return JSONResponse({"error": "no voice service configured"}, status_code=404)
+    _require_json_from_this_site(request)
     try:
         body = await request.json()
     except ValueError:

@@ -73,3 +73,15 @@ def test_with_a_service_replies_are_rendered_as_wav(tmp_path, monkeypatch):
         assert spoken.content == b"RIFF-fake-wav"
         assert client.post("/api/speech", json={"text": "  "}).status_code == 400
         assert client.post("/api/speech", json=["not", "an", "object"]).status_code == 400
+
+
+def test_a_foreign_page_cannot_drive_the_voice_service(tmp_path, monkeypatch):
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_TTS_URL="http://tts")
+    seen = []
+    module._speech.client = fake_voice_service(seen)
+    body = '{"text": "Say something embarrassing."}'
+    with TestClient(module.app) as client:
+        assert client.post("/api/speech", content=body, headers={"content-type": "text/plain"}).status_code == 415
+        cross = client.post("/api/speech", content=body, headers={"content-type": "application/json", "sec-fetch-site": "cross-site"})
+        assert cross.status_code == 403
+    assert seen == [], "a refused request never reaches the voice service"

@@ -200,6 +200,23 @@ This improves consistency but is not a guarantee that every generated claim is
 correct; tutors are instructed to acknowledge when the local reference does not
 cover a question.
 
+### Reading replies aloud
+
+Every finished tutor reply has **▶ Play** and **⏸ Pause** buttons and a speed
+picker (0.75×–3×, shared by every reply and remembered). By default the
+browser's own voice reads it, so nothing leaves the computer. To use a more
+natural voice, point the engine at a Qwen3-TTS service on your network:
+
+```bash
+APP_ENGINE_TTS_URL=http://192.168.1.173:8895 APP_ENGINE_TTS_VOICE=ryan python engine.py
+```
+
+The service takes `POST /synthesize {text, voice, language}` and returns WAV
+(`GET /voices` lists the preset speakers). The launcher sends a reply one
+sentence group at a time: a short opening chunk so speech starts quickly, then
+the rest rendered ahead of playback. Speed changes keep the voice's pitch. A
+public-origin server never offers the service voice.
+
 ## The host↔app contract
 
 | Endpoint | Purpose |
@@ -214,6 +231,7 @@ cover a question.
 | `POST /api/players/sign-in` | public-origin mode: username + password → bearer token for a game running elsewhere |
 | `POST /api/players/{id}/command`, `GET …/health` | the same room commands for a signed-in player's own game client (bearer token, CORS-open) |
 | `POST /api/app-chat` | typed SSE stream to the selected local Ollama model |
+| `GET /api/speech/status`, `POST /api/speech` | read-aloud: which voice speaks (`qwen` or `browser`), and one ≤500-character chunk as WAV |
 | `GET /api/local-ai/status` | hardware recommendation, readiness, and installed model state |
 | `GET/POST /api/local-ai/*` | confirmed installation, model pull, verification, and diagnostics |
 | `GET /apps/{id}/…` | app static files, **or** reverse-proxy to the app's `entry_point` |
@@ -477,7 +495,10 @@ app-engine-players list | disable rook | enable rook | reinvite rook | remove ro
 ```
 
 An invitation is a one-time link (`/join/<code>`, valid seven days) where the
-player chooses a password (stored as a salted PBKDF2 hash). A player then
+player chooses a password (stored as a salted PBKDF2 hash). A new invitation
+for an existing player (`reinvite`, **New invitation**, **Email invitation**)
+is a reset: it signs them out everywhere and voids their old password until
+they open the new link. A player then
 signs in with username and password — at `/sign-in` for the launcher on the
 server, or **from inside a game on their own computer**: games list the servers
 they know in `app.json` (`multiplayer.servers`, name + https origin), call

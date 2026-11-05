@@ -176,6 +176,7 @@ def test_everything_needs_the_owner_session_in_public_mode(tmp_path, monkeypatch
         assert client.get("https://notes.evil.example.com/apps/notes/", headers={"cookie": ok.headers["set-cookie"].split(";")[0]}).status_code == 403
         assert client.get(f"{LAUNCHER}/api/local-ai/status").status_code == 403, "Local AI never leaves the owner's computer"
         assert client.post(f"{LAUNCHER}/api/app-chat", json={"app_id": "notes", "messages": []}).status_code == 403
+        assert client.post(f"{LAUNCHER}/api/speech", json={"text": "hi"}).status_code == 403, "the read-aloud voice is the owner's own GPU"
         assert client.get(f"{LAUNCHER}/admin", follow_redirects=False).headers["location"] == "/", "signed in owners skip the form"
 
         out = client.post(f"{LAUNCHER}/admin/sign-out", follow_redirects=False)
@@ -352,6 +353,28 @@ def test_remote_game_clients_sign_in_with_a_password_and_use_bearer_tokens(tmp_p
         assert remote.post(f"{LAUNCHER}/api/players/sign-out", headers=bearer).json()["ok"] is True
         assert remote.get(f"{LAUNCHER}/api/players/me", headers=bearer).status_code == 401, "signed out tokens die"
         assert remote.get(f"{LAUNCHER}/api/apps").status_code == 401, "the cookie surface is untouched by the remote API"
+
+
+def test_a_new_invitation_ends_the_old_password_and_sessions(tmp_path, monkeypatch):
+    make_app(tmp_path / "apps", "cards")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    owner, admin = owner_client(module)
+    created = owner.post(f"{LAUNCHER}/admin/players", json={"username": "rook", "apps": ["cards"]}, headers=admin).json()
+    with public_client(module) as guest:
+        guest.post(created["invite"], data={"password": "correct horse battery", "confirm": "correct horse battery"}, follow_redirects=False)
+    with TestClient(module.app, base_url="https://someones-laptop.example") as remote:
+        old = remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).json()
+        bearer = {"authorization": f"Bearer {old['token']}"}
+        assert remote.get(f"{LAUNCHER}/api/players/me", headers=bearer).status_code == 200
+
+        reinvite = owner.post(f"{LAUNCHER}/admin/players/{created['player']['id']}/invite", headers=admin)
+        assert reinvite.status_code == 200
+        assert remote.get(f"{LAUNCHER}/api/players/me", headers=bearer).status_code == 401, "old sessions end"
+        assert remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).status_code == 403, "the old password ends"
+        with public_client(module) as guest:
+            guest.post(reinvite.json()["invite"], data={"password": "a brand new phrase", "confirm": "a brand new phrase"}, follow_redirects=False)
+        assert remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "a brand new phrase"}).status_code == 200
+    owner.close()
 
 
 def test_players_cli_changes_are_seen_by_a_running_engine(tmp_path, monkeypatch, capsys):

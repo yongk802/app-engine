@@ -49,7 +49,11 @@ def test_store_routes_install_and_launch_through_existing_engine(tmp_path, monke
         assert 'Review installation' in page.text
         assert 'textContent' in page.text
         assert page.headers['cache-control'] == 'no-store'
-        assert page.headers['content-security-policy'] == "frame-ancestors 'none'"
+        policy = page.headers['content-security-policy']
+        assert "frame-ancestors 'none'" in policy and "script-src-attr 'none'" in policy
+        nonce = policy.split("'nonce-", 1)[1].split("'", 1)[0]
+        assert page.text.count('<script') == page.text.count(f'<script nonce="{nonce}">') == 1
+        assert nonce not in client.get('/api/app-engine/stores/ui').headers['content-security-policy'], "a fresh nonce per page"
         assert 'id="app-stores"' in client.get('/').text
         store = client.post('/api/app-engine/stores', json={'url': 'http://one.test'}, headers=headers)
         assert store.status_code == 201

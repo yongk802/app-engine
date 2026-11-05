@@ -31,6 +31,7 @@ from .contracts import (
     StopReason,
     TargetId,
 )
+from .response_headers import nonce_page
 from .runtime import DefaultAppEngineRuntime
 from .search import category_counts, search_apps
 
@@ -82,6 +83,75 @@ AuthorizeApp = Callable[[HostSubject, str], bool]
 StandingApproval = Callable[[str], bool]
 RecordApproval = Callable[[str], None]
 MayRebuild = Callable[[Request], bool]
+
+
+async def _json_object(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "the request body must be a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "the request body must be a JSON object")
+    return payload
+
+
+def _field(payload: dict, key: str) -> str:
+    if key not in payload:
+        raise HTTPException(400, detail={"code": "invalid_request", "message": f"missing {key}"})
+    return str(payload[key])
+
+
+def _refused(exc: AppEngineError) -> HTTPException:
+    return HTTPException(400, detail={"code": exc.code, "message": str(exc)})
+
+
+async def _studio(call: Awaitable):
+    """Await a studio operation; a refused change is a 400, not a crash."""
+    try:
+        return await call
+    except AppEngineError as exc:
+        raise _refused(exc) from exc
+
+
+def _project(payload: dict, subject: HostSubject) -> CreateProjectRequest:
+    return CreateProjectRequest(
+        subject=subject,
+        root=Path(_field(payload, "root")),
+        directory_name=_field(payload, "directory_name"),
+        template_id=_field(payload, "template_id"),
+        app_id=AppId(_field(payload, "app_id")),
+        label=_field(payload, "label"),
+        icon=_field(payload, "icon"),
+    )
+
+
+def _manifest_change(payload: dict, subject: HostSubject) -> ManifestChange:
+    return ManifestChange(
+        subject=subject,
+        app_root=Path(_field(payload, "app_root")),
+        content=_field(payload, "content"),
+    )
+
+
+async def _configuration_form(runtime, subject: HostSubject, app_id: str):
+    try:
+        return await runtime.studio.configuration_form(subject, AppId(app_id))
+    except AppEngineError as exc:
+        raise HTTPException(404, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+def _configuration_values(payload: dict) -> tuple[ConfigurationValue, ...]:
+    items = payload.get("values", ())
+    if not isinstance(items, list) or not all(isinstance(item, dict) and "key" in item for item in items):
+        raise HTTPException(400, "values must be a list of objects with a key")
+    return tuple(
+        ConfigurationValue(
+            key=str(item["key"]),
+            value=str(item.get("value", "")),
+            secret=bool(item.get("secret", False)),
+        )
+        for item in items
+    )
 
 
 def create_app_engine_router(
@@ -355,24 +425,8 @@ def create_app_engine_router(
 
     @router.post("/studio/create/preview")
     async def studio_create_preview(request: Request, subject: HostSubject = Depends(authenticate)):
-        payload = await request.json()
-        project = CreateProjectRequest(
-            subject=subject,
-            root=Path(str(payload["root"])),
-            directory_name=str(payload["directory_name"]),
-            template_id=str(payload["template_id"]),
-            app_id=AppId(str(payload["app_id"])),
-            label=str(payload["label"]),
-            icon=str(payload["icon"]),
-        )
-        try:
-            plan = await runtime.studio.preview_create(project)
-        except (AppEngineError, KeyError) as exc:
-            if isinstance(exc, AppEngineError):
-                detail = {"code": exc.code, "message": str(exc)}
-            else:
-                detail = {"code": "invalid_request", "message": f"missing {exc.args[0]}"}
-            raise HTTPException(400, detail=detail) from exc
+        payload = await _json_object(request)
+        plan = await _studio(runtime.studio.preview_create(_project(payload, subject)))
         return {
             "fingerprint": str(plan.fingerprint),
             "destination": str(plan.destination),
@@ -385,35 +439,22 @@ def create_app_engine_router(
 
     @router.post("/studio/create")
     async def studio_create(request: Request, subject: HostSubject = Depends(authenticate)):
-        payload = await request.json()
-        project = CreateProjectRequest(
-            subject=subject,
-            root=Path(str(payload["root"])),
-            directory_name=str(payload["directory_name"]),
-            template_id=str(payload["template_id"]),
-            app_id=AppId(str(payload["app_id"])),
-            label=str(payload["label"]),
-            icon=str(payload["icon"]),
-        )
+        payload = await _json_object(request)
         try:
             created = await runtime.studio.create(
-                project, PlanFingerprint(str(payload["accepted_plan"]))
+                _project(payload, subject), PlanFingerprint(_field(payload, "accepted_plan"))
             )
             await runtime.catalog.refresh(runtime.catalog_key)
-        except (AppEngineError, KeyError) as exc:
-            detail = {"code": getattr(exc, "code", "invalid_request"), "message": str(exc)}
-            raise HTTPException(400, detail=detail) from exc
+        except AppEngineError as exc:
+            raise _refused(exc) from exc
         return {"root": str(created.root), "app_id": str(created.manifest.app_id)}
 
     @router.post("/studio/import")
     async def studio_import(request: Request, subject: HostSubject = Depends(authenticate)):
-        payload = await request.json()
-        try:
-            proposal = await runtime.studio.inspect_import(
-                Path(str(payload["path"])), subject=subject
-            )
-        except (AppEngineError, KeyError) as exc:
-            raise HTTPException(400, detail={"code": getattr(exc, "code", "invalid_request"), "message": str(exc)}) from exc
+        payload = await _json_object(request)
+        proposal = await _studio(runtime.studio.inspect_import(
+            Path(_field(payload, "path")), subject=subject
+        ))
         return {
             "root": str(proposal.root),
             "fingerprint": str(proposal.fingerprint),
@@ -427,13 +468,8 @@ def create_app_engine_router(
 
     @router.post("/studio/manifest/preview")
     async def studio_manifest_preview(request: Request, subject: HostSubject = Depends(authenticate)):
-        payload = await request.json()
-        change = ManifestChange(
-            subject=subject,
-            app_root=Path(str(payload["app_root"])),
-            content=str(payload["content"]),
-        )
-        plan = await runtime.studio.preview_manifest(change)
+        payload = await _json_object(request)
+        plan = await _studio(runtime.studio.preview_manifest(_manifest_change(payload, subject)))
         return {
             "fingerprint": str(plan.fingerprint),
             "valid": plan.inspection.manifest is not None,
@@ -443,19 +479,14 @@ def create_app_engine_router(
 
     @router.post("/studio/manifest/apply")
     async def studio_manifest_apply(request: Request, subject: HostSubject = Depends(authenticate)):
-        payload = await request.json()
-        change = ManifestChange(
-            subject=subject,
-            app_root=Path(str(payload["app_root"])),
-            content=str(payload["content"]),
-        )
+        payload = await _json_object(request)
         try:
             inspection = await runtime.studio.apply_manifest(
-                change, PlanFingerprint(str(payload["accepted_plan"]))
+                _manifest_change(payload, subject), PlanFingerprint(_field(payload, "accepted_plan"))
             )
             await runtime.catalog.refresh(runtime.catalog_key)
         except AppEngineError as exc:
-            raise HTTPException(400, detail={"code": exc.code, "message": str(exc)}) from exc
+            raise _refused(exc) from exc
         return {
             "valid": inspection.manifest is not None,
             "errors": [asdict(item) for item in inspection.errors],
@@ -464,7 +495,7 @@ def create_app_engine_router(
 
     @router.get("/apps/{app_id}/configuration")
     async def configuration_form(app_id: str, subject: HostSubject = Depends(authenticate)):
-        form = await runtime.studio.configuration_form(subject, AppId(app_id))
+        form = await _configuration_form(runtime, subject, app_id)
         return {
             "app_id": str(form.app_id),
             "fields": [
@@ -483,24 +514,16 @@ def create_app_engine_router(
 
     @router.put("/apps/{app_id}/configuration")
     async def save_configuration(app_id: str, request: Request, subject: HostSubject = Depends(authenticate)):
-        await runtime.studio.configuration_form(subject, AppId(app_id))
-        payload = await request.json()
-        values = tuple(
-            ConfigurationValue(
-                key=str(item["key"]),
-                value=str(item.get("value", "")),
-                secret=bool(item.get("secret", False)),
-            )
-            for item in payload.get("values", ())
-        )
-        result = await runtime.studio.save_configuration(subject, values)
+        await _configuration_form(runtime, subject, app_id)
+        values = _configuration_values(await _json_object(request))
+        result = await _studio(runtime.studio.save_configuration(subject, values))
         return {"app_id": str(result.app_id), "saved_keys": list(result.saved_keys)}
 
     @router.get("/studio/", response_class=HTMLResponse)
     async def studio_ui(subject: HostSubject = Depends(authenticate)):
         del subject
-        html = files("app_engine").joinpath("studio/index.html").read_text("utf-8")
-        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+        html, page_headers = nonce_page(files("app_engine").joinpath("studio/index.html").read_text("utf-8"))
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache", **page_headers})
 
     return router
 

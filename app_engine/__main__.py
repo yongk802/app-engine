@@ -66,7 +66,7 @@ def players_main(argv: list[str] | None = None) -> int:
     invite.add_argument("--username", required=True)
     invite.add_argument("--name", default=None, help="display name (defaults to the username)")
     invite.add_argument("--apps", default="", help="comma-separated app ids the player may open")
-    reinvite = commands.add_parser("reinvite", help="print a fresh invitation link for an existing player (lets them set a new password)")
+    reinvite = commands.add_parser("reinvite", help="print a fresh invitation link for an existing player; signs them out and voids their old password")
     reinvite.add_argument("username")
     email = commands.add_parser("email", help="print the invitation email for a player (a fresh link inside), ready to paste into your mail program")
     email.add_argument("username")

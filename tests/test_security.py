@@ -154,3 +154,37 @@ def test_local_ai_config_rejects_lan_and_public_endpoints(tmp_path):
         except InvalidEndpointError:
             continue
         raise AssertionError(f"accepted non-loopback endpoint {endpoint}")
+
+
+def test_json_api_answers_are_never_sniffed(tmp_path, monkeypatch):
+    module = load_engine(tmp_path, monkeypatch)
+    with TestClient(module.app) as client:
+        for response in (client.get("/api/apps"), client.get("/api/engine"),
+                         client.get("/api/apps/nope-not-here/health")):
+            assert response.headers["content-type"].startswith("application/json")
+            assert response.headers["x-content-type-options"] == "nosniff"
+        page = client.get("/")
+        assert page.headers["x-content-type-options"] == "nosniff"
+        assert page.headers.get_list("x-content-type-options") == ["nosniff"], "never doubled"
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/api/app-engine/studio/create/preview"),
+    ("POST", "/api/app-engine/studio/create"),
+    ("POST", "/api/app-engine/studio/import"),
+    ("POST", "/api/app-engine/studio/manifest/preview"),
+    ("POST", "/api/app-engine/studio/manifest/apply"),
+])
+def test_studio_answers_malformed_requests_with_400_not_a_crash(tmp_path, monkeypatch, method, path):
+    module = load_engine(tmp_path, monkeypatch)
+    with TestClient(module.app, raise_server_exceptions=False) as client:
+        for body in ({}, {"root": "x"}, ["a", "list"], "not json"):
+            kwargs = {"content": body, "headers": {"content-type": "application/json"}} if isinstance(body, str) else {"json": body}
+            assert client.request(method, path, **kwargs).status_code == 400, (path, body)
+
+
+def test_configuration_of_an_unknown_app_is_404_not_a_crash(tmp_path, monkeypatch):
+    module = load_engine(tmp_path, monkeypatch)
+    with TestClient(module.app, raise_server_exceptions=False) as client:
+        assert client.get("/api/app-engine/apps/nope/configuration").status_code == 404
+        assert client.put("/api/app-engine/apps/nope/configuration", json={"values": []}).status_code == 404

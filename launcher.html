@@ -73,6 +73,10 @@
   .msg { padding:8px 11px; border-radius:10px; font-size:13px; line-height:1.45; max-width:92%; white-space:pre-wrap; }
   .msg.user { align-self:flex-end; background:var(--blue); color:#fff; } .msg.assistant { align-self:flex-start; background:#1e2430; }
   .msg.error { background:#3b1d1d; color:#fca5a5; }
+  .speak { display:flex; align-items:center; gap:6px; margin-top:-2px; font-size:12px; color:var(--muted); }
+  .speak button { background:#1e2430; color:#e6e6e6; border:1px solid #2b323f; border-radius:7px; padding:3px 9px; font-size:12px; cursor:pointer; }
+  .speak button[aria-pressed="true"] { border-color:var(--blue); color:#fff; }
+  .speak select { background:#0d1016; color:#e6e6e6; border:1px solid #2b323f; border-radius:7px; padding:2px 4px; font-size:12px; }
   .setup-card { margin:auto 0; border:1px solid #354052; border-radius:12px; padding:16px; background:#181d27; }
   .setup-card h2 { margin:0 0 8px; font-size:17px; } .setup-card p { color:#aeb7c4; font-size:13px; line-height:1.45; }
   .primary { border:0; border-radius:8px; background:var(--blue); color:#fff; padding:9px 12px; }
@@ -490,13 +494,110 @@ function buildChat(app) {
           else if(event.type==='setup_required'){ ai.textContent='Local AI setup is required.'; ai.classList.add('error'); }
           else if(event.type==='error'){ ai.textContent='⚠️ '+(event.error||event.message); ai.classList.add('error'); }
         } if(done)break; }
-      if(full) messages.push({role:'assistant',content:full});
+      if(full) { messages.push({role:'assistant',content:full}); if(!ai.classList.contains('error')) ai.after(speakControls(full)); msgs.scrollTop=msgs.scrollHeight; }
     } catch(error){ ai.textContent='⚠️ connection failed: '+error.message; ai.classList.add('error'); }
     finally { chatBusy=false; send.disabled=ta.disabled=false; ta.focus(); if(pendingReadinessRefresh){pendingReadinessRefresh=false; refreshChatReadiness();} }
   }
   send.onclick=ask; ta.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}};
   window.addEventListener('local-ai-status-changed',()=>{ if(chatBusy) pendingReadinessRefresh=true; else refreshChatReadiness(); });
   refreshChatReadiness(); return panel;
+}
+
+// ── Read-aloud: ▶ and ⏸ under each finished tutor reply ──────────────────────
+// The engine's voice service (APP_ENGINE_TTS_URL, e.g. Qwen3-TTS on a GPU box)
+// renders one chunk at a time; without one, the browser's own voice speaks.
+// One reply speaks at a time, and the speed is shared and remembered.
+/* global fetch, localStorage, URL, Audio, speechSynthesis, SpeechSynthesisUtterance, confirm */
+const SPEECH_RATE_KEY='app-engine:speech-rate', SPEECH_RATES=[0.75,1,1.25,1.5,1.75,2,2.5,3];
+const speech={engine:null, rate:1, current:null};
+try{ const saved=parseFloat(localStorage.getItem(SPEECH_RATE_KEY)); if(SPEECH_RATES.includes(saved)) speech.rate=saved; }catch{}
+
+function speechChunks(text, first=100, max=400) {
+  const clean=String(text).replace(/```[\s\S]*?```/g,' ').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/[*_`#>~|\[\]]/g,'').replace(/\s+/g,' ').trim();
+  const chunks=[]; let current='';
+  for(let sentence of clean.match(/[^.!?…]+(?:[.!?…]+["')\]]*|$)/g)||[]) {
+    sentence=sentence.trim(); if(!sentence) continue;
+    while(sentence.length>max){ const cut=sentence.lastIndexOf(' ',max)>0?sentence.lastIndexOf(' ',max):max; if(current){chunks.push(current);current='';} chunks.push(sentence.slice(0,cut).trim()); sentence=sentence.slice(cut).trim(); }
+    const limit=Math.min(max, first*2**chunks.length); // 100, 200, 400: each arrives sooner
+    if(current && (current+' '+sentence).length>limit){ chunks.push(current); current=sentence; } else current=current?current+' '+sentence:sentence;
+  }
+  if(current) chunks.push(current);
+  return chunks;
+}
+
+async function speechEngine() {
+  if(!speech.engine){ try{ const r=await fetch('/api/speech/status'); speech.engine=r.ok?(await r.json()).engine:'browser'; }catch{ speech.engine='browser'; } }
+  return speech.engine;
+}
+
+function setSpeechRate(rate) {
+  speech.rate=rate; try{ localStorage.setItem(SPEECH_RATE_KEY,String(rate)); }catch{}
+  document.querySelectorAll('.speak select').forEach(s=>{ s.value=String(rate); });
+  speech.current?.rateChanged();
+}
+
+// One reply's reader: the opening chunk renders alone so speech starts soon, then
+// the rest render ahead of playback two at a time (the voice service is slower
+// than real time, and two requests share the GPU better than one). Rendered
+// chunks are kept, so pausing and replaying cost nothing.
+function replyReader(text, onState) {
+  const chunks=speechChunks(text), audio=[], ready=[]; let index=0, player=null, playing=false, paused=false, useBrowser=false;
+  const render=i=>audio[i]||(audio[i]=fetch('/api/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:chunks[i]})})
+    .then(r=>{ if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); }).then(b=>{ ready[i]=true; return URL.createObjectURL(b); }));
+  let next=0, workers=0;
+  const renderAhead=()=>{ next=Math.max(next,index); while(workers<2&&next<chunks.length&&playing){ const i=next++; workers++; render(i).catch(()=>{}).finally(()=>{ workers--; renderAhead(); }); } };
+  function finish(){ playing=paused=false; index=0; player=null; onState('idle'); if(speech.current===reader) speech.current=null; }
+  function speakBrowser(){
+    if(!('speechSynthesis' in window)){ onState('error','This browser cannot speak.'); finish(); return; }
+    speechSynthesis.cancel();
+    const next=()=>{ if(!playing) return; if(index>=chunks.length){ finish(); return; }
+      const u=new SpeechSynthesisUtterance(chunks[index]); u.rate=speech.rate; u.onend=()=>{ index++; next(); }; u.onerror=e=>{ if(e.error!=='interrupted'&&e.error!=='canceled'){ onState('error','Speech failed.'); finish(); } };
+      speechSynthesis.speak(u); };
+    next();
+  }
+  async function playChunk(){
+    if(!playing) return; if(index>=chunks.length){ finish(); return; }
+    let url; player=null; if(!paused) onState(ready[index]?'playing':'loading');
+    try{ url=await render(index); }catch(error){ audio[index]=null; if(index===0){ useBrowser=true; onState('playing'); speakBrowser(); return; } onState('error','Voice service failed: '+error.message); finish(); return; }
+    if(!playing) return;
+    player=new Audio(url); player.preservesPitch=true; player.playbackRate=speech.rate;
+    player.onended=()=>{ index++; playChunk(); };
+    renderAhead(); if(paused){ onState('paused'); return; }
+    onState('playing');
+    try{ await player.play(); }catch(error){ onState('error','Playback blocked: '+error.message); finish(); }
+  }
+  const reader={
+    async play(){
+      if(speech.current&&speech.current!==reader) speech.current.stop();
+      speech.current=reader;
+      if(playing){ // resume a paused reply
+        if(!paused) return; paused=false;
+        if(useBrowser) speechSynthesis.resume(); else if(player) player.play(); else { onState('loading'); return; }
+        onState('playing'); return;
+      }
+      playing=true; useBrowser=(await speechEngine())!=='qwen';
+      if(useBrowser){ onState('playing'); speakBrowser(); } else playChunk();
+    },
+    pause(){ if(!playing||paused) return; paused=true; if(useBrowser) speechSynthesis.pause(); else player?.pause(); onState('paused'); },
+    stop(){ const was=playing; playing=false; if(useBrowser&&was) speechSynthesis.cancel(); player?.pause(); finish(); },
+    rateChanged(){ if(player) player.playbackRate=speech.rate; },
+  };
+  return reader;
+}
+
+function speakControls(text) {
+  const row=element('div','speak'); row.setAttribute('role','group'); row.setAttribute('aria-label','Read this reply aloud');
+  const play=element('button','', '▶ Play'), pause=element('button','', '⏸ Pause'), status=element('span','');
+  play.type=pause.type='button'; play.setAttribute('aria-label','Play this reply aloud'); pause.setAttribute('aria-label','Pause reading');
+  const rate=document.createElement('select'); rate.setAttribute('aria-label','Reading speed'); rate.title='Reading speed';
+  for(const r of SPEECH_RATES){ const o=element('option','',r+'×'); o.value=String(r); rate.append(o); }
+  rate.value=String(speech.rate); rate.onchange=()=>setSpeechRate(parseFloat(rate.value));
+  const reader=replyReader(text,(state,note)=>{
+    play.setAttribute('aria-pressed',String(state==='playing'||state==='loading')); pause.setAttribute('aria-pressed',String(state==='paused'));
+    status.textContent=state==='loading'?'Preparing voice…':state==='error'?note:'';
+  });
+  play.onclick=()=>reader.play(); pause.onclick=()=>reader.pause();
+  row.append(play,pause,rate,status); return row;
 }
 
 async function fetchAIStatus(){ const response=await fetch('/api/local-ai/status'); if(!response.ok)throw new Error(`HTTP ${response.status}`); state.ai=await response.json(); return state.ai; }
@@ -691,6 +792,10 @@ function setupChatDock(){
 }
 // ── Players (owner of a public-origin engine) ─────────────────────────────
 async function playersRequest(path,options){ const response=await fetch(path,adminOptions(options)); if(!response.ok){ let message=`HTTP ${response.status}`; try{ message=(await response.json()).detail||message; }catch{} throw new Error(message); } return response.status===204?null:response.json(); }
+// A fresh invitation is a reset: the player's password and sessions stop working.
+function confirmReset(player){
+  return !player.has_password || confirm(`${player.name} will be signed out everywhere and their password stops working until they open the new invitation. Continue?`);
+}
 async function renderPlayers(){
   const data=await playersRequest('/admin/players',{});
   const list=$('#players-list'); list.replaceChildren();
@@ -700,9 +805,9 @@ async function renderPlayers(){
     const name=element('strong'); name.textContent=player.name+(player.name!==player.username?` (${player.username})`:''); row.append(name);
     const status=element('small'); status.textContent=player.disabled?'disabled':player.invite_pending?'invitation pending':player.has_password?(player.signed_in?'signed in':'has not signed in yet'):'invitation expired'; row.append(status);
     for(const appId of player.apps){ const tag=element('span','tag'); tag.textContent=appId; row.append(tag); }
-    const invite=element('button'); invite.textContent='New invitation'; invite.onclick=async()=>{ const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/invite`,{method:'POST'}); showInviteLink(r.invite); }; row.append(invite);
+    const invite=element('button'); invite.textContent='New invitation'; invite.onclick=async()=>{ if(!confirmReset(player))return; const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/invite`,{method:'POST'}); showInviteLink(r.invite); }; row.append(invite);
     const email=element('button'); email.textContent='Email invitation'; email.onclick=async()=>{
-      const to=prompt(`Email a fresh invitation for ${player.name} to:`); if(!to)return;
+      if(!confirmReset(player))return; const to=prompt(`Email a fresh invitation for ${player.name} to:`); if(!to)return;
       try{ const r=await playersRequest(`/admin/players/${encodeURIComponent(player.id)}/email`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,from_name:ENGINE_USER==='owner'?'':ENGINE_USER})});
         const box=$('#invite-link'); box.hidden=false; box.replaceChildren();
         if(r.sent){ box.textContent=`Sent to ${r.to}: "${r.subject}". Each address gets at most three invitations a day.`; }

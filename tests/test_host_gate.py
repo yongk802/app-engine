@@ -1,5 +1,7 @@
 """Loopback mode answers only to local host names, and its unauthenticated POSTs need a JSON fetch."""
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -98,3 +100,21 @@ def test_api_docs_are_not_published(tmp_path, monkeypatch):
     with TestClient(module.app) as client:
         for path in ("/docs", "/redoc", "/openapi.json"):
             assert client.get(path).status_code == 404, path
+
+
+def test_studio_writes_refuse_a_form_post_from_another_page(tmp_path, monkeypatch):
+    """Studio create's plan fingerprint is derivable, so a foreign page could replay it."""
+    module = load_engine(tmp_path, monkeypatch)
+    with TestClient(module.app) as client:
+        roots = client.get("/api/app-engine/studio/roots").json()
+        project = {"root": roots[0]["root"], "directory_name": "planted", "template_id": "static-web",
+                   "app_id": "planted", "label": "Planted", "icon": "P"}
+        plan = client.post("/api/app-engine/studio/create/preview", json=project).json()
+        body = {**project, "accepted_plan": plan["fingerprint"]}
+        for path, payload in (("/api/app-engine/studio/create", body),
+                              ("/api/app-engine/studio/manifest/apply", {"app_root": "x", "content": "{}", "accepted_plan": "y"})):
+            assert client.post(path, content=json.dumps(payload), headers={"content-type": "text/plain"}).status_code == 415, path
+            cross = client.post(path, json=payload, headers={"sec-fetch-site": "cross-site"})
+            assert cross.status_code == 403, path
+        assert not (tmp_path / "apps" / "planted").exists()
+        assert client.post("/api/app-engine/studio/create", json=body).status_code == 200, "the studio page itself still creates"

@@ -12,6 +12,7 @@ The host<->app contract it implements (identical to Atrium's):
   GET  /api/app-state/{app_id}   -> per-app JSON blob (localStorage replacement)
   PUT  /api/app-state/{app_id}   -> persist per-app JSON blob
   POST /api/app-chat             -> SSE proxy to any OpenAI-compatible LLM
+  POST /api/speech               -> one chunk of a reply as WAV (APP_ENGINE_TTS_URL)
   GET  /apps/{file}              -> shared root files (e.g. app-state-bridge.js)
   GET  /apps/{app_id}/{path}     -> app static files, OR reverse-proxy to
                                     the app's `entry_point` backend
@@ -22,6 +23,10 @@ Config via env:
   APP_ENGINE_STATE_DIR  where per-app state JSON is stored
                         (default: ~/.config/app-engine/app-state)
   APP_ENGINE_HOST/PORT  bind address (default 127.0.0.1:8770)
+  APP_ENGINE_TTS_URL    optional Qwen3-TTS service that reads tutor replies
+                        aloud (e.g. http://192.168.1.173:8895); unset uses
+                        the browser's own voice. APP_ENGINE_TTS_VOICE picks
+                        the preset speaker.
 """
 from __future__ import annotations
 
@@ -76,6 +81,7 @@ from app_engine.proxy_headers import forward_app_headers
 from app_engine.outbound_tls import OutboundTlsPolicy
 from app_engine.atrium_status import AtriumStatusProbe
 from app_engine.host_gate import LocalHostGate
+from app_engine.response_headers import JsonNosniff
 from app_engine.listener_gate import LoopbackListenerGate
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
@@ -84,6 +90,7 @@ from app_engine.runtime import DefaultAppEngineRuntime, LocalHostAdapter
 from app_engine.store_bridge import StoreBridge
 from app_engine.store_routes import create_store_router
 from app_engine.search import category_counts, search_apps
+from app_engine.speech import SpeechService, SpeechSettings, SpeechUnavailable
 from app_engine.system_probe import SystemProbe
 from app_engine.contracts import HostSubject
 
@@ -211,6 +218,8 @@ async def lifespan(_: FastAPI):
     await _ollama_manager.close()
     await _multiplayer.close()
     await _store_bridge.close()
+    if _speech:
+        await _speech.close()
 
 
 # No /docs, /redoc or /openapi.json: nothing uses them, and they hand anyone who
@@ -227,6 +236,7 @@ else:
         trusted=lambda scope: _is_mtls_request(Request(scope)),
     )
 app.add_middleware(LoopbackListenerGate)
+app.add_middleware(JsonNosniff)
 
 
 def _session(request: Request) -> Session:
@@ -262,6 +272,13 @@ async def _runtime_authenticate(request: Request) -> HostSubject:
         r'/api/app-engine/plans/[^/]+/approve', request.url.path
     ):
         _require_owner_action(request)
+    # Studio create and manifest apply write into the apps folder, and their plan
+    # fingerprints are derivable, so a cross-site text/plain post must not reach
+    # them. Only POST can be sent cross-site without a CORS preflight, and the
+    # admin header forces one too, so those requests are already same-site.
+    if (request.method == 'POST' and gateway_request is None
+            and 'x-app-engine-admin' not in request.headers):
+        _require_json_from_this_site(request)
     match = _PLAYER_ROUTE.match(request.url.path)
     if match and match.group("app") and _PUBLIC_APPS and match.group("app") not in _PUBLIC_APPS:
         raise HTTPException(404)   # not hosted here, for anyone
@@ -286,6 +303,8 @@ _config = ConfigStore(STATE_DIR)
 _probe = SystemProbe()
 _os_name = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}.get(platform.system(), platform.system().lower())
 _ollama_manager = OllamaManager(_registry, _config, os_name=_os_name)
+_speech_settings = SpeechSettings.from_env()
+_speech = SpeechService(_speech_settings) if _speech_settings else None
 
 
 def _client() -> httpx.AsyncClient:
@@ -644,6 +663,39 @@ async def app_chat(request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+# ── Read-aloud (optional Qwen3-TTS service) ──────────────────────────────────
+
+@app.get("/api/speech/status")
+async def speech_status() -> JSONResponse:
+    """Which voice the ▶ button uses: the configured service, else the browser's."""
+    _deny_public_local_ai()
+    if _speech is None:
+        return JSONResponse({"engine": "browser", "voices": []})
+    return JSONResponse({"engine": "qwen", "voice": _speech.settings.voice, "voices": await _speech.voices()})
+
+
+@app.post("/api/speech")
+async def speech(request: Request) -> Response:
+    """One chunk of a reply (at most 500 characters) rendered as WAV."""
+    _deny_public_local_ai()
+    if _speech is None:
+        return JSONResponse({"error": "no voice service configured"}, status_code=404)
+    _require_json_from_this_site(request)
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    body = body if isinstance(body, dict) else {}
+    text, voice = body.get("text"), body.get("voice")
+    if not isinstance(text, str) or not text.strip():
+        return JSONResponse({"error": "text required"}, status_code=400)
+    try:
+        audio = await _speech.synthesize(text, voice if isinstance(voice, str) else None)
+    except SpeechUnavailable as error:
+        return JSONResponse({"error": f"voice service failed: {error}"[:300]}, status_code=502)
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
 # ── Local AI setup and model management ──────────────────────────────────────
 
 @app.get("/api/local-ai/status")
@@ -886,9 +938,10 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
 
 # ── Launcher UI ───────────────────────────────────────────────────────────────
 
-def _app_listing() -> list[dict]:
+def _app_listing(discovered: dict[str, App] | None = None) -> list[dict]:
     """Discovered apps merged with managed catalog targets, without URLs."""
-    listing = {a.id: asdict(a) for a in discover().values()}
+    discovered = discover() if discovered is None else discovered
+    listing = {a.id: asdict(a) for a in discovered.values()}
     for item in _app_runtime.catalog.snapshot(_app_runtime.catalog_key).apps:
         manifest = item.manifest
         target = next(t for t in manifest.targets if t.target_id == manifest.default_target)
@@ -917,12 +970,13 @@ async def api_apps(
     if not _is_launcher_host(request):
         raise HTTPException(403, "launcher origin required")
     session = _session(request)
-    apps = [a for a in search_apps(_app_listing(), q, category) if session.may_open(a["id"])]
+    discovered = discover()   # one scan of the apps folder per request, not one per app
+    apps = [a for a in search_apps(_app_listing(discovered), q, category) if session.may_open(a["id"])]
     for a in apps:
         a["url"] = f"{_app_origin(request, a['id'])}/apps/{a['id']}/#atrium_state_token={_app_capability(session, a['id'])}"
         if _PUBLIC:
             a["chat_enabled"] = False   # Local AI is not served publicly
-        app_obj = discover().get(a["id"])
+        app_obj = discovered.get(a["id"])
         a["servers"] = list((app_obj.multiplayer or {}).get("servers", [])) if app_obj else []
     return JSONResponse(apps)
 

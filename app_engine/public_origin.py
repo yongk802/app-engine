@@ -356,10 +356,14 @@ class Accounts:
         return code
 
     def regenerate_invite(self, player_id: str) -> str | None:
+        """A fresh invitation is a reset: the old password and every session stop working,
+        so a re-invite also locks out whoever had the player's password or device."""
         self.refresh()
         player = self._player(player_id)
         if player is None:
             return None
+        player["password_hash"] = None
+        player["sessions"] = []
         code = self._new_invite(player)
         self.save()
         return code

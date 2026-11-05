@@ -91,12 +91,15 @@ def test_wheel_contains_importable_modules_and_standalone_assets(tmp_path):
     assert not any("multiplayer/test/" in name for name in names), "host test fixtures stay out of the wheel"
 
     install_dir = tmp_path / "installed"
+    # uv, like the build above: a uv-made venv has no pip of its own.
     install = subprocess.run(
         [
-            sys.executable,
-            "-m",
+            "uv",
             "pip",
             "install",
+            "--offline",
+            "--python",
+            sys.executable,
             "--no-deps",
             "--target",
             str(install_dir),

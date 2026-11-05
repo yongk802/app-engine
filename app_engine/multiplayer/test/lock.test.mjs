@@ -16,6 +16,7 @@ const start=(dir,{stdin='ignore',env={}}={})=>new Promise((resolve,reject)=>{
  let out='',err='';
  child.stdout.on('data',d=>{out+=d;if(/listening on /.test(out))resolve(child);});
  child.stderr.on('data',d=>{err+=d;});
+ child.output=()=>({stdout:out,stderr:err,code:child.exitCode,signal:child.signalCode});
  child.on('exit',code=>reject(new Error(`exited ${code}: ${err.trim()}`)));
 });
 const exited=child=>child.exitCode!==null||child.signalCode!==null?Promise.resolve(child.exitCode):new Promise(r=>child.once('exit',r));
@@ -34,7 +35,7 @@ test('a second service on the same data directory is refused while the first liv
   assert.equal(JSON.parse(await readFile(join(dir,LOCK_FILE),'utf8')).pid,third.pid,'a dead holder is taken over');
   third.kill('SIGTERM');await exited(third);
   // Windows has no SIGTERM handler: kill() terminates outright, and the dead-pid takeover above covers it.
-  if(process.platform!=='win32')assert.ok(!existsSync(join(dir,LOCK_FILE)),'a clean stop releases the lock');
+  if(process.platform!=='win32')assert.ok(!existsSync(join(dir,LOCK_FILE)),`a clean stop releases the lock: ${JSON.stringify(third.output())}`);
  }finally{first?.kill('SIGKILL');third?.kill('SIGKILL');await rm(dir,{recursive:true,force:true});}
 });
 

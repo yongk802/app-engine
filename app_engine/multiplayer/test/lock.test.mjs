@@ -33,7 +33,8 @@ test('a second service on the same data directory is refused while the first liv
   third=await start(dir);
   assert.equal(JSON.parse(await readFile(join(dir,LOCK_FILE),'utf8')).pid,third.pid,'a dead holder is taken over');
   third.kill('SIGTERM');await exited(third);
-  assert.ok(!existsSync(join(dir,LOCK_FILE)),'a clean stop releases the lock');
+  // Windows has no SIGTERM handler: kill() terminates outright, and the dead-pid takeover above covers it.
+  if(process.platform!=='win32')assert.ok(!existsSync(join(dir,LOCK_FILE)),'a clean stop releases the lock');
  }finally{first?.kill('SIGKILL');third?.kill('SIGKILL');await rm(dir,{recursive:true,force:true});}
 });
 

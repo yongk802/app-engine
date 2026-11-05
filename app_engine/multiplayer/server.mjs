@@ -74,13 +74,19 @@ export async function main(args = process.argv.slice(2)) {
   });
   const address = server.address();
   process.stdout.write(`multiplayer rooms listening on ${options.host}:${address.port}\n`);
-  const shutdown = () => { server.close(); server.closeIdleConnections(); };
+  // Finish in-flight commands, then release the lock and leave; room timers would otherwise
+  // keep the process (and its claim on the directory) alive after the listener is gone.
+  const shutdown = () => {
+    server.close(() => { lock.release(); process.exit(0); });
+    server.closeIdleConnections();
+    setTimeout(() => { lock.release(); process.exit(0); }, 5000).unref();
+  };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   if (process.env.APP_ENGINE_MULTIPLAYER_EXIT_WITH_PARENT === '1') {
     // The engine holds the write end of stdin. If it dies without stopping us (a crash, SIGKILL),
     // the pipe closes and we stop too, instead of living on beside the next engine's service.
-    process.stdin.once('end', () => { shutdown(); setTimeout(() => process.exit(0), 5000).unref(); });
+    process.stdin.once('end', shutdown);
     process.stdin.resume();
   }
   return {server, service, lock};

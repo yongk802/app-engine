@@ -413,7 +413,11 @@ async function openManagedApp(app) {
     const commands=(plan.steps||[]).map(step=>step.phase+': '+step.argv.join(' ')).join('\n');
     if(!confirm('Approve this local process plan?\n\n'+commands)) throw new Error('Launch approval was cancelled');
     const approval=await fetch('/api/app-engine/plans/'+encodeURIComponent(plan.fingerprint)+'/approve',adminOptions({method:'POST'}));
-    if(!approval.ok) throw new Error('Could not approve the launch plan');
+    if(!approval.ok) {
+      // The page carries a capability minted when the engine started; a tab left open across a restart sends a dead one.
+      if(approval.status===403) throw new Error('The app engine restarted since this page loaded. Reload the page and launch again.');
+      throw new Error('Could not approve the launch plan ('+approval.status+')');
+    }
     response=await fetch(endpoint+'/open',options);
   }
   if(!response.ok) throw new Error('Launch failed ('+response.status+')');

@@ -10,6 +10,8 @@ import {pathToFileURL} from 'node:url';
 import {RoomService} from './rooms.mjs';
 import {RoomError} from './contract.mjs';
 import {createRoomServer} from './transport.mjs';
+import {claimDataDir} from './lock.mjs';
+import {setTimeout} from 'node:timers';
 
 export function defaultStorageDir() {
   const base = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support')
@@ -59,6 +61,11 @@ export async function main(args = process.argv.slice(2)) {
   options.port = Number(options.port);
   if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new Error('Port must be an integer from 0 to 65535.');
   if (!options.rules) throw new Error('A --rules module is required.');
+  const lock = await claimDataDir(options.dataDir, {onLost: () => {
+    process.stderr.write(`Another room service took over ${options.dataDir}; stopping without further writes.\n`);
+    process.exit(1);
+  }});
+  process.once('exit', lock.release);
   const service = await createService(options);
   const server = createRoomServer(service);
   await new Promise((resolve, reject) => {
@@ -66,11 +73,25 @@ export async function main(args = process.argv.slice(2)) {
     server.listen(options.port, options.host, resolve);
   });
   const address = server.address();
-  process.stdout.write(`multiplayer rooms listening on ${options.host}:${address.port}\n`);
-  const shutdown = () => { server.close(); server.closeIdleConnections(); };
+  // Finish in-flight commands, then release the lock and leave; room timers would otherwise
+  // keep the process (and its claim on the directory) alive after the listener is gone.
+  const shutdown = () => {
+    server.close(() => { lock.release(); process.exit(0); });
+    server.closeIdleConnections();
+    setTimeout(() => { lock.release(); process.exit(0); }, 5000).unref();
+  };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
-  return {server, service};
+  if (process.env.APP_ENGINE_MULTIPLAYER_EXIT_WITH_PARENT === '1') {
+    // The engine holds the write end of stdin. If it dies without stopping us (a crash, SIGKILL),
+    // the pipe closes and we stop too, instead of living on beside the next engine's service.
+    process.stdin.once('end', shutdown);
+    process.stdin.resume();
+  }
+  // Announce the port only once the handlers are in place: a host may stop us the moment it
+  // reads this line, and a SIGTERM before then would kill us with the lock still held.
+  process.stdout.write(`multiplayer rooms listening on ${options.host}:${address.port}\n`);
+  return {server, service, lock};
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -63,7 +63,7 @@ That changes which attackers matter, compared with Atrium's vault:
 | A4 | `/api/local-ai/install-plan` answered in public mode | **Fixed** | It was the one local-AI route that didn't call `_deny_public_local_ai()`. |
 | A5 | `/docs`, `/redoc`, `/openapi.json` published | **Fixed** | Nothing used them, and they handed out a full route map. |
 | A6 | Re-invite leaves the player's old sessions and password live | Open | `regenerate_invite` mints a new code but doesn't revoke sessions. When a re-invite is meant to lock someone out, the owner should *disable* the player, which does clear sessions. Deferred since 2026-09-15. |
-| A7 | Orphaned Node room service can double-write `rooms.json` | Open | Deferred since 2026-09-15. This is an availability and integrity problem, not an access one. |
+| A7 | Orphaned Node room service can double-write `rooms.json` | **Fixed** | An engine killed without stopping its Node room service left the service running, and the next engine started a second one on the same directory; each kept its own rooms in memory and overwrote the other's moves. The host now gives the service a stdin pipe and `APP_ENGINE_MULTIPLAYER_EXIT_WITH_PARENT=1`, so it exits when the engine's end closes. Every service also claims its data directory with `service.lock` (pid, token, 10 s heartbeat), refuses to start beside a live holder and takes over one that is dead or 30 s stale. Tests: `app_engine/multiplayer/test/lock.test.mjs`, `tests/test_multiplayer_host.py`. |
 | A8 | App commands run as host subprocesses | Accepted (tracked) | `docs/superpowers/specs/2026-10-22-production-security-design.md` slice 3. `APP_ENGINE_PROCESS_ISOLATION=audit`/`enforce` and the isolated runner are the path. |
 
 Regression tests: `tests/test_host_gate.py` covers A1–A5, #3, #11 and #14.
@@ -196,7 +196,7 @@ found nothing.
 - An admin secret rotation signs every session out.
 - Invites expire after 7 days.
 - Player list and mail caps.
-- **Open:** orphaned room services (A7).
+- Room services exit with their engine and lock their data directory (A7).
 - **Tracked:** process isolation rollout (A8).
 
 ## Pen test (2026-11-04)

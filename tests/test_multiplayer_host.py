@@ -249,3 +249,29 @@ def test_the_log_pump_is_held_while_the_service_runs(tmp_path):
             await host.close()
 
     asyncio.run(run())
+
+
+@needs_node
+def test_the_room_service_stops_when_the_engine_end_of_its_pipe_closes(tmp_path):
+    """An engine that dies without stopping its service closes the stdin pipe; the service
+    must follow instead of living on beside the next engine's service (audit A7)."""
+    root = make_game(tmp_path / "apps", "cards")
+    host = MultiplayerHost(tmp_path / "state")
+
+    async def run():
+        try:
+            await host.ensure("cards", root, {"rules": "rules.mjs"})
+            record = host._processes["cards"]
+            lock = record.data_dir / "service.lock"
+            assert json.loads(lock.read_text())["pid"] == record.process.pid
+            record.process.stdin.close()
+            assert await asyncio.wait_for(record.process.wait(), 10) == 0
+            assert not lock.exists()
+            # The host notices the exit and starts a fresh service on the next command.
+            await asyncio.sleep(0.1)
+            base = await host.ensure("cards", root, {"rules": "rules.mjs"})
+            assert base and host._processes["cards"].process.returncode is None
+        finally:
+            await host.close()
+
+    asyncio.run(run())

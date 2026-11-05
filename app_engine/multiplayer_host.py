@@ -4,7 +4,9 @@ An app that declares ``"multiplayer": {"rules": ...}`` in its manifest plays thr
 the host. The first command for that app starts ``multiplayer/server.mjs`` (Node)
 with the app's rules module, a private storage directory under the state root, and
 an ephemeral loopback port; the process is health-checked, its output kept for
-diagnostics, and it is restarted if it dies. Commands are relayed as-is, so every
+diagnostics, and it is restarted if it dies. It exits when the engine's end of its
+stdin pipe closes, and it locks its storage directory, so a crashed engine never
+leaves two services writing the same rooms. Commands are relayed as-is, so every
 client keeps the ``/v1/command`` wire contract, and the browser never learns the
 service's port.
 
@@ -209,10 +211,14 @@ class MultiplayerHost:
             argv += ["--ai", str(record.ai)]
         record.base_url = ""
         record.logs.append(f"starting: {' '.join(argv)}")
+        # The service exits when the stdin pipe closes, so an engine that dies without stopping
+        # it (a crash, SIGKILL) does not leave an orphan writing rooms.json beside its successor.
+        environment = self._environment()
+        environment["APP_ENGINE_MULTIPLAYER_EXIT_WITH_PARENT"] = "1"
         try:
             record.process = await asyncio.create_subprocess_exec(
-                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                cwd=str(record.rules.parent), env=self._environment(),
+                *argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT, cwd=str(record.rules.parent), env=environment,
             )
         except OSError as exc:
             record.logs.append(f"spawn failed: {exc}")

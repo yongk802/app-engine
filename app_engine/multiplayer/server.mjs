@@ -73,7 +73,6 @@ export async function main(args = process.argv.slice(2)) {
     server.listen(options.port, options.host, resolve);
   });
   const address = server.address();
-  process.stdout.write(`multiplayer rooms listening on ${options.host}:${address.port}\n`);
   // Finish in-flight commands, then release the lock and leave; room timers would otherwise
   // keep the process (and its claim on the directory) alive after the listener is gone.
   const shutdown = () => {
@@ -89,6 +88,9 @@ export async function main(args = process.argv.slice(2)) {
     process.stdin.once('end', shutdown);
     process.stdin.resume();
   }
+  // Announce the port only once the handlers are in place: a host may stop us the moment it
+  // reads this line, and a SIGTERM before then would kill us with the lock still held.
+  process.stdout.write(`multiplayer rooms listening on ${options.host}:${address.port}\n`);
   return {server, service, lock};
 }
 

@@ -232,7 +232,7 @@ found nothing.
 ZAP's spider and active scan ran against an isolated instance. It reported
 three header findings, each confirmed by hand: Z1 and Z3 are fixed, and Z2 is
 tightened as far as arbitrary app content allows. The engine's own log from the
-scan showed a fourth, Z4.
+scan showed a fourth, Z4. Z5 and Z6 are the scan's remarks on the launcher's own policy.
 
 | # | Finding | Status | Detail |
 |---|---|---|---|
@@ -240,5 +240,7 @@ scan showed a fourth, Z4.
 | Z2 | `/apps/<id>/…` pages sent a CSP holding only `frame-ancestors` | **Fixed in part** | The page is the app author's own file (or its backend's page with an injected same-origin `<base href>`), not an engine page, so inline scripts and styles are normal and a nonce or `script-src` policy would break apps. The policy is now `object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors …`. An `entry_point` backend page that sends no CSP gets the same policy (before, it got none); one that sends its own keeps it. **Residual:** `script-src`, `style-src`, `img-src` and `connect-src` stay unrestricted for app content, so ZAP still reports the missing fallback. The app's isolated origin and iframe `sandbox` are the boundary there. |
 | Z3 | `/assistant-assets/panel.css` and `panel.js` lacked `nosniff` | **Fixed** | The `JsonNosniff` middleware only covered `application/json`. It is now `Nosniff` and adds the header to every response that lacks one: files, pages, errors, gate refusals and proxied responses. |
 | Z4 | The scan's malformed requests produced 500s with a traceback in the log: a non-JSON body to `/apps/<id>/open` or `/preview`, a proxied path holding a NUL (`%00`), a proxied backend that was gone, and a backend that dropped the connection mid-body | **Fixed** | These are refusals, not crashes: 400 for the body and the path (`invalid_request_target`), 502 for a backend that does not answer (`upstream_unavailable`), and a response that simply ends when the backend hangs up. Nothing was exposed (the client saw a bare 500), but an unhandled exception is a bug. |
+| Z5 | The launcher's policy allowed any inline style (`style-src 'self' 'unsafe-inline'`) | **Fixed** | The launcher's one inline stylesheet now carries the response nonce, like its script, and the policy is `style-src 'self' 'nonce-…'; style-src-attr 'none'`. The one `style=` attribute in the markup became a class. Scripts still style elements through the DOM, which the policy does not restrict. The store and studio pages keep `'unsafe-inline'` for styles. |
+| Z6 | The launcher's `img-src`, `connect-src` and `frame-src` allow any `http:` or `https:` origin | **Accepted** | App frames and screenshots live on each app's own origin, the assistant frame and the players' server are addresses the owner sets, so the list is not fixed. Narrowing it means building the policy per response from that configuration. With scripts and styles nonce-locked and no HTML sink in the page, the wildcards only matter after another bug. |
 
 Regression tests: `tests/test_security_headers.py`, `tests/test_bad_requests.py`.

@@ -91,7 +91,7 @@
   .profiles { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:14px 0; }
   .profile { border:1px solid #354052; background:#1b212c; border-radius:10px; padding:12px; color:inherit; text-align:left; }
   .profile.selected { border-color:#60a5fa; } .profile small { display:block; color:var(--muted); margin-top:5px; }
-  .status-line { color:var(--muted); font-size:13px; margin:12px 0; white-space:pre-wrap; } progress { width:100%; }
+  .status-line { color:var(--muted); font-size:13px; margin:12px 0; white-space:pre-wrap; } .status-line.flush { margin-top:0; } progress { width:100%; }
   @media (max-width: 700px) {
     #sidebar { position:fixed; inset:0 auto 0 0; width:min(86vw,300px); transform:translateX(-101%); transition:transform .2s; box-shadow:8px 0 24px #0008; }
     #sidebar.open { transform:translateX(0); }
@@ -176,7 +176,7 @@
   <dialog id="players-dialog" aria-labelledby="players-title">
     <div class="modal-head"><h2 id="players-title">Players</h2><button class="icon-btn" id="close-players" aria-label="Close">✕</button></div>
     <div class="modal-body">
-      <p class="status-line" style="margin-top:0">People you invite sign in to this server with a username and password, open the games you allow, and meet each other at the multiplayer tables. Games connect from their own computers too.</p>
+      <p class="status-line flush">People you invite sign in to this server with a username and password, open the games you allow, and meet each other at the multiplayer tables. Games connect from their own computers too.</p>
       <div class="players-list" id="players-list"></div>
       <form class="invite-form" id="invite-form">
         <strong>Create account</strong>

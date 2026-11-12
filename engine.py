@@ -1020,7 +1020,7 @@ async def api_apps_rejected(request: Request) -> JSONResponse:
 
 
 _LAUNCHER_CSP = ("default-src 'self'; script-src 'self' 'nonce-{nonce}'; script-src-attr 'none'; "
-                 "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; "
+                 "style-src 'self' 'nonce-{nonce}'; style-src-attr 'none'; img-src 'self' data: blob: http: https:; "
                  "media-src 'self' blob: data:; connect-src 'self' http: https:; frame-src http: https:; "
                  "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 _LAUNCHER_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
@@ -1038,10 +1038,12 @@ async def launcher(request: Request) -> HTMLResponse:
     html = html.replace("__APP_ENGINE_STORES_AVAILABLE__", "true" if _stores_available() else "false")
     html = html.replace("__APP_ENGINE_ROLE__", "player" if session.role == "player" else ("owner" if _PUBLIC else "local"))
     html = html.replace("__APP_ENGINE_USER__", session.name.replace("<", "").replace(">", "").replace("'", ""))
-    # The launcher holds the owner's capability, so only its own scripts may run:
-    # the one inline block carries this response's nonce, everything else is 'self'.
+    # The launcher holds the owner's capability, so only its own scripts and styles
+    # load: the inline script block and the inline stylesheet carry this response's
+    # nonce, everything else is 'self'. No style attribute is allowed in the markup;
+    # the page's own scripts still style elements through the DOM.
     nonce = secrets.token_urlsafe(18)
-    html = html.replace("<script>", f'<script nonce="{nonce}">')
+    html = html.replace("<script>", f'<script nonce="{nonce}">').replace("<style>", f'<style nonce="{nonce}">')
     return HTMLResponse(html, headers={**_LAUNCHER_HEADERS,
                                        "Content-Security-Policy": _LAUNCHER_CSP.format(nonce=nonce)})
 

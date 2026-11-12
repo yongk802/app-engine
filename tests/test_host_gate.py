@@ -95,6 +95,23 @@ def test_launcher_runs_only_its_own_scripts(tmp_path, monkeypatch):
         assert first.headers["referrer-policy"] == "no-referrer"
 
 
+def test_launcher_loads_only_its_own_styles(tmp_path, monkeypatch):
+    import re
+    module = load_engine(tmp_path, monkeypatch)
+    with TestClient(module.app) as client:
+        page = client.get("/")
+        policy = page.headers["content-security-policy"]
+        nonce = policy.split("'nonce-", 1)[1].split("'", 1)[0]
+        assert "unsafe-inline" not in policy
+        assert f"style-src 'self' 'nonce-{nonce}'" in policy and "style-src-attr 'none'" in policy
+        assert f'<style nonce="{nonce}">' in page.text and "<style>" not in page.text
+        # The policy forbids style attributes, so the markup must not carry one
+        # (a script may still set element.style through the DOM).
+        markup = re.sub(r"<script\b.*?</script>", "", page.text, flags=re.S)
+        assert not re.search(r"<[^>]*\sstyle\s*=", markup), "an inline style attribute would be blocked"
+        assert "setAttribute('style'" not in page.text and 'setAttribute("style"' not in page.text
+
+
 def test_api_docs_are_not_published(tmp_path, monkeypatch):
     module = load_engine(tmp_path, monkeypatch)
     with TestClient(module.app) as client:

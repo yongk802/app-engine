@@ -17,18 +17,19 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 _NOSNIFF = (b"x-content-type-options", b"nosniff")
 
 _PAGE_CSP = ("default-src 'self'; script-src 'self' 'nonce-{nonce}'; script-src-attr 'none'; "
-             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; "
+             "style-src 'self' 'nonce-{nonce}'; style-src-attr 'none'; img-src 'self' data:; object-src 'none'; "
              "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
 
 def nonce_page(html: str) -> tuple[str, dict[str, str]]:
-    """Stamp each ``<script>`` with a fresh nonce; return the page and its headers.
+    """Stamp each ``<script>`` and ``<style>`` with a fresh nonce; return the page and its headers.
 
-    Everything else (an injected inline script, an ``onclick=`` attribute, a
-    foreign script, a frame around the page) is refused by the browser.
+    Everything else (an injected inline script or stylesheet, an ``onclick=`` or
+    ``style=`` attribute, a foreign script, a frame around the page) is refused
+    by the browser. The page's own scripts still style elements through the DOM.
     """
     nonce = secrets.token_urlsafe(18)
-    html = html.replace("<script>", f'<script nonce="{nonce}">')
+    html = html.replace("<script>", f'<script nonce="{nonce}">').replace("<style>", f'<style nonce="{nonce}">')
     return html, {"Content-Security-Policy": _PAGE_CSP.format(nonce=nonce),
                   "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
 

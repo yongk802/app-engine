@@ -53,6 +53,11 @@ def test_store_routes_install_and_launch_through_existing_engine(tmp_path, monke
         assert "frame-ancestors 'none'" in policy and "script-src-attr 'none'" in policy
         nonce = policy.split("'nonce-", 1)[1].split("'", 1)[0]
         assert page.text.count('<script') == page.text.count(f'<script nonce="{nonce}">') == 1
+        # Styles are locked the same way: the one stylesheet by nonce, no style attribute.
+        assert 'unsafe-inline' not in policy
+        assert f"style-src 'self' 'nonce-{nonce}'" in policy and "style-src-attr 'none'" in policy
+        assert page.text.count('<style') == page.text.count(f'<style nonce="{nonce}">') == 1
+        assert ' style="' not in page.text and "setAttribute('style'" not in page.text
         assert nonce not in client.get('/api/app-engine/stores/ui').headers['content-security-policy'], "a fresh nonce per page"
         assert 'id="app-stores"' in client.get('/').text
         store = client.post('/api/app-engine/stores', json={'url': 'http://one.test'}, headers=headers)

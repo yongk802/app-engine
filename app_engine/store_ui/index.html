@@ -32,6 +32,7 @@ button[aria-busy="true"] { opacity:.7; cursor:progress; }
 dialog { width:min(620px,calc(100vw - 48px)); background:#171e2a; color:inherit; border:1px solid #526783; border-radius:14px; padding:24px; }
 dialog::backdrop { background:#000a; } dl { display:grid; grid-template-columns:110px 1fr; gap:12px; } dt { color:#a8b5c7; } dd { margin:0; overflow-wrap:anywhere; }
 @media(max-width:600px) { body { padding:20px 14px; } header { align-items:start; } form button { width:100%; } dl { grid-template-columns:1fr; gap:5px; } dd { margin-bottom:10px; } }
+h2.grow { flex:1; margin:0; } label.spaced { margin-top:18px; } .alert { color:#ffd4d7; }
 </style>
 </head>
 <body>
@@ -40,9 +41,9 @@ dialog::backdrop { background:#000a; } dl { display:grid; grid-template-columns:
 <section><h2>Connected stores</h2>
 <form id="connect"><label>Store URL<input id="store-url" type="url" placeholder="https://your-store.example" required></label><label>Name (optional)<input id="store-name" maxlength="200" placeholder="My store"></label><button class="primary">Connect store</button></form>
 <div id="stores"></div></section>
-<section><div class="controls"><h2 style="flex:1;margin:0">Available releases</h2><button id="refresh">Refresh stores</button></div>
-<label style="margin-top:18px">Search store apps<input id="search" type="search" placeholder="App name, description, category, or source…"></label><div id="releases"></div></section>
-<dialog id="preview" aria-labelledby="preview-title"><h2 id="preview-title">Review installation</h2><p>The package will be checked against the digest and size below before installation.</p><p id="preview-error" role="alert" style="color:#ffd4d7"></p><dl id="preview-details"></dl><div class="controls"><button id="cancel">Cancel</button><button id="install" class="primary">Install app</button></div></dialog>
+<section><div class="controls"><h2 class="grow">Available releases</h2><button id="refresh">Refresh stores</button></div>
+<label class="spaced">Search store apps<input id="search" type="search" placeholder="App name, description, category, or source…"></label><div id="releases"></div></section>
+<dialog id="preview" aria-labelledby="preview-title"><h2 id="preview-title">Review installation</h2><p>The package will be checked against the digest and size below before installation.</p><p id="preview-error" role="alert" class="alert"></p><dl id="preview-details"></dl><div class="controls"><button id="cancel">Cancel</button><button id="install" class="primary">Install app</button></div></dialog>
 <script>
 const $=selector=>document.querySelector(selector);
 const capability=$('meta[name="app-engine-admin"]').content;

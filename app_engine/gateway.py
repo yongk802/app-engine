@@ -65,6 +65,11 @@ class _SessionRecord:
     scope_key: ScopeKey | None
 
 
+# How long a proxied application may take to start its response. The body that
+# follows is not timed: it may be a long-lived stream.
+PROXY_RESPONSE_START_TIMEOUT = 30.0
+
+
 @dataclass
 class _ScopeState:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -85,7 +90,14 @@ class DefaultAppGateway(AppGateway):
         self._catalog = catalog
         self._lifecycle = lifecycle
         self._catalog_key = catalog_key
-        self._client = httpx.AsyncClient(transport=transport, trust_env=False)
+        # No read timeout: an app's event stream may stay quiet for minutes, and
+        # httpx's default of five seconds ended it. ``proxy`` bounds the wait for
+        # the response to start instead.
+        self._client = httpx.AsyncClient(
+            transport=transport,
+            trust_env=False,
+            timeout=httpx.Timeout(5.0, read=None),
+        )
         self._sessions: dict[AppSessionId, _SessionRecord] = {}
         self._scopes: dict[ScopeKey, _ScopeState] = {}
         self._session_lock = asyncio.Lock()
@@ -269,8 +281,11 @@ class DefaultAppGateway(AppGateway):
                 "The request path cannot be forwarded to the application.",
             ) from exc
         try:
-            upstream = await self._client.send(upstream_request, stream=True)
-        except httpx.HTTPError as exc:
+            upstream = await asyncio.wait_for(
+                self._client.send(upstream_request, stream=True),
+                PROXY_RESPONSE_START_TIMEOUT,
+            )
+        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
             raise TargetProviderError(
                 "upstream_unavailable",
                 "The managed application endpoint could not be reached.",

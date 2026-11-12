@@ -667,3 +667,36 @@ async def test_websocket_upgrade_uses_explicit_route_seam(tmp_path):
             ),
         )
     assert raised.value.code == "websocket_route_required"
+
+
+@pytest.mark.asyncio
+async def test_proxy_does_not_time_out_a_quiet_stream_but_bounds_its_start(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    from app_engine import gateway as gateway_module
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/slow":
+            await asyncio.Event().wait()  # never answers
+        return httpx.Response(200, text="ok")
+
+    gateway = _gateway_type()(
+        catalog=_Catalog(_manifest(tmp_path, managed=True)),
+        lifecycle=_Lifecycle(TargetEndpoint("http", "localhost", 8912)),
+        catalog_key=CatalogKey("test"),
+        transport=httpx.MockTransport(upstream),
+    )
+    # An event stream may say nothing for minutes; only connecting is timed.
+    assert gateway._client.timeout.read is None
+    assert gateway._client.timeout.connect == 5.0
+
+    session = await gateway.open(_open_request())
+    monkeypatch.setattr(gateway_module, "PROXY_RESPONSE_START_TIMEOUT", 0.05)
+    with pytest.raises(gateway_module.TargetProviderError) as caught:
+        await gateway.proxy(
+            session,
+            ProxyRequest(method="GET", path="/slow", query=(), headers=(), body=_body()),
+        )
+    assert caught.value.code == "upstream_unavailable"

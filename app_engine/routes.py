@@ -248,7 +248,7 @@ def create_app_engine_router(
 
     @router.post("/apps/{app_id}/preview")
     async def preview(app_id: str, request: Request, subject: HostSubject = Depends(authenticate)):
-        payload = await request.json() if await request.body() else {}
+        payload = await _json_object(request) if await request.body() else {}
         launch = _launch_request(app_id, subject, payload)
         try:
             plan = await runtime.lifecycle.preview(launch)
@@ -280,9 +280,7 @@ def create_app_engine_router(
     @router.post("/apps/{app_id}/open")
     async def open_app(app_id: str, request: Request, subject: HostSubject = Depends(authenticate)):
         body = await request.body()
-        payload = await request.json() if body else {}
-        if not isinstance(payload, dict):
-            raise HTTPException(400, "the request body must be a JSON object")
+        payload = await _json_object(request) if body else {}
         if payload.get("force_rebuild") and may_rebuild is not None and not may_rebuild(request):
             payload = {**payload, "force_rebuild": False}
         launch = _launch_request(app_id, subject, payload)
@@ -369,16 +367,22 @@ def create_app_engine_router(
             async for chunk in request.stream():
                 yield chunk
 
-        result = await runtime.gateway.proxy(
-            session,
-            ProxyRequest(
-                method=request.method,
-                path=proxy_path,
-                query=tuple(request.query_params.multi_items()),
-                headers=tuple(request.headers.items()),
-                body=request_body(),
-            ),
-        )
+        try:
+            result = await runtime.gateway.proxy(
+                session,
+                ProxyRequest(
+                    method=request.method,
+                    path=proxy_path,
+                    query=tuple(request.query_params.multi_items()),
+                    headers=tuple(request.headers.items()),
+                    body=request_body(),
+                ),
+            )
+        except AppEngineError as exc:
+            # A request the proxy will not forward is the caller's error; a backend
+            # that does not answer is a bad gateway. Neither is a crash.
+            status = 502 if exc.code == "upstream_unavailable" else 400
+            raise HTTPException(status, detail={"code": exc.code, "message": str(exc)}) from exc
         return _streaming_proxy_response(result, proxy_html_csp)
 
     @router.get("/launches/{launch_id}")

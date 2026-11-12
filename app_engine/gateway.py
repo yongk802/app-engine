@@ -255,12 +255,19 @@ class DefaultAppGateway(AppGateway):
             forward_app_headers(_strip_hop_headers(request.headers, remove_host=True)),
             endpoint,
         )
-        upstream_request = self._client.build_request(
-            request.method,
-            url,
-            headers=headers,
-            content=request.body,
-        )
+        try:
+            upstream_request = self._client.build_request(
+                request.method,
+                url,
+                headers=headers,
+                content=request.body,
+            )
+        except httpx.InvalidURL as exc:
+            # A path with a NUL or another character no URL may carry.
+            raise TargetProviderError(
+                "invalid_request_target",
+                "The request path cannot be forwarded to the application.",
+            ) from exc
         try:
             upstream = await self._client.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
@@ -277,6 +284,10 @@ class DefaultAppGateway(AppGateway):
             try:
                 async for chunk in upstream.aiter_raw():
                     yield chunk
+            except httpx.HTTPError:
+                # The backend dropped the connection mid-body. The status line has
+                # gone out already, so the response simply ends here.
+                return
             finally:
                 await upstream.aclose()
 

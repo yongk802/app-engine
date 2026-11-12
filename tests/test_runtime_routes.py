@@ -33,7 +33,8 @@ async def test_streaming_proxy_response_preserves_repeated_headers():
         ProxyResponse(207, (("x-demo", "one"), ("x-demo", "two")), body())
     )
     assert response.status_code == 207
-    assert response.raw_headers == [(b"x-demo", b"one"), (b"x-demo", b"two")]
+    assert response.raw_headers == [
+        (b"x-demo", b"one"), (b"x-demo", b"two"), (b"x-content-type-options", b"nosniff")]
 
 
 @pytest.mark.asyncio

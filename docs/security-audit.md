@@ -169,7 +169,10 @@ found nothing.
 
 ### 10. Browser: XSS, CSP, framing
 - The launcher has a nonce CSP (#14) and `frame-ancestors 'none'`.
-- Apps get `nosniff` and framing limited to the launcher (#11).
+- Apps get `nosniff` and framing limited to the launcher (#11); since the
+  2026-11-12 ZAP scan their pages also refuse plugins and a foreign `<base>`
+  or form target, and proxied backends get the same defaults where they sent
+  none (Z1, Z2).
 - Apps run in iframes with their manifest `sandbox`, on their own origin.
 - **Residual:** the store and studio pages have framing protection but no
   `script-src` policy.
@@ -213,7 +216,7 @@ found nothing.
 | [Wapiti 3.3.2](https://github.com/wapiti-scanner/wapiti) | Active DAST: SQLi, blind SQLi, XSS, exec, file, SSRF, XXE, CRLF, redirect | No injection or traversal findings. Header and plain-HTTP notes only (loopback by design) | not run against live |
 | [Nuclei 3.11](https://github.com/projectdiscovery/nuclei) | Template scan, without `dos`, `fuzz`, `intrusive` or `bruteforce` | Info only. Flagged `/docs` and `/openapi.json` (now removed) and the missing launcher `script-src` (now added) | Info only. Main-page CSP keeps `script-src 'unsafe-inline'`. JARM "C2" matches are false positives on Python's TLS stack |
 | [testssl.sh 3.2.4](https://github.com/testssl/testssl.sh) | TLS configuration | n/a (loopback HTTP; public mode uses the proxy's TLS) | TLS 1.2 and 1.3 only, forward secrecy, X25519MLKEM768, HSTS 1 year. **CBC suites still offered on TLS 1.2** (LUCKY13 "potentially"). The self-signed CA is expected because clients pin it |
-| [OWASP ZAP](https://www.zaproxy.org/) | Spider plus active scan | Not run: the Docker VM disk was full, and Homebrew disabled the cask for failing Gatekeeper | Not run |
+| [OWASP ZAP](https://www.zaproxy.org/) | Spider plus active scan | Not run on 2026-11-04 (the Docker VM disk was full, and Homebrew disabled the cask for failing Gatekeeper). Run on 2026-11-12: three header findings, all fixed; see the section below | Not run |
 
 ### Recommendations for Atrium from this pen test
 1. Drop the TLS 1.2 CBC suites from the server's `SSLContext`, keeping only
@@ -223,3 +226,17 @@ found nothing.
 3. Run ZAP's active scan against a throwaway Atrium instance, such as the
    `tests/conftest.py` server fixture, never the live one. To do that, first
    free Docker VM space, or use ZAP's cross-platform JAR.
+
+## 2026-11-12 OWASP ZAP scan
+
+ZAP's spider and active scan ran against an isolated instance. It reported
+three header findings, each confirmed by hand: Z1 and Z3 are fixed, and Z2 is
+tightened as far as arbitrary app content allows.
+
+| # | Finding | Status | Detail |
+|---|---|---|---|
+| Z1 | Session-proxy responses (`/api/app-engine/sessions/<id>/proxy/…`) carried only the backend's headers: no CSP, no framing protection, no `nosniff` | **Fixed** | The engine now adds a default only for a header the backend did not send. Every proxied response gets `X-Content-Type-Options: nosniff`. An HTML page with no `Content-Security-Policy` gets the app-page framing policy (`frame-ancestors`, as in #11). A header the backend sent passes through unchanged, so an app with its own strict policy keeps it. No `script-src` or `default-src` default: backends use inline scripts. The body still streams unbuffered. |
+| Z2 | `/apps/<id>/…` pages sent a CSP holding only `frame-ancestors` | **Fixed in part** | The page is the app author's own file (or its backend's page with an injected same-origin `<base href>`), not an engine page, so inline scripts and styles are normal and a nonce or `script-src` policy would break apps. The policy is now `object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors …`. An `entry_point` backend page that sends no CSP gets the same policy (before, it got none); one that sends its own keeps it. **Residual:** `script-src`, `style-src`, `img-src` and `connect-src` stay unrestricted for app content, so ZAP still reports the missing fallback. The app's isolated origin and iframe `sandbox` are the boundary there. |
+| Z3 | `/assistant-assets/panel.css` and `panel.js` lacked `nosniff` | **Fixed** | The `JsonNosniff` middleware only covered `application/json`. It is now `Nosniff` and adds the header to every response that lacks one: files, pages, errors, gate refusals and proxied responses. |
+
+Regression tests: `tests/test_security_headers.py`.

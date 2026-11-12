@@ -31,7 +31,7 @@ from .contracts import (
     StopReason,
     TargetId,
 )
-from .response_headers import nonce_page
+from .response_headers import nonce_page, proxied_defaults
 from .runtime import DefaultAppEngineRuntime
 from .search import category_counts, search_apps
 
@@ -39,13 +39,17 @@ from .search import category_counts, search_apps
 Authenticate = Callable[[], HostSubject | Awaitable[HostSubject]]
 
 
-def _streaming_proxy_response(result) -> StreamingResponse:
-    """Build a streaming response without collapsing repeated HTTP headers."""
+def _streaming_proxy_response(result, html_csp: str | None = None) -> StreamingResponse:
+    """Build a streaming response without collapsing repeated HTTP headers.
+
+    The backend's headers pass through as sent; nosniff, and ``html_csp`` on an
+    HTML page, are added only where the backend sent none.
+    """
     response = StreamingResponse(result.body, status_code=result.status_code)
-    response.raw_headers = [
+    response.raw_headers = proxied_defaults([
         (name.lower().encode("latin-1"), value.encode("latin-1"))
         for name, value in result.headers
-    ]
+    ], html_csp)
     return response
 
 
@@ -163,6 +167,7 @@ def create_app_engine_router(
     standing_approval: StandingApproval | None = None,
     record_approval: RecordApproval | None = None,
     may_rebuild: MayRebuild | None = None,
+    proxy_html_csp: str | None = None,
 ) -> APIRouter:
     """Build a host-authenticated router without starting another server.
 
@@ -172,6 +177,8 @@ def create_app_engine_router(
     approvals across opens and subjects; absent, approvals stay single-use per subject.
     ``may_rebuild`` says whether this request may ask for ``force_rebuild`` (a host with
     players reserves restarting the shared backend for the owner); absent, anyone may.
+    ``proxy_html_csp`` is the ``Content-Security-Policy`` (the host's framing policy)
+    given to a proxied HTML page whose backend sent none; absent, none is added.
     """
 
     router = APIRouter(prefix=prefix, tags=["app-engine"])
@@ -372,7 +379,7 @@ def create_app_engine_router(
                 body=request_body(),
             ),
         )
-        return _streaming_proxy_response(result)
+        return _streaming_proxy_response(result, proxy_html_csp)
 
     @router.get("/launches/{launch_id}")
     async def launch_status(launch_id: str, subject: HostSubject = Depends(authenticate)):

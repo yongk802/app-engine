@@ -1,10 +1,11 @@
-"""Response headers shared by the engine's own pages and its JSON API.
+"""Response headers shared by the engine's own pages, its API and its proxies.
 
-``JsonNosniff`` marks every JSON response ``X-Content-Type-Options: nosniff``:
-the launcher page already sent it, the JSON API did not, so an old or
-permissive browser might sniff an answer that echoes user text as HTML or
-script. ``nonce_page`` gives a self-contained management page (store, studio)
-a script policy that runs only its own inline block.
+``Nosniff`` marks every response ``X-Content-Type-Options: nosniff``: the
+launcher page already sent it, the JSON API and the bundled assets did not, so
+an old or permissive browser might sniff an answer that echoes user text as
+HTML or script. ``nonce_page`` gives a self-contained management page (store,
+studio) a script policy that runs only its own inline block.
+``proxied_defaults`` fills in what an app backend's response left out.
 """
 
 from __future__ import annotations
@@ -32,8 +33,28 @@ def nonce_page(html: str) -> tuple[str, dict[str, str]]:
                   "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
 
 
-class JsonNosniff:
-    """ASGI middleware: add nosniff to ``application/json`` responses that lack it."""
+def proxied_defaults(headers: list[tuple[bytes, bytes]],
+                     html_csp: str | None = None) -> list[tuple[bytes, bytes]]:
+    """Add the headers an app backend's response lacks; never touch one it sent.
+
+    Every response gets nosniff. An HTML page with no ``Content-Security-Policy``
+    gets ``html_csp`` (the host's framing policy); a backend that sends its own
+    policy keeps it exactly as sent.
+    """
+    names = {name.lower(): value for name, value in headers}
+    added = [] if b"x-content-type-options" in names else [_NOSNIFF]
+    if (html_csp and b"content-security-policy" not in names
+            and names.get(b"content-type", b"").lower().startswith(b"text/html")):
+        added.append((b"content-security-policy", html_csp.encode("latin-1")))
+    return [*headers, *added]
+
+
+class Nosniff:
+    """ASGI middleware: add nosniff to every response that lacks it.
+
+    It only appends a header to the response start, so streamed bodies (SSE,
+    proxied apps) pass through unbuffered.
+    """
 
     def __init__(self, app: ASGIApp):
         self.app = app
@@ -46,9 +67,7 @@ class JsonNosniff:
         async def send_with_nosniff(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                names = {name.lower(): value for name, value in headers}
-                if (names.get(b"content-type", b"").lower().startswith(b"application/json")
-                        and b"x-content-type-options" not in names):
+                if not any(name.lower() == b"x-content-type-options" for name, _ in headers):
                     message = {**message, "headers": [*headers, _NOSNIFF]}
             await send(message)
 

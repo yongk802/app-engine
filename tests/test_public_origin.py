@@ -169,7 +169,7 @@ def test_everything_needs_the_owner_session_in_public_mode(tmp_path, monkeypatch
         token = listing[0]["url"].split("atrium_state_token=")[1]
         served = client.get(f"{APP}/apps/notes/")
         assert served.status_code == 200, "the session cookie covers the app subdomain"
-        assert served.headers["content-security-policy"] == "frame-ancestors https://play.example.com"
+        assert served.headers["content-security-policy"] == "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors https://play.example.com"
         state_headers = {"x-app-state-token": token}
         assert client.put(f"{APP}/api/app-state/notes", json={"n": 1}, headers=state_headers).status_code == 200
         assert client.get(f"{APP}/api/app-state/notes", headers=state_headers).json() == {"n": 1}

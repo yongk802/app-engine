@@ -81,7 +81,7 @@ from app_engine.proxy_headers import forward_app_headers
 from app_engine.outbound_tls import OutboundTlsPolicy
 from app_engine.atrium_status import AtriumStatusProbe
 from app_engine.host_gate import LocalHostGate
-from app_engine.response_headers import JsonNosniff
+from app_engine.response_headers import Nosniff
 from app_engine.listener_gate import LoopbackListenerGate
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
@@ -236,7 +236,15 @@ else:
         trusted=lambda scope: _is_mtls_request(Request(scope)),
     )
 app.add_middleware(LoopbackListenerGate)
-app.add_middleware(JsonNosniff)
+app.add_middleware(Nosniff)
+
+# Apps are framed by the launcher; in public mode only by the public launcher,
+# locally only by a launcher on this computer, never by some other web page.
+_FRAME_ANCESTORS = f"frame-ancestors {_PUBLIC.origin}" if _PUBLIC else (
+    # CSP host-sources cannot name an IPv6 literal, so a launcher on [::1] is not listed.
+    "frame-ancestors 'self' http://127.0.0.1:* http://localhost:* "
+    "https://127.0.0.1:* https://localhost:*"
+    + "".join(f" {o}" for o in os.environ.get("APP_ENGINE_FRAME_ANCESTORS", "").split() if o))
 
 
 def _session(request: Request) -> Session:
@@ -293,6 +301,7 @@ app.include_router(
         _app_runtime,
         authenticate=_runtime_authenticate,
         may_rebuild=lambda request: _session(request).role != "player",
+        proxy_html_csp=_FRAME_ANCESTORS,
         standing_approval=(lambda fingerprint: _accounts.plan_approved(fingerprint)) if _accounts else None,
         record_approval=(lambda fingerprint: (_accounts.approve_plan(fingerprint), _audit.record("plan.approved", fingerprint=fingerprint))) if _accounts else _assistant_approved_plans.add,
     )
@@ -843,13 +852,10 @@ async def local_ai_diagnostics() -> JSONResponse:
 
 _SEC_HEADERS = {
     "X-Content-Type-Options": "nosniff",
-    # Apps are framed by the launcher; in public mode only by the public launcher,
-    # locally only by a launcher on this computer, never by some other web page.
-    "Content-Security-Policy": f"frame-ancestors {_PUBLIC.origin}" if _PUBLIC else (
-        # CSP host-sources cannot name an IPv6 literal, so a launcher on [::1] is not listed.
-        "frame-ancestors 'self' http://127.0.0.1:* http://localhost:* "
-        "https://127.0.0.1:* https://localhost:*"
-        + "".join(f" {o}" for o in os.environ.get("APP_ENGINE_FRAME_ANCESTORS", "").split() if o)),
+    # An app's page is its author's: inline scripts and styles are normal there, so
+    # no script-src. What no app needs is refused: plugins, a <base> or a form
+    # pointing at another origin (the engine's own injected <base> is same-origin).
+    "Content-Security-Policy": f"object-src 'none'; base-uri 'self'; form-action 'self'; {_FRAME_ANCESTORS}",
 }
 
 
@@ -901,6 +907,9 @@ async def _proxy_entry_point(app_obj: App, path: str, request: Request) -> Respo
         content = _inject_base_href(content, app_obj.id)
     skip = {"transfer-encoding", "content-encoding", "content-length", "connection"}
     hdrs = {k: v for k, v in resp.headers.items() if k.lower() not in skip}
+    # A backend that sends its own policy keeps it; one that sends none gets the app-page one.
+    if "text/html" in ctype and "content-security-policy" not in resp.headers:
+        hdrs["Content-Security-Policy"] = _SEC_HEADERS["Content-Security-Policy"]
     return Response(content, status_code=resp.status_code, headers=hdrs, media_type=ctype)
 
 

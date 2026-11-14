@@ -87,11 +87,37 @@ _SAFE_PARENT_ENVIRONMENT = (
 )
 
 _isolation_log = logging.getLogger("app_engine.process_isolation")
+_log = logging.getLogger("app_engine.lifecycle")
 _FORCE_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _process_started(pid: int) -> str | None:
+    """Return when the live process ``pid`` started, or None.
+
+    A PID alone is recycled by the operating system; a PID together with its
+    start time names one process.  The clock and locale are pinned so the same
+    process always reports the same text.
+    """
+    if os.name == "nt":
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            env={"LC_ALL": "C", "TZ": "UTC", "PATH": "/bin:/usr/bin"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -191,7 +217,103 @@ class ProcessLifecycleManager(LifecycleManager):
         self._prepare_locks: dict[PlanFingerprint, asyncio.Lock] = {}
         self._prepared: set[PlanFingerprint] = set()
         self._latest_fingerprint: dict[tuple[str, str], PlanFingerprint] = {}
+        # Process groups this engine started, by leader PID and start time. The
+        # next engine reads the file to stop them if this one dies uncleanly.
+        self._engine_started = _process_started(os.getpid())
+        self._ledger: dict[int, str] = {}
+        self._ledger_path = (
+            self._runtime_root / "processes" / f"{uuid.uuid4().hex}.json"
+        )
 
+    async def recover(self) -> tuple[int, ...]:
+        """Stop app processes left behind by an engine that never shut down.
+
+        A recorded group is signalled only when its leader is still the same
+        process (same PID and start time) and the engine that recorded it is
+        gone. Returns the process groups that were stopped.
+        """
+        if os.name == "nt":
+            return ()
+        reaped: list[int] = []
+        for path in sorted(self._ledger_path.parent.glob("*.json")):
+            if path == self._ledger_path:
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                owner_pid = int(payload["engine"]["pid"])
+                owner_started = str(payload["engine"]["started"])
+                recorded = {
+                    int(group_id): str(started)
+                    for group_id, started in payload["groups"].items()
+                }
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                path.unlink(missing_ok=True)
+                continue
+            if await asyncio.to_thread(_process_started, owner_pid) == owner_started:
+                continue  # That engine is still running and owns its apps.
+            orphans = [
+                group_id
+                for group_id, started in recorded.items()
+                if group_id > 1
+                and await asyncio.to_thread(_process_started, group_id) == started
+            ]
+            for group_id in orphans:
+                _log.warning("Stopping app process group %d left by a previous engine", group_id)
+                self._signal_group_id(group_id, signal.SIGTERM)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._stop_grace_seconds
+            while (
+                any(self._group_alive(group_id) for group_id in orphans)
+                and loop.time() < deadline
+            ):
+                await asyncio.sleep(0.02)
+            for group_id in orphans:
+                if self._group_alive(group_id):
+                    self._signal_group_id(group_id, _FORCE_SIGNAL)
+            path.unlink(missing_ok=True)
+            reaped.extend(orphans)
+        return tuple(reaped)
+
+    async def shutdown(self) -> tuple[LaunchId, ...]:
+        """Stop every supervised launch at once; return those that stopped."""
+        results = await asyncio.gather(
+            *(
+                self.stop(launch_id, StopReason.SHUTDOWN)
+                for launch_id in self.active_launch_ids()
+            )
+        )
+        return tuple(result.launch_id for result in results if result.stopped)
+
+    def _save_ledger(self) -> None:
+        if os.name == "nt" or self._engine_started is None:
+            return
+        path = self._ledger_path
+        try:
+            if not self._ledger:
+                path.unlink(missing_ok=True)
+                return
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.tmp")
+            descriptor = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "engine": {
+                            "pid": os.getpid(),
+                            "started": self._engine_started,
+                        },
+                        "groups": {
+                            str(group_id): started
+                            for group_id, started in self._ledger.items()
+                        },
+                    },
+                    handle,
+                )
+            os.replace(temporary, path)
+        except OSError:
+            _log.warning("Could not record app processes in %s", path, exc_info=True)
     async def preview(self, request: LaunchRequest) -> LaunchPlan:
         if self._isolation_policy.is_blocked(str(request.app_id)):
             raise LaunchError(
@@ -913,6 +1035,11 @@ class ProcessLifecycleManager(LifecycleManager):
         record.process = process
         record.process_group_id = (None if isinstance(process, IsolatedProcess)
                                    else process.pid)
+        if record.process_group_id is not None:
+            started = await asyncio.to_thread(_process_started, process.pid)
+            if started is not None:
+                self._ledger[process.pid] = started
+                self._save_ledger()
         record.started_at = _now()
         record.endpoint = TargetEndpoint(
             "http", "127.0.0.1", port, "/", proxy_token=proxy_token
@@ -1270,6 +1397,9 @@ class ProcessLifecycleManager(LifecycleManager):
                 await asyncio.wait_for(process.wait(), self._stop_grace_seconds)
             except asyncio.TimeoutError:
                 self._signal_group_id(group_id, _FORCE_SIGNAL)
+        if group_id in self._ledger and not self._group_alive(group_id):
+            del self._ledger[group_id]
+            self._save_ledger()
 
     @staticmethod
     def _signal_group(process: asyncio.subprocess.Process, sig: signal.Signals) -> None:

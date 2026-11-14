@@ -347,14 +347,23 @@ class DefaultAppGateway(AppGateway):
                 if record.public.launch_id is not None:
                     await self._lifecycle.release(record.public.launch_id)
 
-            for _, state in scopes:
-                for launch_id in tuple(state.launch_ids):
-                    result = await self._lifecycle.stop(
-                        launch_id, StopReason.SHUTDOWN
-                    )
-                    if result.stopped:
-                        state.launch_ids.discard(launch_id)
-                        stopped.append(launch_id)
+            # Stop every launch at once: a service manager allows the engine
+            # only a few seconds to exit before it kills it outright.
+            pending = [
+                (state, launch_id)
+                for _, state in scopes
+                for launch_id in tuple(state.launch_ids)
+            ]
+            results = await asyncio.gather(
+                *(
+                    self._lifecycle.stop(launch_id, StopReason.SHUTDOWN)
+                    for _, launch_id in pending
+                )
+            )
+            for (state, launch_id), result in zip(pending, results):
+                if result.stopped:
+                    state.launch_ids.discard(launch_id)
+                    stopped.append(launch_id)
 
         async with self._map_lock:
             for scope_key, state in scopes:

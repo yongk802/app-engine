@@ -1314,3 +1314,137 @@ async def test_autostart_waits_for_runtime_composition_to_supply_subject(tmp_pat
 
     await asyncio.sleep(0.05)
     assert not port_record.exists()
+
+
+_posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+
+
+def _wrapped_manifest(tmp_path: Path) -> tuple[AppManifest, Path]:
+    """An app whose start command is a shell wrapper around the real server."""
+    server_record = tmp_path / "server.pid"
+    manifest = _manifest(
+        tmp_path / "app",
+        start=CommandStep(
+            argv=("/bin/sh", "start.sh"),
+            environment=(
+                EnvironmentBinding("PYTHON", EnvironmentSource.LITERAL, sys.executable),
+                EnvironmentBinding(
+                    "SERVER_PID_RECORD", EnvironmentSource.LITERAL, str(server_record)
+                ),
+            ),
+        ),
+    )
+    (tmp_path / "app" / "start.sh").write_text(
+        '"$PYTHON" server.py &\necho $! > "$SERVER_PID_RECORD"\nwait\n',
+        encoding="utf-8",
+    )
+    return manifest, server_record
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+async def _wait_gone(pid: int) -> bool:
+    for _ in range(150):
+        if not _alive(pid):
+            return True
+        await asyncio.sleep(0.02)
+    return False
+
+
+def _ledgers(tmp_path: Path) -> list[Path]:
+    return sorted((tmp_path / "runtime" / "processes").glob("*.json"))
+
+
+@_posix_only
+@pytest.mark.asyncio
+async def test_shutdown_stops_every_launch_and_the_server_behind_a_shell_wrapper(
+    tmp_path,
+):
+    manifest, server_record = _wrapped_manifest(tmp_path)
+    manager = _manager(tmp_path, manifest)
+    first = await manager.launch(_request(user="alice"), approval=None)
+    alice_server = int(server_record.read_text(encoding="utf-8"))
+    second = await manager.launch(_request(user="bob"), approval=None)
+    bob_server = int(server_record.read_text(encoding="utf-8"))
+    wrappers = [
+        manager._records[handle.launch_id].process.pid for handle in (first, second)
+    ]
+    assert len({alice_server, bob_server, *wrappers}) == 4
+    (ledger,) = _ledgers(tmp_path)
+    assert ledger.stat().st_mode & 0o777 == 0o600
+    assert set(json.loads(ledger.read_text(encoding="utf-8"))["groups"]) == {
+        str(pid) for pid in wrappers
+    }
+
+    stopped = await asyncio.wait_for(manager.shutdown(), timeout=5.0)
+
+    assert set(stopped) == {first.launch_id, second.launch_id}
+    for pid in (*wrappers, alice_server, bob_server):
+        assert await _wait_gone(pid), "an app process survived engine shutdown"
+    assert manager.active_launch_ids() == ()
+    assert _ledgers(tmp_path) == [], "nothing is left for the next engine to sweep"
+
+
+@_posix_only
+@pytest.mark.asyncio
+async def test_startup_sweep_stops_processes_left_by_a_dead_engine(tmp_path):
+    manifest, server_record = _wrapped_manifest(tmp_path)
+    previous = _manager(tmp_path, manifest)
+    handle = await previous.launch(_request(), approval=None)
+    try:
+        wrapper = previous._records[handle.launch_id].process.pid
+        server = int(server_record.read_text(encoding="utf-8"))
+        (ledger,) = _ledgers(tmp_path)
+        # The engine that wrote the record is gone: its PID now belongs to a
+        # process with another start time (here, this still-running test).
+        payload = json.loads(ledger.read_text(encoding="utf-8"))
+        payload["engine"]["started"] = "Thu Jan  1 00:00:00 1970"
+        ledger.write_text(json.dumps(payload), encoding="utf-8")
+
+        reaped = await _manager(tmp_path, manifest).recover()
+
+        assert reaped == (wrapper,)
+        assert await _wait_gone(wrapper)
+        assert await _wait_gone(server), "the real server outlived its wrapper"
+        assert not ledger.exists()
+    finally:
+        await previous.shutdown()
+
+
+@_posix_only
+@pytest.mark.asyncio
+async def test_startup_sweep_never_signals_a_process_it_cannot_identify(tmp_path):
+    manifest, server_record = _wrapped_manifest(tmp_path)
+    owner = _manager(tmp_path, manifest)
+    handle = await owner.launch(_request(), approval=None)
+    try:
+        wrapper = owner._records[handle.launch_id].process.pid
+        server = int(server_record.read_text(encoding="utf-8"))
+        (ledger,) = _ledgers(tmp_path)
+
+        # A second engine on the same state directory: the first still runs.
+        assert await _manager(tmp_path, manifest).recover() == ()
+        assert ledger.exists()
+
+        # A stale record whose PID has since been reused by another process:
+        # the PID matches, the recorded start time does not.
+        payload = json.loads(ledger.read_text(encoding="utf-8"))
+        payload["engine"]["started"] = "Thu Jan  1 00:00:00 1970"
+        payload["groups"][str(wrapper)] = "Thu Jan  1 00:00:00 1970"
+        ledger.write_text(json.dumps(payload), encoding="utf-8")
+
+        assert await _manager(tmp_path, manifest).recover() == ()
+        assert not ledger.exists(), "the stale record is discarded"
+        await asyncio.sleep(0.1)
+        assert _alive(wrapper) and _alive(server)
+        status = await owner.status(handle.launch_id)
+        assert status.state is RuntimeState.READY
+    finally:
+        await owner.shutdown()
+    assert await _wait_gone(server)

@@ -255,6 +255,7 @@ class DefaultAppEngineRuntime(AppEngineRuntime):
             self.catalog_key, await self.host.sources(self.subject)
         )
         self._started = True
+        await self.lifecycle.recover()
         for app in self.catalog.snapshot(self.catalog_key).apps:
             for target in app.manifest.targets:
                 if target.runtime is None or not target.runtime.autostart:
@@ -272,6 +273,9 @@ class DefaultAppEngineRuntime(AppEngineRuntime):
         if self._closed:
             return ShutdownReport((), ())
         stopped = await self.gateway.shutdown()
+        # Launches the gateway never tracked (autostart) stop here as well.
+        remaining = await self.lifecycle.shutdown()
+        stopped += tuple(item for item in remaining if item not in stopped)
         active = self.lifecycle.active_launch_ids()
         incomplete = tuple(item for item in active if item not in stopped)
         self._closed = True

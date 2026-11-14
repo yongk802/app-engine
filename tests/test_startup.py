@@ -19,7 +19,7 @@ def test_executable_startup_uses_local_ai_configuration(monkeypatch, tmp_path, c
     output = capsys.readouterr().out
     assert "Local AI" in output
     assert "http://127.0.0.1:11434" in output
-    assert called == {"host": "127.0.0.1", "port": 8770, "proxy_headers": False, "forwarded_allow_ips": None}
+    assert called == {"host": "127.0.0.1", "port": 8770, "proxy_headers": False, "forwarded_allow_ips": None, "timeout_graceful_shutdown": 3}
 
 
 def test_public_bind_is_refused_without_public_origin_mode(monkeypatch, tmp_path):

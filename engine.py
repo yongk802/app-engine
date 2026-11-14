@@ -1522,4 +1522,8 @@ if __name__ == "__main__":
         # A loopback reverse proxy may report the real scheme and client; nobody else.
         proxy_headers=_TRUST_PROXY,
         forwarded_allow_ips="127.0.0.1,::1" if _TRUST_PROXY else None,
+        # An open stream (events, a proxied app response) must not hold the
+        # lifespan shutdown back until the service manager kills the engine:
+        # that shutdown is what stops the app servers.
+        timeout_graceful_shutdown=3,
     )

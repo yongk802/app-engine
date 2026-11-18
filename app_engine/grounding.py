@@ -83,9 +83,11 @@ class KnowledgeBase:
     @classmethod
     def load(cls, path: Path) -> "KnowledgeBase":
         try:
-            if Path(path).stat().st_size > 2 * 1024 * 1024:
+            with Path(path).open('rb') as source:
+                body = source.read(2 * 1024 * 1024 + 1)
+            if len(body) > 2 * 1024 * 1024:
                 raise InvalidKnowledgePackError('knowledge pack exceeds size budget')
-            raw = json.loads(Path(path).read_text())
+            raw = json.loads(body)
             entries = tuple(KnowledgeEntry(
                 id=item["id"], app_id=item["app_id"], title=item["title"],
                 keywords=tuple(item["keywords"]), fact=item["fact"],

@@ -828,13 +828,16 @@ async def app_chat(request: Request):
         config = _config.load()
         profile = _registry.get_profile(config.selected_profile)
         ready = status.running and profile.model_id in status.installed_model_ids
-        client = httpx.AsyncClient(base_url=config.ollama_endpoint, timeout=httpx.Timeout(180.0))
         knowledge = _knowledge
         if apps[app_id].chat_knowledge:
             try:
-                knowledge = load_declared_knowledge(Path(apps[app_id].root), apps[app_id].chat_knowledge)
+                knowledge = await asyncio.to_thread(load_declared_knowledge,
+                    Path(apps[app_id].root), apps[app_id].chat_knowledge)
             except InvalidKnowledgePackError:
-                pass
+                yield 'data: ' + json.dumps({'type': 'error', 'code': 'grounding_unavailable',
+                    'error': 'The app reference pack could not be safely validated.'}) + '\n\n'
+                return
+        client = httpx.AsyncClient(base_url=config.ollama_endpoint, timeout=httpx.Timeout(180.0))
         runtime = ChatRuntime(_registry, _config, client, readiness=lambda: ready, knowledge=knowledge)
         try:
             async for event in runtime.stream(app_id, apps[app_id].chat_system_prompt or "You are a helpful tutor.", messages):

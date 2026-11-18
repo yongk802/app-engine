@@ -61,3 +61,15 @@ def test_regex_input_and_concurrency_budget(tmp_path):
     finally:
         grounding._regex_slots.release()
         grounding._regex_slots.release()
+
+
+def test_large_ordinary_pack_validates_but_match_work_stays_bounded(tmp_path):
+    import json
+    path = write_pack(tmp_path)
+    raw = json.loads(path.read_text())
+    raw['entries'][0]['misconceptions'] *= 100
+    path.write_text(json.dumps(raw))
+    loaded = KnowledgeBase.load(path)
+    assert loaded.retrieve('vim-dojo', 'word')[0].id == 'vim-ciw'
+    with pytest.raises(InvalidKnowledgePackError, match='regex budget'):
+        detect_misconceptions('test', loaded.entries)

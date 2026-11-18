@@ -70,6 +70,13 @@ class PublisherPolicy:
         if (not stat.S_ISREG(status.st_mode) or status.st_size > 65536
                 or (os.name != 'nt' and (status.st_uid not in {0, os.getuid()} or status.st_mode & 0o022))):
             raise StoreError('invalid_publisher_policy', 'Publisher policy must be an operator-controlled regular file.')
+        if os.name != 'nt':
+            # File mode alone is insufficient if an app can replace its parent.
+            for parent in path.resolve(strict=True).parents:
+                info = parent.stat()
+                root_sticky = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+                if info.st_uid not in {0, os.getuid()} or (info.st_mode & 0o022 and not root_sticky):
+                    raise StoreError('invalid_publisher_policy', 'Publisher policy ancestors must be operator controlled.')
         try:
             return cls(json.loads(path.read_bytes()))
         except (ValueError, UnicodeError) as exc:

@@ -194,7 +194,8 @@ class UnitBoundary:
             if (not supplied.is_absolute() or supplied.is_symlink()
                     or supplied.resolve(strict=True) != expected):
                 raise ValueError(f"invalid {label}")
-            if supplied.stat().st_uid != self.engine_uid:
+            allowed_owners = {0, self.engine_uid} if request.phase == 'multiplayer' else {self.engine_uid}
+            if supplied.stat().st_uid not in allowed_owners:
                 raise ValueError(f"invalid {label} owner")
         for path in (app_root, request.data_dir, request.build_dir):
             if any(char in ":\x00" or char.isspace() for char in str(path)):

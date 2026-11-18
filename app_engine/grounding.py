@@ -19,7 +19,7 @@ _regex_slots = threading.BoundedSemaphore(2)
 
 
 def _evaluate_patterns(patterns: list[str], answer: str | None) -> list[str | None]:
-    if len(patterns) > 64 or any(not isinstance(p, str) or len(p) > 1024 for p in patterns):
+    if len(patterns) > (1024 if answer is None else 64) or any(not isinstance(p, str) or len(p) > 1024 for p in patterns):
         raise InvalidKnowledgePackError('grounding regex budget exceeded')
     if answer is not None and len(answer) > 131072:
         raise InvalidKnowledgePackError('grounding answer budget exceeded')

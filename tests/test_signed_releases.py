@@ -121,3 +121,18 @@ def test_policy_cannot_be_overwritten_by_untrusted_file_or_symlink(tmp_path):
         path.chmod(0o666)
         with pytest.raises(StoreError):
             PublisherPolicy.from_file(path)
+
+
+def test_policy_with_app_writable_parent_is_not_an_independent_trust_root(tmp_path):
+    import os
+    if os.name == 'nt':
+        pytest.skip('Unix directory permissions')
+    raw, *_ = fixture()
+    folder = tmp_path/'app-data'
+    folder.mkdir(mode=0o770)
+    folder.chmod(0o770)
+    path = folder/'policy.json'
+    path.write_text(json.dumps(raw))
+    path.chmod(0o600)
+    with pytest.raises(StoreError, match='ancestors'):
+        PublisherPolicy.from_file(path)

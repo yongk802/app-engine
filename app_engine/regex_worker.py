@@ -18,7 +18,7 @@ def main() -> int:
         pass
     value = json.loads(sys.stdin.buffer.read(2 * 1024 * 1024 + 1))
     patterns, answer = value['patterns'], value['answer']
-    if (not isinstance(patterns, list) or len(patterns) > 64
+    if (not isinstance(patterns, list) or len(patterns) > (1024 if answer is None else 64)
             or any(not isinstance(p, str) or len(p) > 1024 for p in patterns)
             or (answer is not None and (not isinstance(answer, str) or len(answer) > 131072))):
         return 64

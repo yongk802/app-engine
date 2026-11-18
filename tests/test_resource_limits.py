@@ -1,5 +1,6 @@
 """Resource policy rejects unbounded storage before starting any app code."""
 from pathlib import Path
+import os
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -45,6 +46,7 @@ def test_ordinary_host_directories_cannot_claim_disk_containment(tmp_path):
         ResourceLimits().validate_storage(state, 'demo')
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Persistent Linux volume budgets require statvfs')
 def test_overlarge_shared_or_unowned_mount_rejected(tmp_path, monkeypatch):
     state = tmp_path/'state'
     for kind in ('data', 'build'):

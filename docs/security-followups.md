@@ -50,8 +50,8 @@ attack. It also retains the original real network/filesystem boundary tests.
 
 Compilation and matching both happen in a fresh isolated Python interpreter,
 with no inherited environment or site packages. Each call has a two-second wall
-deadline, kill/reap on expiry, at most two workers, 64 patterns (1024 characters
-each), 128 KiB answer characters and bounded result strings. Linux additionally
+deadline, kill/reap on expiry, at most two workers, 64 patterns per answer (1024 characters
+each); whole-pack compilation permits at most 1024 rules, 128 KiB answer characters and bounded result strings. Linux additionally
 sets a 256 MiB address-space and one CPU-second limit; Unix disables worker core
 dumps. Windows/macOS rely on the parent deadline where address-space limits are
 unavailable. Packs are at most 2 MiB and 1024 entries. Compilation/search never
@@ -62,7 +62,7 @@ worker isolates computation, not arbitrary executable app code.
 ## Publisher and builder trust (atrium-0m9g25)
 
 `APP_ENGINE_PUBLISHER_POLICY` selects an operator-controlled JSON file. The
-engine fails startup for a malformed or writable policy. Keys are raw 32-byte
+engine fails startup for a malformed policy or app-writable file/ancestor. Keys are raw 32-byte
 Ed25519 public keys, base64 encoded. Example schema (replace placeholders):
 
 ```json

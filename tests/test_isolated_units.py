@@ -8,7 +8,11 @@ import pytest
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="Linux systemd units")
 
-from app_engine.isolated_units import PackageTrackerCapability, UnitBoundary, UnitRequest
+from app_engine.isolated_units import (
+    PackageTrackerCapability,
+    UnitBoundary,
+    UnitRequest,
+)
 
 
 def _boundary(tmp_path: Path) -> tuple[UnitBoundary, Path, Path, Path]:
@@ -18,7 +22,7 @@ def _boundary(tmp_path: Path) -> tuple[UnitBoundary, Path, Path, Path]:
     state.mkdir()
     app = apps / "demo"
     data = state / "data" / "demo" / "0123456789abcdef"
-    build = state / "build" / "demo"
+    build = state / "build" / "demo" / "0123456789abcdef"
     for path in (app, data, build):
         path.mkdir(parents=True)
     (app / "app.json").write_text(json.dumps({"id": "demo"}))
@@ -47,7 +51,7 @@ def test_unit_confines_identity_files_and_external_network(tmp_path):
     assert f"--property=BindPaths={data}:/app-data" in argv
     assert f"--property=BindPaths={build}:/app-build" in argv
     assert "secret-canary" not in " ".join(argv)
-    assert "--property=InaccessiblePaths=/run/app-engine-runner.sock" in argv
+    assert any(part.startswith("--property=InaccessiblePaths=/run/app-engine-runner.sock ") for part in argv)
     assert "--property=BindsTo=app-engine-runner@7.service" in argv
 
 
@@ -125,6 +129,7 @@ def test_unit_rejects_untrusted_broker_service_name(tmp_path):
 
 def test_multiplayer_unit_uses_existing_room_state_and_private_room_code(tmp_path):
     boundary, app, _data, build = _boundary(tmp_path)
+    build = build.parent  # Room services have app-wide state, not a user scope.
     room_root = tmp_path / "multiplayer"
     rooms = room_root / "demo"
     rooms.mkdir(parents=True)
@@ -153,7 +158,7 @@ def test_package_tracker_capabilities_apply_only_to_its_start_phase(tmp_path):
     apps, state = boundary.apps_roots[0], boundary.state_root
     tracker = apps / "package-tracker"
     data = state / "data" / "package-tracker" / ("a" * 16)
-    build = state / "build" / "package-tracker"
+    build = state / "build" / "package-tracker" / ("a" * 16)
     for path in (tracker, data, build):
         path.mkdir(parents=True)
     (tracker / "app.json").write_text(json.dumps({"id": "package-tracker"}))
@@ -169,7 +174,7 @@ def test_package_tracker_capabilities_apply_only_to_its_start_phase(tmp_path):
                             boundary.engine_group, package_tracker=cap)
     request = UnitRequest("package-tracker", "start", tracker, data, build,
                           json.dumps({"version": 1, "argv": ["/usr/bin/python3"],
-                                      "cwd": "/workspace", "env": {}}))
+                                      "cwd": "/workspace", "env": {"PORT": "18777"}}))
     prepared = boundary.prepare_request(request)
     env = json.loads(prepared.payload)["env"]
     assert env["PACKAGE_TRACKER_CARRIER_PROXY_TOKEN"] == "a" * 64
@@ -182,10 +187,10 @@ def test_package_tracker_capabilities_apply_only_to_its_start_phase(tmp_path):
     assert "b" * 64 not in " ".join(argv)
 
     install = UnitRequest("package-tracker", "install", tracker, data, build, request.payload)
-    assert boundary.prepare_request(install) == install
+    assert json.loads(boundary.prepare_request(install).payload)['network'] == {'bind': [], 'connect': []}
     assert not any("/run/package-tracker/mtls" in item for item in _command(
         boundary, "ae-package-tracker-install-123", install))
     demo = UnitRequest("demo", "start", _app, _data, _build, request.payload)
-    assert boundary.prepare_request(demo) == demo
+    assert json.loads(boundary.prepare_request(demo).payload)['network'] == {'bind': [18777], 'connect': []}
     assert not any("/run/package-tracker/mtls" in item for item in _command(
         boundary, "ae-demo-start-123", demo))

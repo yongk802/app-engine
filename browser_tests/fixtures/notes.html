@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-app-id="__APP_ID__">
+<meta charset="utf-8">
+<title>Browser flow notes</title>
+<h1>Browser flow notes</h1>
+<form id="note-form">
+  <label>Note <textarea id="note" disabled></textarea></label>
+  <button type="submit" disabled>Save note</button>
+</form>
+<p role="status">Loading</p>
+<script>
+window.browserFlowApp = true;
+const appId = document.documentElement.dataset.appId;
+const token = new window.URLSearchParams(window.location.hash.slice(1)).get('atrium_state_token');
+const endpoint = '/api/app-state/' + encodeURIComponent(appId);
+const note = document.querySelector('#note');
+const status = document.querySelector('[role="status"]');
+const button = document.querySelector('button');
+async function request(method, value) {
+  const response = await window.fetch(endpoint, {
+    method,
+    headers: {'Content-Type': 'application/json', 'X-App-State-Token': token},
+    body: value === undefined ? undefined : JSON.stringify(value),
+  });
+  if (!response.ok) throw new Error('Save API returned HTTP ' + response.status);
+  return response.json();
+}
+request('GET').then(value => {
+  note.value = value.note || '';
+  note.disabled = button.disabled = false;
+  status.textContent = 'Loaded';
+}).catch(error => { status.textContent = error.message; });
+document.querySelector('#note-form').onsubmit = async event => {
+  event.preventDefault();
+  try {
+    await request('PUT', {note: note.value});
+    status.textContent = 'Saved';
+  } catch (error) { status.textContent = error.message; }
+};
+</script>
+</html>

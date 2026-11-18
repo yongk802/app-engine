@@ -1,0 +1,17 @@
+name: Isolated process boundaries
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  linux-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Test real kernel boundaries in this disposable runner VM
+        run: |
+          sudo touch /run/app-engine-audit-disposable
+          sudo env PYTHONPATH="$PWD" python3 security_tests/isolated_vm.py --engine-user "$(id -un)"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -14,9 +14,9 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from .contracts import (
     AppEngineError,
     AppId,
+    ApprovalReceipt,
     AppSession,
     AppSessionId,
-    ApprovalReceipt,
     AssetRequest,
     ConfigurationValue,
     CreateProjectRequest,
@@ -24,17 +24,17 @@ from .contracts import (
     InstanceId,
     LaunchId,
     LaunchRequest,
+    ManifestChange,
     OpenAppRequest,
     PlanFingerprint,
-    ManifestChange,
     ProxyRequest,
     StopReason,
     TargetId,
 )
+from .public_origin import http_origin
 from .response_headers import nonce_page, proxied_defaults
 from .runtime import DefaultAppEngineRuntime
 from .search import category_counts, search_apps
-
 
 Authenticate = Callable[[], HostSubject | Awaitable[HostSubject]]
 
@@ -87,6 +87,60 @@ AuthorizeApp = Callable[[HostSubject, str], bool]
 StandingApproval = Callable[[str], bool]
 RecordApproval = Callable[[str], None]
 MayRebuild = Callable[[Request], bool]
+
+
+@dataclass(frozen=True)
+class _RouteSession:
+    principal: str
+    session: AppSession
+    origin: tuple[str, str, int] | None
+
+
+class _SessionAccess:
+    """Keep browser identity and origin checks separate from runtime identity."""
+
+    def __init__(self, principal, origin, authorize):
+        self.sessions: dict[AppSessionId, _RouteSession] = {}
+        self.resolve_principal = principal
+        self.resolve_origin = origin
+        self.authorize = authorize
+
+    def principal(self, request: Request, subject: HostSubject) -> str:
+        return self.resolve_principal(request, subject) if self.resolve_principal else subject.subject_id
+
+    async def add(self, runtime, session: AppSession, request: Request, subject: HostSubject) -> None:
+        origin = http_origin(self.resolve_origin(request, str(session.app_id))) if self.resolve_origin else None
+        if self.resolve_origin is not None and origin is None:
+            await runtime.gateway.close(session.session_id)
+            raise HTTPException(500, "app session origin is not configured")
+        self.sessions[session.session_id] = _RouteSession(self.principal(request, subject), session, origin)
+
+    def owned(self, session_id: AppSessionId, request: Request,
+              subject: HostSubject, *, content: bool = False) -> AppSession:
+        owned = self.sessions.get(session_id)
+        if owned is None or owned.principal != self.principal(request, subject):
+            raise HTTPException(404, "app session not found")
+        if content:
+            if self.authorize is not None and not self.authorize(request, owned.session):
+                raise HTTPException(404, "app session not found")
+            actual = http_origin(f"{request.url.scheme}://{request.url.netloc}")
+            if owned.origin is not None and actual != owned.origin:
+                raise HTTPException(403, "app session origin denied")
+            supplied = request.headers.get("origin")
+            if owned.origin is not None and supplied is not None and http_origin(supplied) != owned.origin:
+                raise HTTPException(403, "app session origin denied")
+        return owned.session
+
+
+async def _approve_current_plan(runtime, launch, fingerprint) -> None:
+    fresh = await runtime.lifecycle.preview(launch)
+    if fresh.fingerprint != fingerprint:
+        raise HTTPException(409, "previewed plan is stale")
+
+
+def _record_app_approval(callback, app_id: str) -> None:
+    if callback is not None:
+        callback(app_id)
 
 
 async def _json_object(request: Request) -> dict:
@@ -168,6 +222,10 @@ def create_app_engine_router(
     record_approval: RecordApproval | None = None,
     may_rebuild: MayRebuild | None = None,
     proxy_html_csp: str | None = None,
+    session_principal: Callable[[Request, HostSubject], str] | None = None,
+    session_origin: Callable[[Request, str], str] | None = None,
+    authorize_session: Callable[[Request, AppSession], bool] | None = None,
+    record_app_approval: Callable[[str], None] | None = None,
 ) -> APIRouter:
     """Build a host-authenticated router without starting another server.
 
@@ -179,10 +237,16 @@ def create_app_engine_router(
     players reserves restarting the shared backend for the owner); absent, anyone may.
     ``proxy_html_csp`` is the ``Content-Security-Policy`` (the host's framing policy)
     given to a proxied HTML page whose backend sent none; absent, none is added.
+    ``session_principal`` preserves the real browser user when a host maps users
+    to one runtime subject. ``session_origin`` binds content to the app origin
+    chosen at open, and ``authorize_session`` rechecks current app grants. Hosts
+    using isolated app origins must supply these boundaries; absent, reusable
+    routes retain the embedding host's subject/origin policy.
     """
 
     router = APIRouter(prefix=prefix, tags=["app-engine"])
-    sessions: dict[AppSessionId, tuple[str, AppSession]] = {}
+    access = _SessionAccess(session_principal, session_origin, authorize_session)
+    sessions = access.sessions
     launch_owners: dict[LaunchId, str] = {}
     previewed: dict[PlanFingerprint, tuple[str, LaunchRequest]] = {}
     approved: set[tuple[str, PlanFingerprint]] = set()
@@ -272,7 +336,9 @@ def create_app_engine_router(
         owner = previewed.get(typed)
         if owner is None or owner[0] != subject.subject_id:
             raise HTTPException(404, "previewed plan not found")
+        await _approve_current_plan(runtime, owner[1], typed)
         approved.add((subject.subject_id, typed))
+        _record_app_approval(record_app_approval, str(owner[1].app_id))
         if record_approval is not None:
             record_approval(str(typed))
         return Response(status_code=204)
@@ -312,7 +378,7 @@ def create_app_engine_router(
             raise
         except AppEngineError as exc:
             raise HTTPException(400, detail={"code": exc.code, "message": str(exc)}) from exc
-        sessions[session.session_id] = (subject.subject_id, session)
+        await access.add(runtime, session, request, subject)
         if session.launch_id is not None:
             launch_owners[session.launch_id] = subject.subject_id
         return {
@@ -323,22 +389,17 @@ def create_app_engine_router(
         }
 
     @router.delete("/sessions/{session_id}", status_code=204)
-    async def close_session(session_id: str, subject: HostSubject = Depends(authenticate)):
+    async def close_session(session_id: str, request: Request, subject: HostSubject = Depends(authenticate)):
         typed = AppSessionId(session_id)
-        owned = sessions.get(typed)
-        if owned is not None and owned[0] != subject.subject_id:
-            raise HTTPException(404, "app session not found")
-        session = sessions.pop(typed, ("", None))[1]
-        if session is not None:
+        if typed in sessions:
+            access.owned(typed, request, subject)
+            sessions.pop(typed)
             await runtime.gateway.close(typed)
         return Response(status_code=204)
 
     @router.get("/sessions/{session_id}/assets/{asset_path:path}")
     async def asset(session_id: str, asset_path: str, request: Request, subject: HostSubject = Depends(authenticate)):
-        owned = sessions.get(AppSessionId(session_id))
-        if owned is None or owned[0] != subject.subject_id:
-            raise HTTPException(404, "app session not found")
-        session = owned[1]
+        session = access.owned(AppSessionId(session_id), request, subject, content=True)
         try:
             result = await runtime.gateway.serve_asset(
                 session,
@@ -358,10 +419,7 @@ def create_app_engine_router(
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
     async def proxy(session_id: str, proxy_path: str, request: Request, subject: HostSubject = Depends(authenticate)):
-        owned = sessions.get(AppSessionId(session_id))
-        if owned is None or owned[0] != subject.subject_id:
-            raise HTTPException(404, "app session not found")
-        session = owned[1]
+        session = access.owned(AppSessionId(session_id), request, subject, content=True)
 
         async def request_body():
             async for chunk in request.stream():

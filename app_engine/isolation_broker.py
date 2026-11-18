@@ -22,6 +22,7 @@ from pathlib import Path
 from .isolated_units import PackageTrackerCapability, UnitBoundary, UnitRequest
 from .isolation_wire import MAX_REQUEST_BYTES, recv_request, send_event
 from .package_tracker_egress import read_token_file
+from .resource_limits import ResourceLimits
 
 _REQUEST_FIELDS = {"version", "app_id", "phase", "app_root", "data_dir",
                    "build_dir", "plan"}
@@ -102,6 +103,11 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
         request = prepare(request)
     unit_name = f"ae-{request.app_id}-{request.phase}-{secrets.token_hex(8)}"
     command = boundary.command(unit_name, request, broker_unit_name)
+    limits = getattr(boundary, 'resource_limits', None)
+    if limits is not None:
+        limits.validate_storage(boundary.state_root, request.app_id,
+                                multiplayer=boundary.multiplayer_root if request.phase == 'multiplayer' else None)
+        limits.configure_slice(request.app_id)
     process = subprocess.Popen(command, stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                close_fds=True)
@@ -140,8 +146,9 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
                     chunk = os.read(key.fileobj.fileno(), 16 * 1024)
                     if chunk:
                         output_bytes += len(chunk)
-                        if output_bytes > _MAX_COMMAND_OUTPUT_BYTES:
+                        if output_bytes > (limits.output_bytes if limits else _MAX_COMMAND_OUTPUT_BYTES):
                             send_event(sock, b"E", b"Isolated command output limit exceeded.\n")
+                            send_event(sock, b"X", b"125")
                             return
                         send_event(sock, key.data, chunk)
                     else:
@@ -221,7 +228,7 @@ def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
     required = {"apps_roots", "state_root", "multiplayer_root", "engine_user", "engine_group"}
     if (not isinstance(value, dict)
             or not required <= set(value)
-            or set(value) - required - {"package_tracker"}
+            or set(value) - required - {"package_tracker", "service_ports", "resource_limits"}
             or not isinstance(value["apps_roots"], list)
             or not 1 <= len(value["apps_roots"]) <= 8
             or any(not isinstance(item, str) or not item.startswith("/")
@@ -238,10 +245,18 @@ def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
         value["package_tracker"], owner_uid=0,
         engine_gid=grp.getgrnam(value["engine_group"]).gr_gid)
         if "package_tracker" in value else None)
+    services = value.get("service_ports", {})
+    if (not isinstance(services, dict) or len(services) > 128
+            or any(not _SAFE_APP_ID.fullmatch(app_id) or not isinstance(ports, list)
+                   or len(ports) > 32
+                   or any(type(port) is not int or not 1024 <= port <= 65535 for port in ports)
+                   for app_id, ports in services.items())):
+        raise ValueError("invalid service capability ports")
     return UnitBoundary(tuple(Path(item) for item in value["apps_roots"]),
                         Path(value["state_root"]), user.pw_uid,
                         value["engine_group"], Path(value["multiplayer_root"]),
-                        capability)
+                        capability, tuple((app_id, tuple(ports)) for app_id, ports in services.items()),
+                        ResourceLimits.parse(value.get('resource_limits', {})))
 
 
 def main() -> int:

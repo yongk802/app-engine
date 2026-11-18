@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Callable
 
 from .app_tool_schema import check_schema, validate
+from .app_saves import AppSaveStore, MAX_SAVE_BYTES
 from .contracts import AppId, ApprovalReceipt, LaunchRequest, OpenAppRequest, ProxyRequest
 
-MAX_STATE = 100 * 1024
+MAX_STATE = MAX_SAVE_BYTES
 MAX_OUTPUT = 256 * 1024
 TOOL_TIMEOUT = 60.0
 _ID = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -39,6 +40,7 @@ class AppTools:
     def __init__(self, runtime, state_dir: Path, approved: Callable[[str], bool]):
         self.runtime = runtime
         self.state_dir = Path(state_dir)
+        self.saves = AppSaveStore(state_dir)
         self.approved = approved
         self.events = deque(maxlen=64)
         self.cursor = 0
@@ -103,21 +105,11 @@ class AppTools:
         self.panel_seen = time.monotonic()
         return {'events': [{k: v for k, v in event.items() if k != 'time'} for event in self.events if event['id'] > cursor and time.monotonic() - event['time'] < 60], 'cursor': self.cursor}
 
-    def _state_path(self, app_id):
-        self._app(app_id)
-        path = self.state_dir / f'{app_id}.json'
-        if path.is_symlink():
-            raise ValueError('App state is not a regular file')
-        return path
-
     def _read_state(self, app_id):
-        path = self._state_path(app_id)
-        if not path.exists():
+        self._app(app_id)
+        raw = self.saves.read(app_id)
+        if raw is None:
             return {'state': {}, 'revision': hashlib.sha256(b'absent').hexdigest()}
-        with path.open('rb') as stream:
-            raw = stream.read(MAX_STATE + 1)
-        if len(raw) > MAX_STATE:
-            raise ValueError('App state exceeds 100 KB')
         return {'state': json.loads(raw), 'revision': hashlib.sha256(raw).hexdigest()}
 
     async def call(self, name: str, arguments: dict):
@@ -150,18 +142,8 @@ class AppTools:
             raw = json.dumps(arguments['state'], ensure_ascii=False, allow_nan=False).encode('utf-8')
             if len(raw) > MAX_STATE:
                 raise ValueError('App state exceeds 100 KB')
-            path = self._state_path(app_id)
-            self.state_dir.mkdir(parents=True, exist_ok=True)
             # No await between revision check and atomic replacement: serial with host writes.
-            import tempfile
-            import os
-            fd, temporary = tempfile.mkstemp(prefix='.assistant-state-', dir=self.state_dir)
-            try:
-                with os.fdopen(fd, 'wb') as stream:
-                    stream.write(raw)
-                Path(temporary).replace(path)
-            finally:
-                Path(temporary).unlink(missing_ok=True)
+            self.saves.write(app_id, raw)
             return {'revision': hashlib.sha256(raw).hexdigest(), 'saved': True}
         declared = (await asyncio.to_thread(self._declarations)).get(name)
         if declared is None:

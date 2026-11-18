@@ -15,11 +15,13 @@ def load(tmp_path, monkeypatch, public=False, shared_origin=False):
     monkeypatch.setenv('APP_ENGINE_STATE_DIR', str(tmp_path / 'state'))
     monkeypatch.delenv('APP_ENGINE_PUBLIC_ORIGIN', raising=False)
     monkeypatch.delenv('APP_ENGINE_APP_ORIGINS', raising=False)
+    monkeypatch.delenv('APP_ENGINE_TRUST_SAME_ORIGIN_APPS', raising=False)
     if public:
         monkeypatch.setenv('APP_ENGINE_PUBLIC_ORIGIN', 'https://play.example.com')
         monkeypatch.setenv('APP_ENGINE_ADMIN_SECRET', 'a-long-test-owner-secret')
     if shared_origin:
         monkeypatch.setenv('APP_ENGINE_APP_ORIGINS', 'same')
+        monkeypatch.setenv('APP_ENGINE_TRUST_SAME_ORIGIN_APPS', '1')
     import engine
     return importlib.reload(engine)
 

@@ -13,7 +13,7 @@ git clone https://github.com/yongk802/app-engine.git
 cd app-engine
 python -m venv .venv
 . .venv/bin/activate                 # Windows: .venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
@@ -59,3 +59,7 @@ If you're new to contributing on GitHub, the flow is:
 
 By contributing, you agree that your contributions are licensed under the
 project's MIT License.
+
+Dependency declarations live in `pyproject.toml`; do not hand-edit generated
+requirements. Follow [the release input policy](docs/release-inputs.md) to update
+`uv.lock` and its hash-bearing exports together. CI verifies they stay in sync.

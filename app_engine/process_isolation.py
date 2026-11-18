@@ -39,7 +39,7 @@ class ProcessIsolationPolicy:
 
     @classmethod
     def from_environment(cls) -> ProcessIsolationPolicy:
-        mode = cls.from_value(os.environ.get("APP_ENGINE_PROCESS_ISOLATION", "legacy")).mode
+        mode = cls.from_value(os.environ.get("APP_ENGINE_PROCESS_ISOLATION", "enforce")).mode
         return cls(
             mode,
             _app_ids_from_environment("APP_ENGINE_ISOLATED_APP_IDS"),
@@ -54,7 +54,7 @@ class ProcessIsolationPolicy:
                 else self.mode)
 
     def decide(self, phase: str, app_id: str | None = None) -> ProcessDecision:
-        if phase not in {"install", "build", "start"}:
+        if phase not in {"install", "build", "start", "multiplayer"}:
             raise ValueError(f"unsupported managed process phase: {phase}")
         mode = self.mode_for(app_id)
         if app_id is not None and self.is_blocked(app_id):

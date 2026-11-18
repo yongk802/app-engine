@@ -1,13 +1,58 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import asyncio
+import subprocess
+import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 
 class InvalidKnowledgePackError(ValueError):
     pass
+
+
+REGEX_DEADLINE_SECONDS = 2.0
+_regex_slots = threading.BoundedSemaphore(2)
+
+
+def _worker_environment() -> dict[str, str]:
+    # Windows 3.10's CreateProcess rejects an empty environment block. Keep
+    # only the OS installation path required for system DLL resolution.
+    if sys.platform == 'win32':
+        root = os.environ.get('SystemRoot')
+        if not root:
+            raise InvalidKnowledgePackError('grounding worker requires SystemRoot')
+        return {'SystemRoot': root}
+    return {}
+
+
+def _evaluate_patterns(patterns: list[str], answer: str | None) -> list[str | None]:
+    if len(patterns) > (1024 if answer is None else 64) or any(not isinstance(p, str) or len(p) > 1024 for p in patterns):
+        raise InvalidKnowledgePackError('grounding regex budget exceeded')
+    if answer is not None and len(answer) > 131072:
+        raise InvalidKnowledgePackError('grounding answer budget exceeded')
+    if not _regex_slots.acquire(blocking=False):
+        raise InvalidKnowledgePackError('grounding evaluator busy')
+    try:
+        result = subprocess.run(
+            [sys.executable, '-I', '-S', str(Path(__file__).with_name('regex_worker.py'))],
+            input=json.dumps({'patterns': patterns, 'answer': answer}).encode(),
+            capture_output=True, timeout=REGEX_DEADLINE_SECONDS, env=_worker_environment(), check=False,
+        )
+        if result.returncode != 0:
+            raise InvalidKnowledgePackError('invalid or over-budget grounding regex')
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run kills and reaps the child before raising on timeout.
+        raise InvalidKnowledgePackError('grounding evaluator deadline exceeded') from exc
+    except OSError as exc:
+        raise InvalidKnowledgePackError('grounding evaluator could not start') from exc
+    finally:
+        _regex_slots.release()
 
 
 ANSWER_SCHEMA = {
@@ -52,7 +97,11 @@ class KnowledgeBase:
     @classmethod
     def load(cls, path: Path) -> "KnowledgeBase":
         try:
-            raw = json.loads(Path(path).read_text())
+            with Path(path).open('rb') as source:
+                body = source.read(2 * 1024 * 1024 + 1)
+            if len(body) > 2 * 1024 * 1024:
+                raise InvalidKnowledgePackError('knowledge pack exceeds size budget')
+            raw = json.loads(body)
             entries = tuple(KnowledgeEntry(
                 id=item["id"], app_id=item["app_id"], title=item["title"],
                 keywords=tuple(item["keywords"]), fact=item["fact"],
@@ -62,16 +111,14 @@ class KnowledgeBase:
             ) for item in raw["entries"])
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise InvalidKnowledgePackError(str(exc)) from exc
-        if not entries or len({entry.id for entry in entries}) != len(entries):
+        if not entries or len(entries) > 1024 or len({entry.id for entry in entries}) != len(entries):
             raise InvalidKnowledgePackError("knowledge entries must be non-empty with unique IDs")
         for entry in entries:
             if not all((entry.id, entry.app_id, entry.title, entry.keywords, entry.fact, entry.source_note)):
                 raise InvalidKnowledgePackError(f"incomplete knowledge entry: {entry.id}")
-            for rule in entry.misconceptions:
-                try:
-                    re.compile(rule.pattern)
-                except re.error as exc:
-                    raise InvalidKnowledgePackError(f"invalid pattern in {entry.id}: {exc}") from exc
+        patterns = [rule.pattern for entry in entries for rule in entry.misconceptions]
+        if patterns:
+            _evaluate_patterns(patterns, None)
         return cls(entries)
 
     def retrieve(self, app_id: str, question: str, limit: int = 4) -> tuple[KnowledgeEntry, ...]:
@@ -114,13 +161,17 @@ def build_grounding_context(entries: tuple[KnowledgeEntry, ...]) -> str:
 
 
 def detect_misconceptions(answer: str, entries: tuple[KnowledgeEntry, ...]) -> tuple[Misconception, ...]:
-    found = []
-    for entry in entries:
-        for rule in entry.misconceptions:
-            match = re.search(rule.pattern, answer, flags=re.IGNORECASE)
-            if match:
-                found.append(Misconception(entry.id, rule.correction, match.group(0)))
-    return tuple(found)
+    rules = [(entry, rule) for entry in entries for rule in entry.misconceptions]
+    if not rules:
+        return ()
+    matches = _evaluate_patterns([rule.pattern for _, rule in rules], answer)
+    return tuple(Misconception(entry.id, rule.correction, match)
+                 for (entry, rule), match in zip(rules, matches) if match is not None)
+
+
+async def detect_misconceptions_async(answer: str, entries: tuple[KnowledgeEntry, ...]) -> tuple[Misconception, ...]:
+    """Keep child startup and waiting off the ASGI event loop."""
+    return await asyncio.to_thread(detect_misconceptions, answer, entries)
 
 
 def extract_visible_answer(chunks: list[str]) -> list[str]:

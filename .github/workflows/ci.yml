@@ -9,40 +9,95 @@ permissions:
   contents: read
 
 jobs:
+  dependency-advisories:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10.22', '3.11.17', '3.12.15', '3.13.16']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.13.4'
+      - run: uv sync --python ${{ matrix.python }} --locked --no-install-project
+      - name: Check runtime and browser-worker Python dependencies against current advisories
+        run: |
+          uv run --no-sync pip-audit --disable-pip --no-deps -r requirements.txt --format json --output runtime-advisories.json
+          uv run --no-sync pip-audit --disable-pip --no-deps -r deploy/package-tracker/requirements.txt --format json --output tracker-advisories.json
+          uv run --no-sync pip-audit --disable-pip --no-deps -r deploy/build-tools.txt --format json --output tools-advisories.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.5'
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=low
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dependency-advisories-${{ matrix.python }}
+          path: '*-advisories.json'
+  locked-inputs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.13.4'
+      - name: Verify dependency exports match the reviewed lock
+        run: |
+          uv lock --check
+          uv export --locked --no-dev --no-emit-project -o requirements.txt >/dev/null
+          uv export --locked --no-emit-project -o requirements-dev.txt >/dev/null
+          uv export --locked --group browser --no-emit-project -o requirements-browser.txt >/dev/null
+          uv pip compile --universal --python-version 3.10 --generate-hashes deploy/package-tracker/requirements.in -o deploy/package-tracker/requirements.txt >/dev/null
+          uv pip compile --universal --python-version 3.10 --generate-hashes deploy/build-tools.in -o deploy/build-tools.txt >/dev/null
+          git diff --exit-code -- uv.lock requirements.txt requirements-dev.txt requirements-browser.txt deploy/package-tracker/requirements.txt deploy/build-tools.txt
+  browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.13.4'
+      - run: uv sync --python 3.12.15 --locked --all-groups --no-install-project
+      - run: uv run --no-sync python -m playwright install --with-deps chromium
+      - run: uv run --no-sync python -m pytest browser_tests/ -vv --timeout=90 --basetemp=browser-test-results
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: browser-test-results
   test:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest (macOS 26 ARM) currently times out all subprocess
-        # loopback health checks, including on main. Keep full macOS coverage
-        # on the stable Intel image while investigating that runner regression.
-        os: [ubuntu-latest, windows-latest, macos-15-intel]
-        python: ['3.10', '3.11', '3.12', '3.13']
+        # Intel macOS remains the supported CI image while ARM runner loopback
+        # startup regressions are investigated separately.
+        os: [ubuntu-24.04, windows-2025, macos-15-intel]
+        python: ['3.10.22', '3.11.17', '3.12.15', '3.13.16']
     runs-on: ${{ matrix.os }}
     steps:
-      # personal-apps is private, so CI can't check it out; the cross-repo tutor
-      # checks skip and the catalog tests use tests/fixtures (run them locally
-      # against a personal-apps clone before a release).
-      - uses: actions/checkout@v4
+      # Cross-repo tutor checks use fixtures: personal-apps is private.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: app-engine
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
-          python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: app-engine/requirements*.txt
-      - uses: astral-sh/setup-uv@v6
-      - run: python -m pip install -r requirements-dev.txt
+          version: '0.13.4'
+      - run: uv sync --python ${{ matrix.python }} --locked --no-install-project
         working-directory: app-engine
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
-      - run: python scripts/ci-loopback-probe.py
+          node-version: '22.23.5'
+      - run: npm ci --ignore-scripts
+        working-directory: app-engine
+      - run: npm test
+        working-directory: app-engine
+      - run: uv run --no-sync python scripts/ci-loopback-probe.py
         if: runner.os == 'macOS'
         working-directory: app-engine
-      - run: python -m pytest tests/ -vv --timeout=60
+      - run: uv run --no-sync python -m pytest tests/ -vv --timeout=60
         working-directory: app-engine
       - run: node --test "app_engine/multiplayer/test/*.test.mjs"
         working-directory: app-engine
         shell: bash
-

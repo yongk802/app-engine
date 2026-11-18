@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from urllib.parse import unquote, urlsplit, urlunsplit
 import httpx
@@ -66,6 +67,7 @@ class Release:
     package_url: str
     sha256: str
     size_bytes: int
+    attestation: str = ''
 
     @classmethod
     def parse(cls, raw: object) -> Release:
@@ -84,7 +86,13 @@ class Release:
                 not isinstance(categories, list) or len(categories) > 100 or
                 any(not isinstance(item, str) or len(item) > 100 for item in categories)):
             raise StoreError('invalid_catalog', 'Release metadata or package location is invalid.')
-        return cls(**{key: raw[key] for key in fields}, size_bytes=size, categories=tuple(categories))
+        attestation = raw.get('attestation')
+        if attestation is not None and not isinstance(attestation, dict):
+            raise StoreError('invalid_catalog', 'Release attestation must be an object.')
+        encoded = json.dumps(attestation, sort_keys=True, separators=(',', ':'), allow_nan=False) if attestation is not None else ''
+        if len(encoded) > 16384:
+            raise StoreError('invalid_catalog', 'Release attestation is too large.')
+        return cls(**{key: raw[key] for key in fields}, size_bytes=size, categories=tuple(categories), attestation=encoded)
 
 
 @dataclass(frozen=True)

@@ -247,23 +247,22 @@ Regression tests: `tests/test_security_headers.py`, `tests/test_bad_requests.py`
 ## 2026-11-18 code and deployment review
 
 A read of the routes, the gates and the deployment files, with each finding
-confirmed by curl against two throwaway instances (loopback, and a public
-rehearsal at `play.localhost`) before and after the fix.
+confirmed by curl against throwaway instances (loopback, and a public rehearsal
+at `play.localhost`). The review started from 0.3.4; two of its findings were
+closed the same day by #18, and this table says which.
 
 | # | Finding | Status | Detail |
 |---|---|---|---|
-| R1 | Launcher routes answered on app origins, which reopened A2 | **Fixed** | A2 relied on a cross-origin JSON fetch needing a preflight. But every origin reaches the same engine and the session cookie covers each `<id>.<host>`, so a hosted app's script could call `/api/chat`, `/admin/players`, `/api/apps/rejected` or `/sign-out` on its *own* origin, same-origin, with the visitor's session: it read the player list and the chat and posted chat as the owner. Locally an app on `<id>.localhost` read `/api/local-ai/diagnostics` and the install plan. `AppOriginGate` now answers 403 to any route outside the app surface when the Host is not the launcher's: app files, app state, the room service, session content, `/state`, `/api/app-chat`, `/api/local-ai/status` (chat panels poll it), the bearer-only `/api/players/` API and the sign-in pages. The `same` layout has one origin and is not helped, as its startup warning already says. |
+| R1 | Launcher routes answered on app origins, which reopened A2 | **Fixed** | A2 relied on a cross-origin JSON fetch needing a preflight. But every origin reaches the same engine and the session cookie covers each `<id>.<host>`, so a hosted app's script could call `/api/chat`, `/admin/players`, `/api/apps/rejected` or `/sign-out` on its *own* origin, same-origin, with the visitor's session. #18 closed those route by route (`_require_launcher_host`). What stayed open was local: an app on `<id>.localhost` read `/api/local-ai/diagnostics`, the install plan and the speech status, and a route added later would be open until someone remembered the check. `AppOriginGate` now answers 403 to any route outside the app surface when the Host is not the launcher's: app files, app state, the room service, session content, `/state`, `/api/app-chat`, `/api/local-ai/status` (chat panels poll it), the bearer-only `/api/players/` API and the sign-in pages. The `same` layout has one origin and is not helped, as its startup warning already says. |
 | R2 | `testserver` was a local name and a launcher host in production | **Fixed** | The Host gate (#3) and `_is_launcher_host` accepted the test client's name. A bare name is not reserved: on a hostile network it can resolve to an attacker, be rebound to 127.0.0.1, and then read the launcher page with its owner capability as the same origin. It is now accepted only with `APP_ENGINE_TESTING=1`, which `tests/conftest.py` sets. |
-| R3 | The admin secret was stored as a bare SHA-256 | **Fixed** | A minted secret has 192 random bits and was safe either way; a chosen `APP_ENGINE_ADMIN_SECRET` could be searched offline from a stolen `players.json` (T1). It is now stored with the players' PBKDF2 scheme. An old record still verifies and is re-stored on the next start with the configured secret or the next owner sign-in, without signing anyone out. A configured secret under 16 characters earns a startup warning. Going back to an older build needs the secret set again through `APP_ENGINE_ADMIN_SECRET`. |
+| R3 | The admin secret was stored as a bare SHA-256 | **Fixed in #18** | A minted secret has 192 random bits and was safe either way; a chosen `APP_ENGINE_ADMIN_SECRET` could be searched offline from a stolen `players.json` (T1). `admin_credentials.py` now stores it stretched and salted, and an old record is upgraded on the next successful check without signing anyone out. |
 
 **Noted, not changed:**
 - The sign-in limiter counts per exact address, so an IPv6 client can rotate
   within its own prefix, and there is no per-username count.
-- Routes read a whole body before checking its size; the proxy's
-  `client_max_body_size 2m` is the only cap before sign-in.
 - Public mode does not check the Host name itself (nginx `server_name` does).
 - `scripts/app-engine-hardening.conf` uses `ProtectSystem=full`, so the
   engine's own code stays writable by the user that also runs app commands (A8).
 
-Regression tests: `tests/test_origin_gate.py`. Each test of a fix was checked
-to fail on `0b9b198`.
+Regression tests: `tests/test_origin_gate.py`. The local app-origin test and
+the `testserver` test were checked to fail on `302b3d4`.

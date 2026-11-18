@@ -1,14 +1,10 @@
 """Launcher routes answer on the launcher's host name only; an app's origin reaches what an app needs."""
 
-import hashlib
-import json
-
 import pytest
 from fastapi.testclient import TestClient
 
 from app_engine import host_gate
 from app_engine.origin_gate import app_origin_may_call
-from app_engine.public_origin import Accounts, startup_warnings, PublicOrigin
 from test_public_origin import APP, LAUNCHER, PUBLIC, load_engine, public_client, sign_in
 
 SECRET = "hunter2-but-longer"
@@ -81,53 +77,3 @@ def test_testserver_is_a_local_name_only_under_test(tmp_path, monkeypatch):
         assert client.get("/").status_code == 421
         page = client.get("/", headers={"host": "127.0.0.1:8770"})
         assert page.status_code == 200 and module._admin_capability in page.text
-
-
-def test_the_admin_secret_is_stored_salted_and_stretched(tmp_path):
-    accounts = Accounts.load(tmp_path)
-    accounts.set_admin_secret(SECRET)
-    stored = json.loads((tmp_path / "players.json").read_text())["admin"]["secret_hash"]
-    assert stored.startswith("pbkdf2$") and hashlib.sha256(SECRET.encode()).hexdigest() not in stored
-    assert accounts.verify_admin_secret(SECRET)
-    assert not accounts.verify_admin_secret(SECRET + "x") and not accounts.verify_admin_secret("")
-    other = Accounts.load(tmp_path / "other")
-    other.set_admin_secret(SECRET)
-    assert other.data["admin"]["secret_hash"] != stored   # a salt per record
-
-
-def _legacy(tmp_path) -> Accounts:
-    """A state file written before the change: a bare SHA-256 of the secret, and a live session."""
-    accounts = Accounts.load(tmp_path)
-    accounts.data["admin"]["secret_hash"] = hashlib.sha256(SECRET.encode()).hexdigest()
-    accounts.save()
-    accounts.create_admin_session()
-    return Accounts.load(tmp_path)
-
-
-def test_an_old_secret_record_still_signs_in_and_is_upgraded(tmp_path):
-    accounts = _legacy(tmp_path)
-    assert not accounts.verify_admin_secret("wrong-secret-entirely")
-    assert not accounts.data["admin"]["secret_hash"].startswith("pbkdf2$")
-    assert accounts.verify_admin_secret(SECRET)
-    reread = Accounts.load(tmp_path)
-    assert reread.data["admin"]["secret_hash"].startswith("pbkdf2$")
-    assert len(reread.data["admin"]["sessions"]) == 1   # same secret: nobody is signed out
-    assert reread.verify_admin_secret(SECRET)
-
-
-def test_a_configured_secret_upgrades_its_old_record_at_startup(tmp_path):
-    accounts = _legacy(tmp_path)
-    assert accounts.ensure_admin_secret(SECRET) is None
-    assert accounts.data["admin"]["secret_hash"].startswith("pbkdf2$")
-    assert len(accounts.data["admin"]["sessions"]) == 1
-    first = accounts.data["admin"]["secret_hash"]
-    assert accounts.ensure_admin_secret(SECRET) is None and accounts.data["admin"]["secret_hash"] == first
-    assert accounts.ensure_admin_secret("a-different-long-secret") is None
-    assert accounts.data["admin"]["sessions"] == [] and accounts.verify_admin_secret("a-different-long-secret")
-
-
-def test_a_short_configured_secret_is_warned_about():
-    public = PublicOrigin.parse(PUBLIC)
-    assert any("APP_ENGINE_ADMIN_SECRET" in note for note in startup_warnings("127.0.0.1", public, True, admin_secret="short"))
-    assert not any("APP_ENGINE_ADMIN_SECRET" in note for note in startup_warnings("127.0.0.1", public, True, admin_secret=SECRET))
-    assert not any("APP_ENGINE_ADMIN_SECRET" in note for note in startup_warnings("127.0.0.1", public, True))

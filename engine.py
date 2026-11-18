@@ -80,7 +80,8 @@ from app_engine.public_origin import (
 from app_engine.proxy_headers import forward_app_headers
 from app_engine.outbound_tls import OutboundTlsPolicy
 from app_engine.atrium_status import AtriumStatusProbe
-from app_engine.host_gate import LocalHostGate
+from app_engine.host_gate import LocalHostGate, test_host_names
+from app_engine.origin_gate import AppOriginGate
 from app_engine.response_headers import Nosniff
 from app_engine.listener_gate import LoopbackListenerGate
 from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
@@ -199,7 +200,8 @@ async def lifespan(_: FastAPI):
         print(f"app-engine -> public origin {_PUBLIC.origin}; apps at {where}; owner sign-in at {_PUBLIC.origin}/admin", flush=True)
         if _minted_admin_secret:
             print(f"            admin secret (shown once, kept only as a hash): {_minted_admin_secret}", flush=True)
-        for note in startup_warnings(os.environ.get("APP_ENGINE_HOST", "127.0.0.1"), _PUBLIC, _TRUST_PROXY):
+        for note in startup_warnings(os.environ.get("APP_ENGINE_HOST", "127.0.0.1"), _PUBLIC, _TRUST_PROXY,
+                                     admin_secret=os.environ.get("APP_ENGINE_ADMIN_SECRET")):
             print(f"            warning: {note}", flush=True)
         if _PUBLIC_APPS:
             print(f"            hosting: {', '.join(sorted(_PUBLIC_APPS))}", flush=True)
@@ -225,6 +227,12 @@ async def lifespan(_: FastAPI):
 # No /docs, /redoc or /openapi.json: nothing uses them, and they hand anyone who
 # can reach the port a map of every route.
 app = FastAPI(title="app-engine", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# Innermost, so sign-in is asked for first: a launcher route is answered only on
+# the launcher's host name, never on an app's origin, where the app's own script
+# could call it with the visitor's session.
+app.add_middleware(AppOriginGate,
+                   is_launcher=lambda request: _is_launcher_host(request),
+                   trusted=lambda request: _is_mtls_request(request))
 if _PUBLIC:
     app.add_middleware(OwnerGate, accounts=_accounts, enabled=True,
                        mcp_proxy_secret=_MCP_PROXY_SECRET)
@@ -452,7 +460,8 @@ def _served_on_app_origin(request: Request, app_id: str) -> bool:
 
 def _is_launcher_host(request: Request) -> bool:
     host = _hostname(request)
-    return host in {"127.0.0.1", "localhost", "::1", "testserver"} or bool(_PUBLIC and host == _PUBLIC.hostname)
+    return (host in {"127.0.0.1", "localhost", "::1"} or host in test_host_names()
+            or bool(_PUBLIC and host == _PUBLIC.hostname))
 
 
 def _app_origin(request: Request, app_id: str) -> str:

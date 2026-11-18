@@ -48,6 +48,7 @@ _APP_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _USERNAME = re.compile(r"^[a-z0-9][a-z0-9_-]{2,23}$")
 _NAME_LIMIT = 40
 PASSWORD_MIN = 8
+ADMIN_SECRET_MIN = 16         # a configured secret shorter than this earns a startup warning
 _PBKDF2_ROUNDS = 200_000
 
 
@@ -231,9 +232,25 @@ class Accounts:
     def has_admin_secret(self) -> bool:
         return bool(self.data["admin"].get("secret_hash"))
 
+    def _admin_secret_matches(self, candidate: str) -> bool:
+        """Check against the salted PBKDF2 record, or a bare SHA-256 one from before 0.3.5."""
+        stored = self.data["admin"].get("secret_hash") or ""
+        if stored.startswith("pbkdf2$"):
+            return check_password(candidate, stored)
+        return bool(stored) and _same(candidate, stored)
+
+    def _upgrade_admin_secret_hash(self, secret: str) -> None:
+        """Re-store a secret that just verified against a bare SHA-256 record. The secret
+        did not change, so the owner's sessions stay."""
+        if not (self.data["admin"].get("secret_hash") or "").startswith("pbkdf2$"):
+            self.data["admin"]["secret_hash"] = hash_password(secret)
+            self.save()
+
     def set_admin_secret(self, secret: str) -> None:
-        """Store only the hash; every owner session is revoked with a new secret."""
-        self.data["admin"]["secret_hash"] = _digest(secret)
+        """Store only a salted, stretched hash (a stolen state file must not give up a
+        chosen secret to a quick offline search); every owner session is revoked with a
+        new secret."""
+        self.data["admin"]["secret_hash"] = hash_password(secret)
         self.data["admin"]["created"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self.data["admin"]["sessions"] = []
         self.save()
@@ -242,8 +259,10 @@ class Accounts:
         """Adopt the configured secret, or mint one if none exists. Returns a freshly minted
         secret exactly once so the operator can be told; otherwise None."""
         if configured:
-            if not self.has_admin_secret or not _same(configured, self.data["admin"]["secret_hash"]):
+            if not self.has_admin_secret or not self._admin_secret_matches(configured):
                 self.set_admin_secret(configured)
+            else:
+                self._upgrade_admin_secret_hash(configured)
             return None
         if self.has_admin_secret:
             return None
@@ -253,8 +272,12 @@ class Accounts:
 
     def verify_admin_secret(self, candidate: str) -> bool:
         self.refresh()   # a secret rotated by the CLI counts from now, not from the next cookie
-        stored = self.data["admin"].get("secret_hash")
-        return bool(stored) and isinstance(candidate, str) and len(candidate) <= 256 and _same(candidate, stored)
+        if not isinstance(candidate, str) or not candidate or len(candidate) > 256:
+            return False
+        if not self._admin_secret_matches(candidate):
+            return False
+        self._upgrade_admin_secret_hash(candidate)
+        return True
 
     # ── sessions ───────────────────────────────────────────────────────────
 
@@ -667,7 +690,8 @@ def clear_session_cookie(response: Response, public: PublicOrigin) -> None:
     response.delete_cookie(SESSION_COOKIE, domain=public.cookie_domain(), path="/")
 
 
-def startup_warnings(host: str, public: PublicOrigin | None, trust_proxy: bool) -> list[str]:
+def startup_warnings(host: str, public: PublicOrigin | None, trust_proxy: bool,
+                     admin_secret: str | None = None) -> list[str]:
     """Deployment mistakes worth a line in the log before the first visitor arrives."""
     notes: list[str] = []
     if public is None:
@@ -676,6 +700,8 @@ def startup_warnings(host: str, public: PublicOrigin | None, trust_proxy: bool) 
         notes.append("APP_ENGINE_PUBLIC_ORIGIN is https but APP_ENGINE_TRUST_PROXY is not set: behind a TLS proxy the engine will see http and Secure cookies will not be sent. Set APP_ENGINE_TRUST_PROXY=1.")
     if host.strip().strip("[]").lower() not in _LOOPBACK:
         notes.append(f"APP_ENGINE_HOST={host} listens on a public interface without TLS. Bind 127.0.0.1 and put Caddy or nginx in front.")
+    if admin_secret and len(admin_secret) < ADMIN_SECRET_MIN:
+        notes.append(f"APP_ENGINE_ADMIN_SECRET has fewer than {ADMIN_SECRET_MIN} characters: anyone who can reach /admin can guess at it. Use a long random value.")
     if public.layout == "same":
         notes.append("APP_ENGINE_APP_ORIGINS=same: apps share one browser origin on this server (no per-app isolation). Use a domain with a wildcard record for the subdomain layout.")
     return notes

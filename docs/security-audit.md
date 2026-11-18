@@ -62,7 +62,7 @@ That changes which attackers matter, compared with Atrium's vault:
 | A3 | State directory readable by other users | **Fixed** | `~/.config/app-engine/app-state` was `0755` with `0644` saves. Startup now creates it `0700` and strips the *other* bits from an existing tree. Group bits stay because the isolated Package Tracker broker traverses it by group (`6181223`). |
 | A4 | `/api/local-ai/install-plan` answered in public mode | **Fixed** | It was the one local-AI route that didn't call `_deny_public_local_ai()`. |
 | A5 | `/docs`, `/redoc`, `/openapi.json` published | **Fixed** | Nothing used them, and they handed out a full route map. |
-| A6 | Re-invite leaves the player's old sessions and password live | Open | `regenerate_invite` mints a new code but doesn't revoke sessions. When a re-invite is meant to lock someone out, the owner should *disable* the player, which does clear sessions. Deferred since 2026-09-15. |
+| A6 | Re-invite leaves the player's old sessions and password live | **Fixed** | `regenerate_invite` now clears the player's password and every session before it mints the new code, so a re-invite locks out whoever held the old ones. (This row still said *Open* until the 2026-11-18 review.) |
 | A7 | Orphaned Node room service can double-write `rooms.json` | **Fixed** | An engine killed without stopping its Node room service left the service running, and the next engine started a second one on the same directory; each kept its own rooms in memory and overwrote the other's moves. The host now gives the service a stdin pipe and `APP_ENGINE_MULTIPLAYER_EXIT_WITH_PARENT=1`, so it exits when the engine's end closes. Every service also claims its data directory with `service.lock` (pid, token, 10 s heartbeat), refuses to start beside a live holder and takes over one that is dead or 30 s stale. Tests: `app_engine/multiplayer/test/lock.test.mjs`, `tests/test_multiplayer_host.py`. |
 | A8 | App commands run as host subprocesses | Accepted (tracked) | `docs/superpowers/specs/2026-10-22-production-security-design.md` slice 3. `APP_ENGINE_PROCESS_ISOLATION=audit`/`enforce` and the isolated runner are the path. |
 
@@ -82,7 +82,8 @@ framing policy. Each test was checked to fail on `origin/main`.
 - the engine and Atrium, over the mTLS `/api/mcp` gateway.
 
 `LoopbackListenerGate` refuses any non-loopback listener, including a direct
-`uvicorn` import. **New:** `LocalHostGate` refuses any unknown Host (#3).
+`uvicorn` import. **New:** `LocalHostGate` refuses any unknown Host (#3), and
+`AppOriginGate` keeps launcher routes off app origins (R1 below).
 
 ### 2. Cryptographic primitives
 - **Tokens:** `secrets.token_urlsafe(32)` for sessions, capabilities and
@@ -95,9 +96,9 @@ framing policy. Each test was checked to fail on `origin/main`.
 Nothing found.
 
 ### 3. Credential derivation
-- **Passwords and admin secret:** PBKDF2-HMAC-SHA256, 200,000 rounds, per-user
-  salt. The admin secret was unsalted SHA-256 at the 2026-09-15 review and is
-  fixed.
+- **Passwords and admin secret:** PBKDF2-HMAC-SHA256, 200,000 rounds, a salt
+  per record. The admin secret stayed a bare SHA-256 until the 2026-11-18
+  review (R3 below), although this section had said otherwise.
 - **Session and invite tokens:** stored only as SHA-256 digests, which suits
   256-bit random tokens.
 - **Password minimum:** 8 characters.
@@ -123,8 +124,6 @@ they belong to apps, not to secrets.
 **Capabilities:**
 - App-state capabilities live only for the engine process. They reach the app
   only in the URL fragment and never in a query or a log.
-
-**Open:** a re-invite keeps old sessions (A6).
 
 ### 7. Authentication, authorisation and rate limits
 **Loopback mode:**
@@ -244,3 +243,27 @@ scan showed a fourth, Z4. Z5 and Z6 are the scan's remarks on the launcher's own
 | Z6 | The launcher's `img-src`, `connect-src` and `frame-src` allow any `http:` or `https:` origin | **Accepted** | App frames and screenshots live on each app's own origin, the assistant frame and the players' server are addresses the owner sets, so the list is not fixed. Narrowing it means building the policy per response from that configuration. With scripts and styles nonce-locked and no HTML sink in the page, the wildcards only matter after another bug. |
 
 Regression tests: `tests/test_security_headers.py`, `tests/test_bad_requests.py`.
+
+## 2026-11-18 code and deployment review
+
+A read of the routes, the gates and the deployment files, with each finding
+confirmed by curl against two throwaway instances (loopback, and a public
+rehearsal at `play.localhost`) before and after the fix.
+
+| # | Finding | Status | Detail |
+|---|---|---|---|
+| R1 | Launcher routes answered on app origins, which reopened A2 | **Fixed** | A2 relied on a cross-origin JSON fetch needing a preflight. But every origin reaches the same engine and the session cookie covers each `<id>.<host>`, so a hosted app's script could call `/api/chat`, `/admin/players`, `/api/apps/rejected` or `/sign-out` on its *own* origin, same-origin, with the visitor's session: it read the player list and the chat and posted chat as the owner. Locally an app on `<id>.localhost` read `/api/local-ai/diagnostics` and the install plan. `AppOriginGate` now answers 403 to any route outside the app surface when the Host is not the launcher's: app files, app state, the room service, session content, `/state`, `/api/app-chat`, `/api/local-ai/status` (chat panels poll it), the bearer-only `/api/players/` API and the sign-in pages. The `same` layout has one origin and is not helped, as its startup warning already says. |
+| R2 | `testserver` was a local name and a launcher host in production | **Fixed** | The Host gate (#3) and `_is_launcher_host` accepted the test client's name. A bare name is not reserved: on a hostile network it can resolve to an attacker, be rebound to 127.0.0.1, and then read the launcher page with its owner capability as the same origin. It is now accepted only with `APP_ENGINE_TESTING=1`, which `tests/conftest.py` sets. |
+| R3 | The admin secret was stored as a bare SHA-256 | **Fixed** | A minted secret has 192 random bits and was safe either way; a chosen `APP_ENGINE_ADMIN_SECRET` could be searched offline from a stolen `players.json` (T1). It is now stored with the players' PBKDF2 scheme. An old record still verifies and is re-stored on the next start with the configured secret or the next owner sign-in, without signing anyone out. A configured secret under 16 characters earns a startup warning. Going back to an older build needs the secret set again through `APP_ENGINE_ADMIN_SECRET`. |
+
+**Noted, not changed:**
+- The sign-in limiter counts per exact address, so an IPv6 client can rotate
+  within its own prefix, and there is no per-username count.
+- Routes read a whole body before checking its size; the proxy's
+  `client_max_body_size 2m` is the only cap before sign-in.
+- Public mode does not check the Host name itself (nginx `server_name` does).
+- `scripts/app-engine-hardening.conf` uses `ProtectSystem=full`, so the
+  engine's own code stays writable by the user that also runs app commands (A8).
+
+Regression tests: `tests/test_origin_gate.py`. Each test of a fix was checked
+to fail on `0b9b198`.

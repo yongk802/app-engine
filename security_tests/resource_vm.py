@@ -89,6 +89,7 @@ def run_resources(root, user, stack):
             volume(base, images, app_id+'-'+kind, user.pw_gid, stack)
             scope = base/'0123456789abcdef'
             scope.mkdir(mode=0o770)
+            scope.chmod(0o770)
             os.chown(scope, user.pw_uid, user.pw_gid)
     limits = ResourceLimits(cpu_percent=25, memory_bytes=64*1024*1024, tasks=16,
                             disk_bytes=32*1024*1024, disk_inodes=1024,
@@ -131,8 +132,8 @@ def run_resources(root, user, stack):
     cpu = probe("import time; s=time.monotonic(); c=time.process_time(); "
                 "exec('while time.monotonic()-s<2: pass'); print(time.process_time()-c)", 'cpu')
     assert float(cpu.splitlines()[0]) < 1.1, cpu  # Two wall seconds at 25% of one CPU.
-    memory = probe("x=bytearray(128*1024*1024); print('ESCAPED')", 'memory')
-    assert 'ESCAPED' not in memory and 'EXIT=0' not in memory, memory
+    memory = probe("print('allocating',flush=True); x=bytearray(128*1024*1024); print('ESCAPED')", 'memory')
+    assert 'allocating' in memory and 'ESCAPED' not in memory and 'EXIT=0' not in memory, memory
     pids = probe("import os,signal; children=[]\ntry:\n"
                  " for i in range(40):\n  p=os.fork()\n  if p==0:\n   import time; time.sleep(60); os._exit(0)\n  children.append(p)\n"
                  "except OSError as e: print('limited',e.errno,flush=True)\n"

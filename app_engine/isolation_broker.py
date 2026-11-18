@@ -148,6 +148,7 @@ def serve_connection(sock: socket.socket, boundary: UnitBoundary,
                         output_bytes += len(chunk)
                         if output_bytes > (limits.output_bytes if limits else _MAX_COMMAND_OUTPUT_BYTES):
                             send_event(sock, b"E", b"Isolated command output limit exceeded.\n")
+                            send_event(sock, b"X", b"125")
                             return
                         send_event(sock, key.data, chunk)
                     else:

@@ -136,3 +136,12 @@ def test_policy_with_app_writable_parent_is_not_an_independent_trust_root(tmp_pa
     path.chmod(0o600)
     with pytest.raises(StoreError, match='ancestors'):
         PublisherPolicy.from_file(path)
+
+
+@pytest.mark.parametrize('body', ['null', '[]', '{}', '{"mode":"allow_unsigned"}'])
+def test_malformed_explicit_policy_cannot_downgrade_to_unsigned(tmp_path, body):
+    path = tmp_path/'policy.json'
+    path.write_text(body)
+    path.chmod(0o600)
+    with pytest.raises(StoreError):
+        PublisherPolicy.from_file(path)

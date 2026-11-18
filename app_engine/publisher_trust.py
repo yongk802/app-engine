@@ -78,7 +78,10 @@ class PublisherPolicy:
                 if info.st_uid not in {0, os.getuid()} or (info.st_mode & 0o022 and not root_sticky):
                     raise StoreError('invalid_publisher_policy', 'Publisher policy ancestors must be operator controlled.')
         try:
-            return cls(json.loads(path.read_bytes()))
+            raw = json.loads(path.read_bytes())
+            if not isinstance(raw, dict):
+                raise ValueError('policy must be an object')
+            return cls(raw)
         except (ValueError, UnicodeError) as exc:
             raise StoreError('invalid_publisher_policy', 'Publisher trust policy is invalid.') from exc
 

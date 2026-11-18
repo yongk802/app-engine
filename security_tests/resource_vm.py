@@ -41,14 +41,17 @@ def volume(path, images, name, gid, stack):
     path.chmod(0o770)
 
 
-def request(boundary, root, user, app_id, code, serial):
+def request(boundary, root, user, app_id, code, serial, phase='start'):
     scope = '0123456789abcdef'
-    payload = {'version': 1, 'app_id': app_id, 'phase': 'start',
+    payload = {'version': 1, 'app_id': app_id, 'phase': phase,
                'app_root': str(root/'apps'/app_id),
                'data_dir': str(root/'state/data'/app_id/scope),
                'build_dir': str(root/'state/build'/app_id/scope),
                'plan': {'version': 1, 'argv': ['/usr/bin/python3', '-c', code],
                         'cwd': '/workspace', 'env': {'PORT': '18877'}}}
+    if phase == 'multiplayer':
+        payload['data_dir'] = str(root/'multiplayer'/app_id)
+        payload['build_dir'] = str(root/'state/build'/app_id)
     address = str(root/f'broker-{serial}.sock')
     with socket.socket(socket.AF_UNIX) as listener:
         listener.bind(address)
@@ -94,8 +97,10 @@ def run_resources(root, user, stack):
     limits = ResourceLimits(cpu_percent=25, memory_bytes=64*1024*1024, tasks=16,
                             disk_bytes=32*1024*1024, disk_inodes=1024,
                             preparation_seconds=6, service_seconds=6, output_bytes=65536)
+    volume(root/'multiplayer/demo', images, 'demo-multiplayer', user.pw_gid, stack)
     boundary = UnitBoundary((root/'apps',), root/'state', user.pw_uid,
-                            grp.getgrgid(user.pw_gid).gr_name, resource_limits=limits)
+                            grp.getgrgid(user.pw_gid).gr_name,
+                            multiplayer_root=root/'multiplayer', resource_limits=limits)
     limits.validate_storage(boundary.state_root, 'demo')
     limits.validate_storage(boundary.state_root, 'sibling')
     # Run a real sibling app throughout all hostile probes.
@@ -132,6 +137,15 @@ def run_resources(root, user, stack):
     cpu = probe("import time; s=time.monotonic(); c=time.process_time(); "
                 "exec('while time.monotonic()-s<2: pass'); print(time.process_time()-c)", 'cpu')
     assert float(cpu.splitlines()[0]) < 1.1, cpu  # Two wall seconds at 25% of one CPU.
+    from concurrent.futures import ThreadPoolExecutor
+    cpu_code = ("import time; s=time.monotonic(); c=time.process_time(); "
+                "exec('while time.monotonic()-s<2: pass'); print(time.process_time()-c)")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(request, boundary, root, user, 'demo', cpu_code, 'aggregate-'+str(i))
+                   for i in range(2)]
+        aggregate = [future.result(timeout=12) for future in futures]
+    assert all('EXIT=0' in out for out in aggregate), aggregate
+    assert sum(float(out.splitlines()[0]) for out in aggregate) < 1.1, aggregate
     memory = probe("print('allocating',flush=True); x=bytearray(128*1024*1024); print('ESCAPED')", 'memory')
     assert 'allocating' in memory and 'ESCAPED' not in memory and 'EXIT=0' not in memory, memory
     pids = probe("import os,signal; children=[]\ntry:\n"
@@ -155,10 +169,15 @@ def run_resources(root, user, stack):
     started = time.monotonic()
     wall = probe("import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(600)", 'wall')
     assert time.monotonic()-started < 15 and 'EXIT=0' not in wall, wall
+    rooms = request(boundary, root, user, 'demo',
+        "from pathlib import Path; p=Path('/app-data/room-save'); p.write_text('rooms persist'); print(p.read_text())",
+        'rooms', phase='multiplayer')
+    assert 'rooms persist' in rooms and 'EXIT=0' in rooms, rooms
     thread.join(60)
     assert not thread.is_alive() and not sibling_errors, sibling_errors
     print(json.dumps({'resource_budgets': 'passed', 'cpu': cpu.strip(),
                       'memory': 'contained', 'tasks': 'contained', 'disk': 'contained',
                       'inodes': 'contained', 'temporary_storage': 'contained',
                       'output': 'contained', 'wall_deadline': 'contained',
+                      'concurrent_units_share_cpu_budget': 'passed', 'multiplayer_save': 'passed',
                       'sibling_and_normal_saves': 'passed'}))

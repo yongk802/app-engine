@@ -62,6 +62,8 @@ def _add_backend_app(module, backend):
     (root / "app.json").write_text(json.dumps({
         "id": "backend", "label": "Backend", "icon": "B",
         "entry_point": f"http://127.0.0.1:{backend.server_port}"}))
+    from app_engine.backend_bindings import binding_fingerprint
+    module._record_code_approval(binding_fingerprint('backend', root, f'http://127.0.0.1:{backend.server_port}')[0])
 
 
 def _open_proxy(client, module, base=""):

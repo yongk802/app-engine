@@ -23,7 +23,8 @@ REPO = Path(__file__).resolve().parents[1]
 LIB = Path("/usr/local/libexec/app-engine")
 CONFIG = Path("/etc/app-engine-runner.json")
 SYSTEMD = Path("/etc/systemd/system")
-MODULES = ("isolated_units.py", "isolation_wire.py", "isolation_broker.py")
+MODULES = ("isolated_units.py", "isolation_wire.py", "isolation_broker.py",
+           "package_tracker_egress.py", "network_guard.py")
 _SAFE_ACCOUNT = re.compile(r"[a-zA-Z_][a-zA-Z0-9_-]{0,31}\Z")
 
 
@@ -98,6 +99,17 @@ def _configure_unit_source(source: Path, content: bytes,
     return content.replace(marker, replacement)
 
 
+def _create_unit_root() -> None:
+    root = Path("/var/lib/app-engine-runner/root")
+    root.mkdir(parents=True, exist_ok=True, mode=0o755)
+    for path in (root, *root.parents):
+        status = path.stat()
+        if path.is_symlink() or status.st_uid != 0 or status.st_mode & 0o022:
+            raise ValueError("isolated root must be root controlled")
+    _install(root / "etc" / "hosts", b"127.0.0.1 localhost atrium-status.localhost\n::1 localhost\n", 0o644)
+    _install(root / "etc" / "nsswitch.conf", b"hosts: files\n", 0o644)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apps-root", type=Path, action="append", required=True)
@@ -167,6 +179,7 @@ def main() -> int:
             parser.error(str(exc))
         _install(destination, content, 0o644)
     _install(LIB / "app_engine" / "__init__.py", b"", 0o644)
+    _create_unit_root()
     _install(CONFIG, policy, 0o600)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "app-engine-runner.socket"], check=True)

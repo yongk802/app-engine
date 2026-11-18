@@ -6,7 +6,6 @@ import asyncio
 import errno
 import hashlib
 import ipaddress
-from .media_types import asset_media_type
 import os
 import stat
 import uuid
@@ -29,9 +28,9 @@ from .contracts import (
     CatalogKey,
     LaunchId,
     OpenAppRequest,
+    ProcessScope,
     ProxyRequest,
     ProxyResponse,
-    ProcessScope,
     RuntimeState,
     ScopeKey,
     StopReason,
@@ -39,8 +38,8 @@ from .contracts import (
     TargetProviderError,
     TargetSpec,
 )
+from .media_types import asset_media_type
 from .proxy_headers import forward_app_headers
-
 
 _HOP_BY_HOP = frozenset(
     {
@@ -70,6 +69,25 @@ class _SessionRecord:
 PROXY_RESPONSE_START_TIMEOUT = 30.0
 
 
+async def _proxy_request_content(chunks):
+    """Keep real bodies streaming without inventing a chunked empty request.
+
+    Some HTTP/1.0 backends close after responding to a bodyless GET without
+    draining a fabricated chunk terminator, which can reset the response.
+    """
+    iterator = chunks.__aiter__()
+    async for first in iterator:
+        if first:
+            async def content(first=first):
+                yield first
+                async for chunk in iterator:
+                    yield chunk
+            return content()
+        # Keep the response-start timeout effective for an empty-chunk trickle.
+        await asyncio.sleep(0)
+    return None
+
+
 @dataclass
 class _ScopeState:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -86,7 +104,9 @@ class DefaultAppGateway(AppGateway):
         lifecycle,
         catalog_key: CatalogKey,
         transport: httpx.AsyncBaseTransport | None = None,
+        authorize_backend=None,
     ) -> None:
+        self._authorize_backend = authorize_backend
         self._catalog = catalog
         self._lifecycle = lifecycle
         self._catalog_key = catalog_key
@@ -116,6 +136,7 @@ class DefaultAppGateway(AppGateway):
 
         runtime = target.runtime
         if target.entry_point is not None:
+            self._require_backend_binding(manifest, target)
             endpoint = _entry_point_endpoint(target.entry_point)
             async with self._map_lock:
                 self._require_open_gateway()
@@ -239,6 +260,7 @@ class DefaultAppGateway(AppGateway):
         self, session: AppSession, request: ProxyRequest
     ) -> ProxyResponse:
         record = await self._session_record(session)
+        self._require_backend_binding(record.manifest, record.target)
         endpoint = record.endpoint
         if endpoint is None:
             raise TargetProviderError(
@@ -272,7 +294,7 @@ class DefaultAppGateway(AppGateway):
                 request.method,
                 url,
                 headers=headers,
-                content=request.body,
+                content=None,
             )
         except httpx.InvalidURL as exc:
             # A path with a NUL or another character no URL may carry.
@@ -280,9 +302,17 @@ class DefaultAppGateway(AppGateway):
                 "invalid_request_target",
                 "The request path cannot be forwarded to the application.",
             ) from exc
+        async def open_upstream():
+            content = await _proxy_request_content(request.body)
+            forwarded = upstream_request
+            if content is not None:
+                forwarded = self._client.build_request(
+                    request.method, url, headers=headers, content=content)
+            return await self._client.send(forwarded, stream=True)
+
         try:
             upstream = await asyncio.wait_for(
-                self._client.send(upstream_request, stream=True),
+                open_upstream(),
                 PROXY_RESPONSE_START_TIMEOUT,
             )
         except (httpx.HTTPError, asyncio.TimeoutError) as exc:
@@ -308,6 +338,12 @@ class DefaultAppGateway(AppGateway):
 
         return ProxyResponse(upstream.status_code, response_headers, body())
 
+    def _require_backend_binding(self, manifest, target) -> None:
+        if target.entry_point is not None and not (
+            self._authorize_backend and self._authorize_backend(manifest, target.entry_point)
+        ):
+            raise TargetProviderError("backend_binding_required", "The owner must approve this legacy backend binding.")
+
     async def websocket_endpoint(self, session: AppSession) -> TargetEndpoint:
         """Return the pinned target for a host-owned WebSocket route bridge.
 
@@ -317,6 +353,7 @@ class DefaultAppGateway(AppGateway):
         loopback endpoint without performing another DNS lookup.
         """
         record = await self._session_record(session)
+        self._require_backend_binding(record.manifest, record.target)
         if record.endpoint is None:
             raise TargetProviderError(
                 "static_target_websocket",

@@ -9,6 +9,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from app_engine.network_guard import restrict_network
+
 _MAX_PLAN_BYTES = 256 * 1024
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
@@ -18,6 +20,8 @@ class CommandPlan:
     argv: tuple[str, ...]
     cwd: Path
     env: dict[str, str]
+    bind_ports: tuple[int, ...] = ()
+    connect_ports: tuple[int, ...] = ()
 
 
 def decode_plan(raw: bytes, *, roots: tuple[Path, ...]) -> CommandPlan:
@@ -28,7 +32,8 @@ def decode_plan(raw: bytes, *, roots: tuple[Path, ...]) -> CommandPlan:
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid command plan") from exc
     if (not isinstance(value, dict)
-            or set(value) != {"version", "argv", "cwd", "env"}
+            or not {"version", "argv", "cwd", "env"} <= set(value)
+            or set(value) - {"version", "argv", "cwd", "env", "network"}
             or type(value["version"]) is not int or value["version"] != 1):
         raise ValueError("invalid command plan shape")
 
@@ -59,7 +64,13 @@ def decode_plan(raw: bytes, *, roots: tuple[Path, ...]) -> CommandPlan:
                    or not isinstance(item, str) or len(item) > 16384
                    or "\x00" in item for key, item in env.items())):
         raise ValueError("invalid command environment")
-    return CommandPlan(tuple(argv), resolved, env)
+    network = value.get("network", {"bind": [], "connect": []})
+    if (not isinstance(network, dict) or set(network) != {"bind", "connect"}
+            or any(not isinstance(network[key], list) or len(network[key]) > 32
+                   or any(type(port) is not int or not 0 <= port <= 65535 for port in network[key])
+                   for key in network) or 0 in network['connect']):
+        raise ValueError("invalid command network policy")
+    return CommandPlan(tuple(argv), resolved, env, tuple(network['bind']), tuple(network['connect']))
 
 
 def main() -> int:
@@ -67,6 +78,7 @@ def main() -> int:
         raw = sys.stdin.buffer.read(_MAX_PLAN_BYTES + 1)
         plan = decode_plan(raw, roots=(Path("/workspace"), Path("/app-data"),
                                        Path("/app-build")))
+        restrict_network(plan.bind_ports, plan.connect_ports)
         os.chdir(plan.cwd)
         null = os.open(os.devnull, os.O_RDONLY)
         os.dup2(null, 0)

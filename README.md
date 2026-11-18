@@ -109,11 +109,10 @@ conflicts or changed releases return 409, and unreachable stores return 502.
 
 ## App Studio and managed apps
 
-For production pilots, set `APP_ENGINE_PROCESS_ISOLATION=audit` to record each
-managed install, build, and start command that still runs on the host. See
-[managed command isolation status](docs/process-isolation.md) before using
-`enforce`, which currently refuses these commands because no verified isolated
-runner is available.
+Managed code defaults to `APP_ENGINE_PROCESS_ISOLATION=enforce`: the verified
+Linux runner is required, and missing support refuses execution. Explicit `legacy`
+or `audit` modes grant approved code the host account's privileges. See
+[managed command isolation](docs/process-isolation.md) for setup and the VM tests.
 
 The standalone distribution includes the same App Studio Atrium embeds. After
 starting app-engine, open
@@ -381,7 +380,10 @@ route and falls back to its own backend proxy on hosts without it.
 | `APP_ENGINE_ADMIN_SECRET` | *(minted on first public start)* | the owner's sign-in secret; setting a new value rotates it and signs every session out |
 | `APP_ENGINE_TRUST_PROXY` | `0` | honour `X-Forwarded-Proto`/`X-Forwarded-For` from a loopback reverse proxy |
 | `APP_ENGINE_APP_ORIGINS` | `subdomain` | where apps live on a public server: `subdomain` (`<id>.<host>`, isolated, needs wildcard DNS + certificate) or `same` (`<host>/apps/<id>/`, for a single host name) |
+| `APP_ENGINE_TRUST_SAME_ORIGIN_APPS` | `0` | set to `1` to permit `same` layout only when every app is trusted with launcher/owner privileges |
 | `APP_ENGINE_RATE_LIMIT` | `20,60` | requests per second and burst allowed per session or address on the player, multiplayer and app-state routes |
+| `APP_ENGINE_BODY_TIMEOUT_SECONDS` | `10` | total request-body read deadline; must be greater than zero and at most 300 seconds |
+| `APP_ENGINE_MAX_PROXY_BODY_BYTES` | `8388608` | maximum body forwarded to an approved app backend; hard maximum 128 MiB |
 | `APP_ENGINE_MAX_PLAYERS` | `50` | how many players the owner may invite |
 | `APP_ENGINE_PUBLIC_APPS` | *(unset: all, with a warning)* | comma-separated app ids a public server hosts; others are not listed, served or openable |
 | `APP_ENGINE_SMTP_URL`, `APP_ENGINE_MAIL_FROM` | *(unset: draft only)* | let the server email invitations itself |
@@ -458,10 +460,11 @@ per-name certificates, is in [docs/deploy-hostinger.md](docs/deploy-hostinger.md
 
 **Only one host name and no wildcard?** A hosting provider's name such as
 `srv1242099.hstgr.cloud` has no wildcard, so `<id>.<host>` cannot resolve. Set
-`APP_ENGINE_APP_ORIGINS=same`: apps are served under `https://<host>/apps/<id>/`
-on the launcher's origin (they then share one browser origin — no per-app
-isolation, which the engine says so in its startup log), and Caddy needs only
-that one certificate:
+`APP_ENGINE_APP_ORIGINS=same` together with `APP_ENGINE_TRUST_SAME_ORIGIN_APPS=1`
+permits trusted apps under `https://<host>/apps/<id>/`. Every app then has the
+launcher's browser privileges, including owner access; use this only for apps
+you trust at that level. Without the explicit trust setting, startup is refused.
+Caddy needs only that one certificate:
 
 ```caddyfile
 srv1242099.hstgr.cloud {
@@ -555,12 +558,54 @@ state. Local-AI mutations use a separate launcher-only capability, so an app
 cannot install, start, pull, verify, select, or remove models—even if it
 suppresses its `Referer`. Keep app-engine bound to loopback, its default.
 
+Session assets and backend proxy URLs are pinned to the app's exact origin
+(scheme, hostname and port) and the signed-in person who opened them. They are
+refused on the launcher and sibling app origins, and current player grants are
+rechecked on access. Launcher chat, account pages and owner APIs are unavailable
+on app hostnames. A supplied browser `Origin` must also match the destination's
+allowed origin. An embedding host using `create_app_engine_router` should supply
+`session_origin`, `session_principal` and `authorize_session` for its own origin
+and identity model; the standalone engine supplies all three.
+
+Browser saves and the MCP state tools share `APP_ENGINE_STATE_DIR/saves/owner/<id>.json`.
+Public players use `saves/players/<player-id>/<id>.json`; their browser and bearer
+APIs read the same save. Engine files such as `players.json`, `stores.json`,
+`local-ai.json` and `chat.json` stay outside this namespace. Apps may use those
+names without gaining access to the engine files. Saves are limited to 100 KB
+and replaced atomically; linked files and directories are refused.
+
+On startup, ordinary legacy saves for currently installed apps are copied from
+`<id>.json` and `players/<player-id>/<id>.json` into the new layout. Existing new
+saves win, and the original files are retained for recovery. Invalid, oversized
+or linked legacy saves are left untouched and logged. Owner files named
+`players.json`, `stores.json`, `local-ai.json` or `chat.json`, and the configured
+outbound mTLS policy file, are never imported as saves. An app with one of these
+ambiguous owner-save names starts with an empty save; recover genuine app data
+manually from a trusted backup. Restart after restoring a missing app to migrate
+its old save. Older engine versions still use the legacy copies, so rolling
+back requires deliberately restoring any newer saves while the engine is stopped.
+
 ## Test
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
+
+The browser integration lane runs real Chromium against a temporary engine and
+sample apps: launcher clicks, managed-process approval, app UI edits, save
+migration, engine restart and reload in a fresh browser session. It uses a fake
+local AI service and allows browser requests only to the fixture engine.
+
+```bash
+python -m pip install -r requirements-browser.txt
+python -m playwright install chromium
+python -m pytest browser_tests/ -v --timeout=90 --basetemp=browser-test-results
+```
+
+Engine logs, browser screenshots and Playwright traces are kept under
+`browser-test-results/`. CI runs this lane separately and uploads these files
+when a test fails.
 
 See [the three-platform release checklist](docs/release-testing.md) for clean
 install and real Ollama testing. CI runs Python 3.10–3.13 on macOS, Windows, and
@@ -611,3 +656,44 @@ Run `npm ci` followed by `npm test` for the browser-launcher tests. These cover 
 The standalone launcher can embed your own chat page and expose installed app
 controls to its harness over authenticated MCP. The panel and app backends load
 on demand. See [external chat setup and app tool declarations](docs/assistant.md).
+
+### Code execution approvals
+
+Managed external commands and local multiplayer rules require owner approval.
+Approval covers every file in the app package, including undeclared imports,
+dotfiles and data; changing any of them requires approval again. Packages with
+links, special files, more than 20,000 entries or more than 512 MiB cannot be
+approved. Put mutable application data in the engine-provided data directory,
+rather than modifying the installed package. Managed preparation caches still
+use the declared build inputs; they do not grant execution approval.
+
+The launcher previews multiplayer code before opening a game. Players cannot
+approve code: the owner must open and approve the game first. Operator app blocks
+apply to managed commands and multiplayer, including external server overrides.
+`legacy` and `audit` process modes execute approved code with the host account's
+privileges; `audit` only adds diagnostics. `enforce` uses the isolated runner and
+fails closed if it is missing. An explicitly configured trusted app root delegates
+execution trust to that root's administrator. Approval is a consent boundary,
+not a substitute for operating-system containment of malicious code.
+
+### Request consumption limits
+
+The standalone engine wraps request consumption with byte budgets and a total
+body deadline. It never prebuffers ahead of authentication. Rejected sessions,
+bearer tokens and app capabilities consume no body; chunked input counts against
+the same limits as Content-Length. Authentication and open/preview requests are
+limited to 8 KiB, store/binding approvals to 16 KiB, multiplayer commands to 64 KiB,
+and saves to 100 KiB. Other controls are limited to 256 KiB and backend proxies
+to 8 MiB by default. Exceeding a byte budget returns 413; exceeding the deadline
+returns 408. The connection closes without draining the remaining upload.
+Embedding hosts should install `app_engine.request_limits.RequestLimits` around
+their ASGI application as well as supplying authentication to the reusable routes.
+
+### Credential and release input policy
+
+Owner credential hashes now upgrade automatically to a versioned, salted
+password derivation after a successful sign-in (or matching startup secret),
+preserving sessions. Actual secret rotation revokes all owner and player sessions.
+The standalone requirements and CI environments consume committed dependency
+locks and artifact hashes. See [credentials, release inputs and publisher trust](docs/release-inputs.md)
+for migration, reproducible installs and the limits of unsigned store checksums.

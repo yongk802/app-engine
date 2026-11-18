@@ -26,13 +26,17 @@ import os
 import re
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import RLock
 from urllib.parse import urlsplit
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from .account_lock import account_transaction
+from .admin_credentials import hash_secret, legacy_hash, verify_secret
 
 SESSION_COOKIE = "app_engine_session"
 SESSION_LIFETIME = 90 * 86400
@@ -170,6 +174,22 @@ def trusted_proxy(request: Request, enabled: bool) -> bool:
     return enabled and client in _LOOPBACK
 
 
+def http_origin(value: str) -> tuple[str, str, int] | None:
+    """Compare browser origins without treating default ports as different."""
+    try:
+        parts = urlsplit(value)
+        if (parts.scheme not in {"http", "https"} or not parts.hostname
+                or parts.username is not None or parts.password is not None
+                or parts.path not in {"", "/"} or parts.query or parts.fragment):
+            return None
+        port = parts.port
+        if port == 0:
+            return None
+        return parts.scheme, parts.hostname.lower(), port if port is not None else (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
 @dataclass
 class Accounts:
     """The owner's secret and sessions, hashed at rest in players.json beside the app state.
@@ -180,6 +200,8 @@ class Accounts:
     path: Path
     data: dict
     stamp: float = 0.0
+    _mutex: object = field(default_factory=RLock, repr=False, compare=False)
+    _transaction_depth: int = field(default=0, init=False, repr=False, compare=False)
 
     @staticmethod
     def _empty() -> dict:
@@ -212,6 +234,7 @@ class Accounts:
             pass
         self.data = data
 
+    @account_transaction(refresh=False)
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(f".players-{secrets.token_hex(8)}.tmp")
@@ -231,18 +254,22 @@ class Accounts:
     def has_admin_secret(self) -> bool:
         return bool(self.data["admin"].get("secret_hash"))
 
+    @account_transaction
     def set_admin_secret(self, secret: str) -> None:
-        """Store only the hash; every owner session is revoked with a new secret."""
-        self.data["admin"]["secret_hash"] = _digest(secret)
+        """Store only the hash; every owner/player session is revoked with a new secret."""
+        self.data["admin"]["secret_hash"] = hash_secret(secret)
         self.data["admin"]["created"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self.data["admin"]["sessions"] = []
+        for player in self.data['players']:
+            player['sessions'] = []
         self.save()
 
+    @account_transaction
     def ensure_admin_secret(self, configured: str | None) -> str | None:
         """Adopt the configured secret, or mint one if none exists. Returns a freshly minted
         secret exactly once so the operator can be told; otherwise None."""
         if configured:
-            if not self.has_admin_secret or not _same(configured, self.data["admin"]["secret_hash"]):
+            if not self.has_admin_secret or not self.verify_admin_secret(configured):
                 self.set_admin_secret(configured)
             return None
         if self.has_admin_secret:
@@ -251,13 +278,25 @@ class Accounts:
         self.set_admin_secret(minted)
         return minted
 
+    @account_transaction
     def verify_admin_secret(self, candidate: str) -> bool:
         self.refresh()   # a secret rotated by the CLI counts from now, not from the next cookie
         stored = self.data["admin"].get("secret_hash")
-        return bool(stored) and isinstance(candidate, str) and len(candidate) <= 256 and _same(candidate, stored)
+        valid = verify_secret(candidate, stored)
+        if valid and legacy_hash(stored):
+            # Same credential, stronger storage: preserve all existing sessions.
+            self.data['admin']['secret_hash'] = hash_secret(candidate)
+            self.save()
+        return valid
+
+    @account_transaction
+    def sign_in_admin(self, candidate: str) -> str | None:
+        """Verify and mint under one lock so rotation cannot race token issuance."""
+        return self.create_admin_session() if self.verify_admin_secret(candidate) else None
 
     # ── sessions ───────────────────────────────────────────────────────────
 
+    @account_transaction
     def create_admin_session(self) -> str:
         # A cookie-less sign-in is the one mutation that reached here without resolve()
         # refreshing first; saving a stale copy would undo whatever the CLI changed since.
@@ -270,6 +309,7 @@ class Accounts:
         self.save()
         return token
 
+    @account_transaction
     def resolve(self, token: str | None) -> Session | None:
         """The session for a live token (owner or player), refreshing its sliding expiry."""
         if not token or not isinstance(token, str) or len(token) > 256:
@@ -291,6 +331,7 @@ class Accounts:
                 return session
         return None
 
+    @account_transaction
     def revoke_session(self, token: str | None) -> None:
         if not token:
             return
@@ -328,6 +369,7 @@ class Accounts:
                 cleaned.append(app_id)
         return cleaned
 
+    @account_transaction
     def create_player(self, username: str, apps, name: str | None = None) -> tuple[dict, str]:
         """A new player with a one-time invitation; returns (public record, invite code).
         The player chooses a password when redeeming the invitation."""
@@ -355,6 +397,7 @@ class Accounts:
         player["invite_expires"] = int(time.time()) + INVITE_LIFETIME
         return code
 
+    @account_transaction
     def regenerate_invite(self, player_id: str) -> str | None:
         """A fresh invitation is a reset: the old password and every session stop working,
         so a re-invite also locks out whoever had the player's password or device."""
@@ -368,6 +411,7 @@ class Accounts:
         self.save()
         return code
 
+    @account_transaction
     def invited_player(self, code: str | None) -> dict | None:
         """The player a live invitation code belongs to (not consumed)."""
         if not code or not isinstance(code, str) or len(code) > 256:
@@ -381,6 +425,7 @@ class Accounts:
                 return player
         return None
 
+    @account_transaction
     def redeem_invite(self, code: str | None, password: str) -> tuple[Session, str] | None:
         """Consume a one-time invitation with the password the player chose; returns the
         player's session and a token for it."""
@@ -396,6 +441,7 @@ class Accounts:
         self.save()
         return self._session_for(player), token
 
+    @account_transaction
     def sign_in_player(self, username: str, password: str) -> tuple[Session, str] | None:
         """Username and password to a session token, for a browser here or a game client elsewhere."""
         self.refresh()
@@ -407,6 +453,7 @@ class Accounts:
         self.save()
         return self._session_for(player), token
 
+    @account_transaction
     def update_player(self, player_id: str, *, disabled: bool | None = None, apps=None, name: str | None = None) -> dict | None:
         self.refresh()
         player = self._player(player_id)
@@ -426,6 +473,7 @@ class Accounts:
         self.save()
         return self.public_player(player)
 
+    @account_transaction
     def remove_player(self, player_id: str) -> bool:
         self.refresh()
         before = len(self.data["players"])
@@ -445,12 +493,14 @@ class Accounts:
                 "invite_expires": player.get("invite_expires") if player.get("invite_hash") else None,
                 "signed_in": bool(player.get("sessions")), "last_seen": seen}
 
+    @account_transaction
     def players(self) -> list[dict]:
         self.refresh()
         return [self.public_player(p) for p in self.data["players"]]
 
     # ── standing launch approvals ──────────────────────────────────────────
 
+    @account_transaction
     def approve_plan(self, fingerprint: str) -> None:
         """The owner approved this exact plan; players (and the owner) may open it until it changes."""
         self.refresh()
@@ -458,6 +508,7 @@ class Accounts:
             self.data["approvals"] = (self.data["approvals"] + [fingerprint])[-200:]
             self.save()
 
+    @account_transaction
     def plan_approved(self, fingerprint: str) -> bool:
         self.refresh()
         return fingerprint in self.data["approvals"]

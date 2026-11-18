@@ -29,7 +29,7 @@ def load_engine(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("APP_ENGINE_APPS_DIR", str(tmp_path / "apps"))
     for name in ("APP_ENGINE_PUBLIC_ORIGIN", "APP_ENGINE_ADMIN_SECRET", "APP_ENGINE_TRUST_PROXY",
                  "APP_ENGINE_MCP_PROXY_SECRET", "APP_ENGINE_MCP_URL", "APP_ENGINE_OUTBOUND_MTLS_CONFIG",
-                 "APP_ENGINE_ALLOWED_HOSTS", "APP_ENGINE_FRAME_ANCESTORS"):
+                 "APP_ENGINE_ALLOWED_HOSTS", "APP_ENGINE_FRAME_ANCESTORS", "APP_ENGINE_TRUST_SAME_ORIGIN_APPS"):
         monkeypatch.delenv(name, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -48,6 +48,59 @@ def public_client(module):
 
 def sign_in(client, secret="hunter2-but-longer"):
     return client.post(f"{LAUNCHER}/admin/sign-in", data={"secret": secret}, follow_redirects=False)
+
+
+def test_owner_browser_and_bearer_saves_cannot_access_accounts(tmp_path, monkeypatch):
+    make_app(tmp_path / "apps", "players")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC,
+                         APP_ENGINE_ADMIN_SECRET="test-owner-secret")
+    with public_client(module) as client:
+        assert sign_in(client, "test-owner-secret").status_code == 303
+        listing = client.get('/api/apps').json()
+        app = next(item for item in listing if item['id'] == 'players')
+        capability = app['url'].split('atrium_state_token=')[1]
+        headers = {'x-app-state-token': capability}
+        bearer = {'authorization': 'Bearer ' + client.cookies.get(SESSION_COOKIE)}
+        account_file = module.STATE_DIR / 'players.json'
+        original = account_file.read_bytes()
+        browser_url = 'https://players.play.example.com/api/app-state/players'
+        assert client.get(browser_url, headers=headers).json() == {}
+        assert client.put(browser_url, headers=headers, json={'draft': 'browser'}).status_code == 200
+        assert client.get('/api/players/state/players', headers=bearer).json() == {'draft': 'browser'}
+        assert client.put('/api/players/state/players', headers=bearer, json={'draft': 'bearer'}).status_code == 200
+        assert client.get(browser_url, headers=headers).json() == {'draft': 'bearer'}
+        assert account_file.read_bytes() == original
+        assert client.get('/api/players/me', headers=bearer).status_code == 200
+
+
+def test_upgrade_keeps_owner_and_each_players_saves_separate(tmp_path, monkeypatch):
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC,
+                         APP_ENGINE_ADMIN_SECRET="test-owner-secret")
+    players = []
+    for username in ('alice', 'bob'):
+        record, invite = module._accounts.create_player(username, ['notes'])
+        session, token = module._accounts.redeem_invite(invite, 'test-player-password')
+        legacy = module.STATE_DIR / 'players' / record['id'] / 'notes.json'
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(json.dumps({'draft': username}))
+        players.append((session, token, legacy))
+    legacy_owner = module.STATE_DIR / 'notes.json'
+    legacy_owner.write_text('{"draft":"owner"}')
+    with public_client(module) as client:
+        for session, token, legacy in players:
+            browser = {'cookie': f'{SESSION_COOKIE}={token}',
+                       'x-app-state-token': module._app_capability(session, 'notes')}
+            bearer = {'authorization': f'Bearer {token}'}
+            url = 'https://notes.play.example.com/api/app-state/notes'
+            assert client.get(url, headers=browser).json() == {'draft': session.name}
+            assert client.put(url, headers=browser, json={'draft': f'new {session.name}'}).status_code == 200
+            assert client.get('/api/players/state/notes', headers=bearer).json() == {'draft': f'new {session.name}'}
+            assert json.loads(legacy.read_text()) == {'draft': session.name}
+        assert sign_in(client, 'test-owner-secret').status_code == 303
+        assert client.get('/api/players/state/notes', headers={
+            'authorization': 'Bearer ' + client.cookies.get(SESSION_COOKIE),
+        }).json() == {'draft': 'owner'}
+        assert json.loads(legacy_owner.read_text()) == {'draft': 'owner'}
 
 
 def test_public_origin_parsing_and_app_hosts():
@@ -85,6 +138,8 @@ def test_legacy_proxy_does_not_forward_engine_credentials_or_follow_redirect(tmp
         return httpx.Response(302, headers={"location": "https://external.example/secret"})
 
     module._proxy = httpx.AsyncClient(transport=httpx.MockTransport(upstream), follow_redirects=True)
+    from app_engine.backend_bindings import binding_fingerprint
+    module._record_code_approval(binding_fingerprint('notes', manifest.parent, 'http://127.0.0.1:18888')[0])
     with public_client(module) as client:
         assert sign_in(client).status_code == 303
         token = client.cookies.get(SESSION_COOKIE)
@@ -295,7 +350,7 @@ def test_players_are_invited_choose_a_password_and_see_only_their_apps(tmp_path,
         assert guest.post(f"{LAUNCHER}/api/app-engine/apps/notes/open", json={}).status_code == 404
         state_headers = {"x-app-state-token": token}
         assert guest.put("https://cards.play.example.com/api/app-state/cards", json={"deck": "mine"}, headers=state_headers).status_code == 200
-        assert (tmp_path / "state" / "players" / player["id"] / "cards.json").is_file(), "saves are per player"
+        assert (tmp_path / "state" / "saves" / "players" / player["id"] / "cards.json").is_file(), "saves are per player"
         assert not (tmp_path / "state" / "cards.json").exists()
         assert guest.get("https://cards.play.example.com/api/app-state/cards", headers={"x-app-state-token": "wrong"}).status_code == 403
 
@@ -418,7 +473,7 @@ def test_phase_four_limits_audit_and_same_origin_layout(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENGINE_RATE_LIMIT", "0.001,5")
     import app_engine.public_origin as public_origin
     importlib.reload(public_origin)
-    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN="https://srv1242099.hstgr.cloud", APP_ENGINE_APP_ORIGINS="same", APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN="https://srv1242099.hstgr.cloud", APP_ENGINE_APP_ORIGINS="same", APP_ENGINE_TRUST_SAME_ORIGIN_APPS="1", APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
     assert module._PUBLIC.layout == "same"
     assert any("share one browser origin" in w for w in startup_warnings("127.0.0.1", module._PUBLIC, True))
     assert any("TRUST_PROXY" in w for w in startup_warnings("127.0.0.1", module._PUBLIC, False))
@@ -477,7 +532,7 @@ def make_managed_game(apps: Path, app_id: str = "game") -> Path:
 
 def test_owner_and_player_open_a_managed_app_in_public_mode(tmp_path, monkeypatch):
     """Night City runs a managed backend: opening it must work for the signed-in owner and,
-    once the owner approved its plan, for a player. (The runtime is single-subject.)"""
+    once the owner approved its code, for a player on the shared runtime."""
     make_managed_game(tmp_path / "apps")
     module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
     owner, admin = owner_client(module)
@@ -537,7 +592,7 @@ def test_a_player_reads_and_writes_their_own_save_from_their_own_game(tmp_path, 
         assert remote.get(f"{LAUNCHER}/api/players/state/notes", headers=bearer).status_code == 404, "only allowed apps"
         assert remote.put(f"{LAUNCHER}/api/players/state/cards", json={"version": 1, "decks": [{"name": "browser crew"}, {"name": "offline crew"}]}, headers=bearer).status_code == 200
         assert remote.put(f"{LAUNCHER}/api/players/state/cards", content="x" * 200_000, headers={**bearer, "content-type": "application/json"}).status_code == 413
-    assert len(json.loads((tmp_path / "state" / "players").glob("*/cards.json").__next__().read_text())["decks"]) == 2
+    assert len(json.loads((tmp_path / "state" / "saves" / "players").glob("*/cards.json").__next__().read_text())["decks"]) == 2
 
 
 def invite_and_join(module, username="rook", apps=("cards",), password="correct horse battery"):
@@ -582,6 +637,7 @@ def test_a_remote_game_client_reads_health_with_its_bearer_token(tmp_path, monke
     (root / "rules.mjs").write_text(f"export {{default}} from '{FAKE_RULES.as_uri()}';\n")
     (root / "app.json").write_text(json.dumps({"label": "cards", "icon": "c", "multiplayer": {"rules": "rules.mjs"}}))
     module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN=PUBLIC, APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    module._record_code_approval(module._multiplayer_plan("cards"))
     invite_and_join(module)[0].close()
     with TestClient(module.app, base_url="https://someones-laptop.example") as remote:
         token = remote.post(f"{LAUNCHER}/api/players/sign-in", json={"username": "rook", "password": "correct horse battery"}).json()["token"]

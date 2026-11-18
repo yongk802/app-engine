@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .code_approval import tree_digest
 from .contracts import (
     PROXY_TOKEN_ENV,
     PROXY_TOKEN_HEADER,
@@ -393,6 +394,14 @@ class ProcessLifecycleManager(LifecycleManager):
                 authorization.reason or "The host denied this launch plan.",
                 remediation="Review host policy or choose a permitted app.",
             )
+        if authorization.approval_required:
+            try:
+                content = await asyncio.to_thread(tree_digest, manifest.root)
+            except (OSError, ValueError) as exc:
+                raise LaunchError("invalid_approval_content", str(exc),
+                                  remediation="Use a bounded app package without links.") from exc
+            fingerprint = PlanFingerprint(hashlib.sha256(
+                (str(fingerprint) + content).encode()).hexdigest())
         return LaunchPlan(
             request=request,
             fingerprint=fingerprint,
@@ -1086,7 +1095,7 @@ class ProcessLifecycleManager(LifecycleManager):
                       manifest: AppManifest) -> tuple[Path, Path]:
         scope_digest = hashlib.sha256(repr(plan.scope_key).encode()).hexdigest()[:16]
         data_dir = self._runtime_root / "data" / str(manifest.app_id) / scope_digest
-        build_dir = self._runtime_root / "build" / str(manifest.app_id)
+        build_dir = self._runtime_root / "build" / str(manifest.app_id) / scope_digest
         data_dir.mkdir(parents=True, exist_ok=True)
         build_dir.mkdir(parents=True, exist_ok=True)
         if self._isolation_policy.mode_for(str(manifest.app_id)) is IsolationMode.ENFORCE:

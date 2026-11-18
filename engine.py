@@ -154,8 +154,12 @@ _outbound_tls = (OutboundTlsPolicy.from_file(Path(_outbound_tls_file))
 _atrium_status_url = os.environ.get("APP_ENGINE_ATRIUM_STATUS_URL", "").strip()
 _atrium_status_probe = (AtriumStatusProbe(_atrium_status_url, _outbound_tls)
                         if _atrium_status_url else None)
+from app_engine.publisher_trust import PublisherPolicy
+_publisher_policy_file = os.environ.get('APP_ENGINE_PUBLISHER_POLICY', '').strip()
+_publisher_policy = PublisherPolicy.from_file(Path(_publisher_policy_file)) if _publisher_policy_file else PublisherPolicy()
 _store_bridge = StoreBridge(STATE_DIR, STORE_APPS_DIR, local_roots=(APPS_DIR,),
                             tls_policy=_outbound_tls,
+                            publisher_policy=_publisher_policy,
                             public_mode=bool(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN")))
 MAX_STATE_BYTES = MAX_SAVE_BYTES
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")

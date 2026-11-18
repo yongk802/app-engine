@@ -215,6 +215,8 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='ae-boundary-', dir='/var/tmp') as temporary, ExitStack() as stack:
             run(Path(temporary), user, stack)
+            from resource_vm import run_resources
+            run_resources(Path(temporary) / "budgets", user, stack)
     finally:
         subprocess.run(['systemctl', 'stop', 'app-engine-runner@7.service'], check=False)
 

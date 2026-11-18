@@ -24,7 +24,7 @@ LIB = Path("/usr/local/libexec/app-engine")
 CONFIG = Path("/etc/app-engine-runner.json")
 SYSTEMD = Path("/etc/systemd/system")
 MODULES = ("isolated_units.py", "isolation_wire.py", "isolation_broker.py",
-           "package_tracker_egress.py", "network_guard.py")
+           "package_tracker_egress.py", "network_guard.py", "resource_limits.py")
 _SAFE_ACCOUNT = re.compile(r"[a-zA-Z_][a-zA-Z0-9_-]{0,31}\Z")
 
 

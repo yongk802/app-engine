@@ -145,3 +145,42 @@ def test_malformed_explicit_policy_cannot_downgrade_to_unsigned(tmp_path, body):
     path.chmod(0o600)
     with pytest.raises(StoreError):
         PublisherPolicy.from_file(path)
+
+
+@pytest.mark.asyncio
+async def test_valid_signed_package_installs_and_policy_is_rechecked_before_download(tmp_path):
+    import hashlib
+    from test_store_bridge import package
+    raw, release, publisher, builder, _ = fixture()
+    body = package('demo')
+    release = replace(release, sha256=hashlib.sha256(body).hexdigest(), size_bytes=len(body))
+    signed = sign(release, publisher, builder)
+    listing = asdict(signed)
+    listing['attestation'] = json.loads(signed.attestation)
+    package_requests = []
+    def store(request):
+        if request.url.path.endswith('/catalog'):
+            return httpx.Response(200, json={'protocol_version': 1, 'name': 'Store', 'apps': [listing]})
+        package_requests.append(request.url.path)
+        return httpx.Response(200, content=body)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(store)) as client:
+        bridge = StoreBridge(tmp_path/'state', tmp_path/'apps', client=client, publisher_policy=PublisherPolicy(raw))
+        source = await bridge.add_store('https://store.test')
+        preview = await bridge.preview(source.id, release.id, release.version)
+        raw['publishers']['owner']['revoked_keys'] = ['old']
+        # Simulate a freshly selected policy. Production policy reload uses restart,
+        # which additionally discards process-local previews entirely.
+        bridge._publisher_policy = PublisherPolicy(raw)
+        with pytest.raises(StoreError):
+            await bridge.install(preview.fingerprint)
+        assert package_requests == []
+        bridge._publisher_policy = PublisherPolicy()
+        with pytest.raises(StoreError):
+            await bridge.preview(source.id, release.id, release.version)
+        raw['publishers']['owner']['revoked_keys'] = []
+        bridge._publisher_policy = PublisherPolicy(raw)
+        preview = await bridge.preview(source.id, release.id, release.version)
+        installed = await bridge.install(preview.fingerprint)
+        assert installed.app_id == 'demo'
+        assert (tmp_path/'apps/demo/index.html').is_file()
+        assert len(package_requests) == 1

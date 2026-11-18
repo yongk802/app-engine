@@ -13,7 +13,8 @@ import urllib.request
 ENV_KEYS = frozenset({'APP_ENGINE_PROCESS_ISOLATION', 'APP_ENGINE_ISOLATED_APP_IDS',
                      'APP_ENGINE_BLOCKED_APP_IDS', 'APP_ENGINE_HOST', 'APP_ENGINE_PORT',
                      'APP_ENGINE_PUBLIC_ORIGIN', 'APP_ENGINE_STATE_DIR',
-                     'APP_ENGINE_APPS_DIR', 'APP_ENGINE_PUBLISHER_POLICY'})
+                     'APP_ENGINE_APPS_DIR', 'APP_ENGINE_PUBLISHER_POLICY',
+                     'APP_ENGINE_PUBLIC_APPS', 'APP_ENGINE_TRUST_PROXY'})
 
 
 def file_evidence(path: Path) -> dict:

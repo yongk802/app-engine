@@ -49,9 +49,12 @@ attack. It also retains the original real network/filesystem boundary tests.
 ## Grounding regexes (atrium-cxqvbp)
 
 Compilation and matching both happen in a fresh isolated Python interpreter,
-with no inherited environment or site packages. Each call has a two-second wall
-deadline, kill/reap on expiry, at most two workers, 64 patterns per answer (1024 characters
-each); whole-pack compilation permits at most 1024 rules, 128 KiB answer characters and bounded result strings. Linux additionally
+with no site packages or inherited credentials. Windows receives only the
+required `SystemRoot` OS path; other systems receive an empty environment. Each
+call has a two-second wall deadline, kill/reap on expiry and at most two workers.
+Per-answer checks allow 64 patterns of at most 1024 characters each, 128 KiB
+answer characters and bounded result strings. Whole-pack compilation permits at
+most 1024 rules. Linux additionally
 sets a 256 MiB address-space and one CPU-second limit; Unix disables worker core
 dumps. Windows/macOS rely on the parent deadline where address-space limits are
 unavailable. Packs are at most 2 MiB and 1024 entries. Compilation/search never

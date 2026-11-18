@@ -73,3 +73,14 @@ def test_large_ordinary_pack_validates_but_match_work_stays_bounded(tmp_path):
     assert loaded.retrieve('vim-dojo', 'word')[0].id == 'vim-ciw'
     with pytest.raises(InvalidKnowledgePackError, match='regex budget'):
         detect_misconceptions('test', loaded.entries)
+
+
+def test_windows_worker_receives_only_the_required_os_path(monkeypatch):
+    import app_engine.grounding as grounding
+    monkeypatch.setattr(grounding.sys, 'platform', 'win32')
+    monkeypatch.setenv('SystemRoot', 'C:\\Windows')
+    monkeypatch.setenv('LDAPPASS', 'test-secret-must-not-be-inherited')
+    assert grounding._worker_environment() == {'SystemRoot': 'C:\\Windows'}
+    monkeypatch.delenv('SystemRoot')
+    with pytest.raises(InvalidKnowledgePackError, match='SystemRoot'):
+        grounding._worker_environment()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import asyncio
 import subprocess
@@ -18,6 +19,17 @@ REGEX_DEADLINE_SECONDS = 2.0
 _regex_slots = threading.BoundedSemaphore(2)
 
 
+def _worker_environment() -> dict[str, str]:
+    # Windows 3.10's CreateProcess rejects an empty environment block. Keep
+    # only the OS installation path required for system DLL resolution.
+    if sys.platform == 'win32':
+        root = os.environ.get('SystemRoot')
+        if not root:
+            raise InvalidKnowledgePackError('grounding worker requires SystemRoot')
+        return {'SystemRoot': root}
+    return {}
+
+
 def _evaluate_patterns(patterns: list[str], answer: str | None) -> list[str | None]:
     if len(patterns) > (1024 if answer is None else 64) or any(not isinstance(p, str) or len(p) > 1024 for p in patterns):
         raise InvalidKnowledgePackError('grounding regex budget exceeded')
@@ -29,14 +41,16 @@ def _evaluate_patterns(patterns: list[str], answer: str | None) -> list[str | No
         result = subprocess.run(
             [sys.executable, '-I', '-S', str(Path(__file__).with_name('regex_worker.py'))],
             input=json.dumps({'patterns': patterns, 'answer': answer}).encode(),
-            capture_output=True, timeout=REGEX_DEADLINE_SECONDS, env={}, check=False,
+            capture_output=True, timeout=REGEX_DEADLINE_SECONDS, env=_worker_environment(), check=False,
         )
         if result.returncode != 0:
             raise InvalidKnowledgePackError('invalid or over-budget grounding regex')
         return json.loads(result.stdout)
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except subprocess.TimeoutExpired as exc:
         # subprocess.run kills and reaps the child before raising on timeout.
         raise InvalidKnowledgePackError('grounding evaluator deadline exceeded') from exc
+    except OSError as exc:
+        raise InvalidKnowledgePackError('grounding evaluator could not start') from exc
     finally:
         _regex_slots.release()
 

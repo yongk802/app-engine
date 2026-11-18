@@ -59,6 +59,13 @@ class PublisherPolicy:
                         if (not isinstance(identity[field], list) or len(identity[field]) > 128
                                 or any(not isinstance(item, str) or not item or len(item) > 200 for item in identity[field])):
                             raise ValueError()
+            for publisher in raw['publishers'].values():
+                publisher_keys = {base64.b64decode(key, validate=True) for key in publisher['keys'].values()}
+                for builder_name in publisher['builders']:
+                    builder = raw['builders'][builder_name]
+                    builder_keys = {base64.b64decode(key, validate=True) for key in builder['keys'].values()}
+                    if publisher_keys & builder_keys:
+                        raise ValueError('publisher and builder keys must be separate')
             # Snapshot caller-owned data, so changing a parsed store cannot mutate policy.
             self.raw = json.loads(json.dumps(raw))
         except (ValueError, TypeError, KeyError, AttributeError) as exc:

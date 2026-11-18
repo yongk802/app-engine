@@ -30,6 +30,11 @@ with integer fields from `ResourceLimits`: `cpu_percent`, `memory_bytes`,
 `output_bytes`. Apps cannot submit limits. Admission remains owner-approved;
 these budgets do not bound a malicious engine owner admitting unlimited apps.
 
+Upgrading the broker preserves an existing root-controlled policy's resource
+limits and scoped service/Package Tracker capabilities when the installation
+scope matches. It refuses scope changes or unknown policy fields for explicit
+operator review; an upgrade must not silently discard those grants or budgets.
+
 Rollout: stop the affected app and room units; make a private backup and test its
 restore; provision one finite ext4/XFS filesystem per mount (finite block and inode
 capacity); copy state while retaining its engine owner/group and scoped 0770/0660
@@ -101,6 +106,7 @@ provide an executable producer example with separate generated keys.
 
 Provision both trust roots independently of the store, verify fingerprints out
 of band, and keep private publisher and builder keys separate from store servers.
+The policy rejects reuse of a signing key between a publisher and its builders.
 Rotate by adding a new key ID to the operator policy, publishing with it, then
 revoking the old key ID. Restart the engine after changing the policy; previews
 are process-local and installation re-verifies the selected policy. Revocation

@@ -110,6 +110,39 @@ def _create_unit_root() -> None:
     _install(root / "etc" / "nsswitch.conf", b"hosts: files\n", 0o644)
 
 
+def _preserve_policy(policy: bytes, path: Path, *, owner_uid: int = 0) -> bytes:
+    """An upgrade must retain reviewed capabilities and operator resource limits."""
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        return policy
+    if (not stat.S_ISREG(status.st_mode) or status.st_uid != owner_uid
+            or status.st_mode & 0o022 or status.st_size > 65536):
+        raise ValueError('existing runner policy is not root controlled')
+    existing = json.loads(path.read_bytes())
+    configured = json.loads(policy)
+    optional = {'package_tracker', 'service_ports', 'resource_limits'}
+    if (not isinstance(existing, dict) or set(existing) - set(configured) - optional
+            or any(existing.get(key) != value for key, value in configured.items())):
+        raise ValueError('existing runner scope differs; review and migrate policy explicitly')
+    configured.update({key: existing[key] for key in optional if key in existing})
+    return json.dumps(configured, sort_keys=True, indent=2).encode() + b'\n'
+
+
+def _install_release(files: dict[Path, Path], policy: bytes,
+                     engine_user: str, engine_group: str) -> None:
+    for source in files.values():
+        _trusted_source(source)
+    policy = _preserve_policy(policy, CONFIG)
+    contents = {destination: _configure_unit_source(source, source.read_bytes(), engine_user, engine_group)
+                for destination, source in files.items()}
+    for destination, content in contents.items():
+        _install(destination, content, 0o644)
+    _install(LIB / "app_engine" / "__init__.py", b"", 0o644)
+    _create_unit_root()
+    _install(CONFIG, policy, 0o600)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apps-root", type=Path, action="append", required=True)
@@ -169,18 +202,10 @@ def main() -> int:
         return 0
     if os.geteuid() != 0:
         parser.error("--apply must run as root")
-    for source in files.values():
-        _trusted_source(source)
-    for destination, source in files.items():
-        try:
-            content = _configure_unit_source(
-                source, source.read_bytes(), args.engine_user, args.engine_group)
-        except ValueError as exc:
-            parser.error(str(exc))
-        _install(destination, content, 0o644)
-    _install(LIB / "app_engine" / "__init__.py", b"", 0o644)
-    _create_unit_root()
-    _install(CONFIG, policy, 0o600)
+    try:
+        _install_release(files, policy, args.engine_user, args.engine_group)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "app-engine-runner.socket"], check=True)
     subprocess.run(["systemctl", "enable", "app-engine-tcgcsv-gateway.service"], check=True)

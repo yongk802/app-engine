@@ -85,6 +85,13 @@ def test_rotation_revocation_and_unsigned_compatibility():
         PublisherPolicy().verify(old)  # A claimed identity still needs trusted keys.
 
 
+def test_publisher_and_builder_cannot_share_a_signing_key():
+    raw, *_ = fixture()
+    raw['builders']['ci']['keys']['build'] = raw['publishers']['owner']['keys']['old']
+    with pytest.raises(StoreError, match='policy is invalid'):
+        PublisherPolicy(raw)
+
+
 @pytest.mark.asyncio
 async def test_hostile_store_with_replaced_bytes_and_checksum_cannot_install(tmp_path):
     raw, release, publisher, builder, _ = fixture()

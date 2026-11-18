@@ -21,6 +21,7 @@ from .store_contracts import (
     canonical_url,
 )
 from .store_packages import extract_package
+from .publisher_trust import PublisherPolicy
 
 
 async def _finish_thread(operation: Callable[..., None], *args: object) -> None:
@@ -41,7 +42,7 @@ class StoreBridge:
     def __init__(self, state_dir: Path, apps_dir: Path, *,
                  local_roots: tuple[Path, ...] = (), client: httpx.AsyncClient | None = None,
                  tls_policy: OutboundTlsPolicy | None = None,
-                 public_mode: bool = False):
+                 public_mode: bool = False, publisher_policy: PublisherPolicy | None = None):
         self.path = Path(state_dir) / 'stores.json'
         self.apps_dir = Path(apps_dir).resolve()
         self.local_roots = tuple(Path(root).resolve() for root in local_roots)
@@ -49,6 +50,7 @@ class StoreBridge:
         self._owns_client = client is None
         self._tls_policy = tls_policy or OutboundTlsPolicy()
         self._public_mode = public_mode
+        self._publisher_policy = publisher_policy or PublisherPolicy()
         self._mtls_clients: dict[object, httpx.AsyncClient] = {}
         self._stores: tuple[StoreConnection, ...] = self._load()
         self._previews: dict[str, InstallPreview] = {}
@@ -202,6 +204,7 @@ class StoreBridge:
     async def preview(self, store_id: str, app_id: str, version: str) -> InstallPreview:
         store = self._store(store_id)
         release = await self._release(store, app_id, version)
+        self._publisher_policy.verify(release)
         if not is_compatible(release.min_engine_version):
             raise StoreError('incompatible_app', 'The app requires a newer engine.')
         await asyncio.to_thread(self._check_conflict, release.id)
@@ -223,6 +226,7 @@ class StoreBridge:
             release = await self._release(store, plan.release.id, plan.release.version)
             if release != plan.release:
                 raise StoreError('release_changed', 'The release changed after preview; review a new preview.')
+            self._publisher_policy.verify(release)
             await asyncio.to_thread(self._check_conflict, release.id)
             body = await self._download(store.url + '/' + release.package_url, min(release.size_bytes, MAX_PACKAGE_BYTES))
             if len(body) != release.size_bytes or hashlib.sha256(body).hexdigest() != release.sha256:

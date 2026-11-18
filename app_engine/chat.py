@@ -7,7 +7,8 @@ import httpx
 
 from .config import ConfigStore
 from .grounding import (
-    ANSWER_SCHEMA, KnowledgeBase, build_grounding_context, detect_misconceptions,
+    ANSWER_SCHEMA, KnowledgeBase, build_grounding_context, detect_misconceptions_async,
+    InvalidKnowledgePackError,
     extract_visible_answer,
 )
 from .registry import ModelRegistry
@@ -90,7 +91,12 @@ class ChatRuntime:
             return
         chunks = extract_visible_answer(chunks)
         original_chunks = chunks
-        misconceptions = detect_misconceptions("".join(chunks), references)
+        try:
+            misconceptions = await detect_misconceptions_async("".join(chunks), references)
+        except InvalidKnowledgePackError:
+            yield {"type": "error", "code": "grounding_unavailable",
+                   "message": "The local reference check exceeded its safety budget.", "retryable": False}
+            return
         if misconceptions:
             corrections = "\n".join(f"- {item.correction}" for item in misconceptions)
             retry_payload = dict(payload)

@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .package_tracker_egress import read_token_file
+from .resource_limits import ResourceLimits
 
 _SAFE_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}\Z")
 _SAFE_UNIT = re.compile(r"ae-[a-zA-Z0-9_-]+-(?:install|build|start|multiplayer)-[a-f0-9]{3,32}\Z")
@@ -42,6 +43,7 @@ class UnitBoundary:
     multiplayer_root: Path | None = None
     package_tracker: PackageTrackerCapability | None = None
     service_ports: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    resource_limits: ResourceLimits = ResourceLimits()
 
     def prepare_request(self, request: UnitRequest) -> UnitRequest:
         """Give only Package Tracker's start command its scoped capabilities."""
@@ -116,6 +118,7 @@ class UnitBoundary:
         return (
             "systemd-run", "--quiet", "--collect", "--wait", "--pipe",
             f"--unit={unit_name}",
+            *self.resource_limits.unit_properties(request.app_id, request.phase),
             f"--property=BindsTo={broker_unit_name}",
             f"--property=After={broker_unit_name}",
             "--property=DynamicUser=yes",
@@ -191,7 +194,8 @@ class UnitBoundary:
             if (not supplied.is_absolute() or supplied.is_symlink()
                     or supplied.resolve(strict=True) != expected):
                 raise ValueError(f"invalid {label}")
-            if supplied.stat().st_uid != self.engine_uid:
+            allowed_owners = {0, self.engine_uid} if request.phase == 'multiplayer' else {self.engine_uid}
+            if supplied.stat().st_uid not in allowed_owners:
                 raise ValueError(f"invalid {label} owner")
         for path in (app_root, request.data_dir, request.build_dir):
             if any(char in ":\x00" or char.isspace() for char in str(path)):

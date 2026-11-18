@@ -11,7 +11,7 @@ from typing import Callable
 import httpx
 
 from .grounding import (
-    ANSWER_SCHEMA, KnowledgeBase, build_grounding_context, detect_misconceptions,
+    ANSWER_SCHEMA, KnowledgeBase, build_grounding_context, detect_misconceptions_async,
     extract_visible_answer,
 )
 
@@ -177,7 +177,7 @@ async def run_case(client: httpx.AsyncClient, ollama_tag: str, case: BenchmarkCa
         return collected
     try:
         chunks = extract_visible_answer(await collect(payload))
-        misconceptions = detect_misconceptions("".join(chunks), references)
+        misconceptions = await detect_misconceptions_async("".join(chunks), references)
         if misconceptions:
             corrections = "\n".join(f"- {item.correction}" for item in misconceptions)
             retry_payload = dict(payload)

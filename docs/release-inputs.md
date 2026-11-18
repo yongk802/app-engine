@@ -29,7 +29,7 @@ standalone release with:
 python -m pip install --require-hashes -r requirements.txt
 ```
 
-CI uses uv 0.13.1 and `uv sync --locked --no-install-project` with exact Python
+CI uses uv 0.13.4 and `uv sync --locked --no-install-project` with exact Python
 versions; the browser lane includes the browser group. Build backends are pinned
 in both the build-system declaration and the development group. GitHub actions
 are pinned to full commit SHAs and Node to an exact version. Launcher tests use

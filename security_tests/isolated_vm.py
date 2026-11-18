@@ -128,6 +128,7 @@ def install_executor():
     (package / '__init__.py').touch()
     shutil.copyfile(repo / 'app_engine/isolated_exec.py', lib / 'isolated_exec.py')
     shutil.copyfile(repo / 'app_engine/network_guard.py', package / 'network_guard.py')
+    shutil.copytree(repo / 'app_engine/multiplayer', lib / 'multiplayer', dirs_exist_ok=True)
     root = Path('/var/lib/app-engine-runner/root')
     (root / 'etc').mkdir(parents=True, exist_ok=True)
     (root / 'etc/hosts').write_text('127.0.0.1 localhost atrium-status.localhost\n::1 localhost\n')
@@ -215,6 +216,8 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='ae-boundary-', dir='/var/tmp') as temporary, ExitStack() as stack:
             run(Path(temporary), user, stack)
+            from resource_vm import run_resources
+            run_resources(Path(temporary) / "budgets", user, stack)
     finally:
         subprocess.run(['systemctl', 'stop', 'app-engine-runner@7.service'], check=False)
 

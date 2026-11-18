@@ -31,6 +31,8 @@ def test_declared_backend_tool_is_lazy_and_executes_real_http(engine_client):
     (root / 'app-tools.json').write_text(json.dumps(declaration))
     try:
         assert client.post('/api/app-engine/catalog/refresh', headers=admin).status_code == 200
+        plan = client.get('/api/backend-plans/backend').json()
+        assert client.post('/api/backend-plans/backend/approve', json=plan, headers=admin).status_code == 200
         token = key(client, admin)
         tools = rpc(client, token, 'tools/list').json()['result']['tools']
         name = next(t['name'] for t in tools if t['description'] == 'Add a note')
@@ -58,7 +60,9 @@ def test_state_symlinks_and_unknown_apps_are_refused(engine_client, tmp_path):
     token = key(client, admin)
     external = tmp_path / 'private.json'
     external.write_text('{"secret": 1}')
-    (module.STATE_DIR / 'notes.json').symlink_to(external)
+    saves = module.STATE_DIR / 'saves' / 'owner'
+    saves.mkdir(parents=True)
+    (saves / 'notes.json').symlink_to(external)
     for name, arguments in [('apps_read_state', {'app_id': 'notes'}), ('apps_open', {'app_id': 'missing'})]:
         result = rpc(client, token, 'tools/call', {'name': name, 'arguments': arguments}).json()['result']
         assert result['isError']
@@ -160,6 +164,8 @@ def test_failed_app_calls_release_gateway_lease(engine_client, monkeypatch, mode
     (root / 'app-tools.json').write_text(json.dumps({'schema_version': 1, 'tools': [{'name': 'act', 'description': 'Act', 'path': '/act', 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}}]}))
     try:
         client.post('/api/app-engine/catalog/refresh', headers=admin)
+        plan = client.get('/api/backend-plans/failing').json()
+        assert client.post('/api/backend-plans/failing/approve', json=plan, headers=admin).status_code == 200
         result = rpc(client, key(client, admin), 'tools/call', {'name': 'app__failing__act', 'arguments': {}}).json()['result']
         assert result['isError'], result
         if mode == 'timeout':

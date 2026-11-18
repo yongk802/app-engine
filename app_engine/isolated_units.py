@@ -41,10 +41,25 @@ class UnitBoundary:
     engine_group: str
     multiplayer_root: Path | None = None
     package_tracker: PackageTrackerCapability | None = None
+    service_ports: tuple[tuple[str, tuple[int, ...]], ...] = ()
 
     def prepare_request(self, request: UnitRequest) -> UnitRequest:
         """Give only Package Tracker's start command its scoped capabilities."""
+        plan = json.loads(request.payload)
+        if not isinstance(plan, dict) or not isinstance(plan.get("env"), dict):
+            raise ValueError("invalid command plan")
+        connect = dict(self.service_ports).get(request.app_id, ())
+        bind = (0,) if request.phase == "multiplayer" else ()
+        if request.phase == "start":
+            port = plan["env"].get("PORT", "")
+            if not isinstance(port, str) or not port.isdecimal() or not 1024 <= int(port) <= 65535:
+                raise ValueError("invalid app listener port")
+            bind = (int(port),)
         cap = self.package_tracker
+        if cap is not None and request.app_id == "package-tracker" and request.phase == "start":
+            connect = (*connect, cap.carrier_proxy_port, cap.browser_worker_port, 9444)
+        plan["network"] = {"bind": list(bind), "connect": list(connect)}
+        request = replace(request, payload=json.dumps(plan, separators=(",", ":")))
         if request.app_id != "package-tracker" or request.phase != "start" or cap is None:
             return request
         try:
@@ -106,6 +121,16 @@ class UnitBoundary:
             "--property=DynamicUser=yes",
             f"--property=Group={self.engine_group}",
             "--property=UMask=0002",
+            "--property=RootDirectory=/var/lib/app-engine-runner/root",
+            "--property=MountAPIVFS=yes",
+            "--property=BindReadOnlyPaths=/usr/bin /usr/lib -/usr/lib64 /lib /bin -/lib64 /usr/local/libexec/app-engine",
+            "--property=RestrictAddressFamilies=AF_INET AF_INET6",
+            "--property=SystemCallArchitectures=native",
+            "--property=SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register",
+            "--property=CapabilityBoundingSet=",
+            "--property=ProtectKernelTunables=yes",
+            "--property=ProtectKernelModules=yes",
+            "--property=ProtectControlGroups=yes",
             "--property=NoNewPrivileges=yes",
             "--property=ProtectHome=yes",
             "--property=ProtectSystem=strict",
@@ -115,7 +140,10 @@ class UnitBoundary:
             "--property=RestrictSUIDSGID=yes",
             "--property=IPAddressDeny=any",
             "--property=IPAddressAllow=localhost",
-            "--property=InaccessiblePaths=/run/app-engine-runner.sock",
+            "--property=InaccessiblePaths=/run/app-engine-runner.sock " + " ".join(
+                "-" + str(path) for path in (*self.apps_roots, self.state_root,
+                                             *((self.multiplayer_root,) if self.multiplayer_root else ()))
+            ),
             f"--property=BindReadOnlyPaths={request.app_root}:/workspace",
             *room_bind,
             *tracker_bind,
@@ -156,7 +184,8 @@ class UnitBoundary:
             expected_data = state / "data" / request.app_id / scope_digest
         required = (
             (request.data_dir, expected_data, "data directory"),
-            (request.build_dir, state / "build" / request.app_id, "build directory"),
+            (request.build_dir, (state / "build" / request.app_id if request.phase == "multiplayer"
+                                 else state / "build" / request.app_id / request.data_dir.name), "build directory"),
         )
         for supplied, expected, label in required:
             if (not supplied.is_absolute() or supplied.is_symlink()
@@ -165,5 +194,5 @@ class UnitBoundary:
             if supplied.stat().st_uid != self.engine_uid:
                 raise ValueError(f"invalid {label} owner")
         for path in (app_root, request.data_dir, request.build_dir):
-            if any(char in str(path) for char in (":", "\n", "\r", "\x00")):
+            if any(char in ":\x00" or char.isspace() for char in str(path)):
                 raise ValueError("unsupported path character")

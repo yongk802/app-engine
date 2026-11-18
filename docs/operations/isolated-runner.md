@@ -7,6 +7,13 @@ a read-only app-source bind, writable scoped data/build binds, non-loopback IP
 deny, and a `BindsTo` relationship to its broker service. The broker socket is
 mode `0600` for `appengine` only.
 
+The strengthened boundary defaults to enforcement and also requires Landlock
+ABI 4. It uses a private filesystem root and explicit service port capabilities;
+see [the current boundary and VM acceptance tests](../process-isolation.md#enforced-boundary).
+An existing runner installation must be upgraded before using this engine version.
+`audit` remains an explicit grant of host privileges. Legacy backends require
+separate launcher approval and managed build directories are now per scope.
+
 Apps with a host multiplayer manifest also start their app-supplied rules
 module through the broker when isolation is enforced. That unit gets the same
 network and identity boundary, the root-installed room server code read-only,
@@ -64,7 +71,9 @@ The staged `cyberpunk-tcg` manifest runs `/usr/bin/python3 scripts/serve.py`
 with `NIGHT_CITY_TCGCSV_GATEWAY=1`. The game reads its catalog from the
 read-only app source, writes price/cache files under `APP_DATA_DIR`, serves
 only its two public price files from there, and reaches the fixed gateway over
-loopback. Back up its existing source `data/` and runtime directory before
+loopback. Grant only its fixed gateway port with the root-owned policy's
+`"service_ports": {"cyberpunk-tcg": [18792]}`; general loopback access is refused.
+Back up its existing source `data/` and runtime directory before
 copying any existing `prices.json`, `top20-prices.html`, and
 `sources/tcgcsv-pricing.json` into the runtime directory. Before the pilot
 switch, migrate **all** existing scoped runtime state, including any `rooms/`

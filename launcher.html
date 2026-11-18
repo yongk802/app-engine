@@ -424,6 +424,31 @@ async function openManagedApp(app) {
   return response.json();
 }
 
+async function approveBackend(app) {
+  if(!app.entry_point) return;
+  const endpoint='/api/backend-plans/'+encodeURIComponent(app.id);
+  const response=await fetch(endpoint);
+  if(!response.ok) throw new Error('This backend binding is not permitted');
+  const plan=await response.json();
+  if(plan.approved) return;
+  if(!confirm('Allow '+app.label+' to proxy the local service '+plan.url+'?\n\nApprove only an app-owned backend.')) throw new Error('Backend approval was cancelled');
+  const approval=await fetch(endpoint+'/approve',adminOptions({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fingerprint:plan.fingerprint})}));
+  if(!approval.ok) throw new Error('Backend approval failed ('+approval.status+')');
+}
+
+async function approveMultiplayer(app) {
+  if(!app.multiplayer) return;
+  const endpoint='/api/multiplayer-plans/'+encodeURIComponent(app.id);
+  const response=await fetch(endpoint);
+  if(!response.ok) throw new Error('Could not preview multiplayer code');
+  const plan=await response.json();
+  if(plan.approved) return;
+  const trust=plan.execution_class==='host_process'?'This code runs with your host account privileges.':'This code runs in an isolated unit.';
+  if(!confirm('Approve multiplayer code for '+app.label+'?\n\n'+trust+'\nApproval covers the current app contents.')) throw new Error('Multiplayer approval was cancelled');
+  const approval=await fetch(endpoint+'/approve',adminOptions({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fingerprint:plan.fingerprint})}));
+  if(!approval.ok) throw new Error('Multiplayer approval failed ('+approval.status+'). Ask the owner to approve this app.');
+}
+
 async function openApp(app,btn) {
   if(app.compatible===false){ showInfo(app); return; }
   document.body.classList.remove('night-city-playing'); syncChatOverlay();
@@ -434,7 +459,7 @@ async function openApp(app,btn) {
   state.active=app.id; $('#sidebar').classList.remove('open');
   if (state.instances[app.id]) { state.instances[app.id].classList.add('active'); signalLifecycle(app.id,'visible'); return; }
   let session=null;
-  try { if(app.engine_managed) session=await openManagedApp(app); }
+  try { await approveBackend(app); await approveMultiplayer(app); if(app.engine_managed) session=await openManagedApp(app); }
   catch(error) { if(state.active===app.id){ $('#empty').hidden=false; $('#empty').textContent=error.message; } return; }
   // A different app can be selected while the runtime is starting.
   if(state.instances[app.id]) { if(session) fetch('/api/app-engine/sessions/'+encodeURIComponent(session.session_id),adminOptions({method:'DELETE'})); return; }

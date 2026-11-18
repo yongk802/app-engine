@@ -131,7 +131,8 @@ done
 if [[ ! -x /opt/package-tracker/venv/bin/python ]]; then
   uv venv --python /usr/bin/python3 /opt/package-tracker/venv
 fi
-uv pip install --python /opt/package-tracker/venv/bin/python 'playwright==1.64.1'
+uv pip install --python /opt/package-tracker/venv/bin/python --require-hashes \
+  -r "$engine_source/deploy/package-tracker/requirements.txt"
 PLAYWRIGHT_BROWSERS_PATH=/opt/package-tracker/browsers \
   /opt/package-tracker/venv/bin/python -m playwright install --with-deps chromium
 chown -R root:root /opt/package-tracker

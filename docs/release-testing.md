@@ -39,8 +39,10 @@ up as in the README.
    secret is refused; the sixth wrong attempt within a minute answers 429.
    Sign in; the launcher lists every app and `/api/local-ai/status` answers 403.
 3. Open an app from the launcher. With the subdomain layout it loads on
-   `<id>.<host>` with a valid certificate; with `APP_ENGINE_APP_ORIGINS=same` it
-   loads under `/apps/<id>/`. Save state, reload, confirm it persists.
+   `<id>.<host>` with a valid certificate. A trusted-only deployment may explicitly
+   set both `APP_ENGINE_APP_ORIGINS=same` and `APP_ENGINE_TRUST_SAME_ORIGIN_APPS=1`
+   to load under `/apps/<id>/` with launcher privileges. Save state, reload,
+   confirm it persists.
 4. Invite a player (Players panel and `app-engine-players invite`). In a
    private window open the link, set a password, confirm the player launcher
    shows only the allowed apps, no ⚙, and `Player · name`. Try an app not

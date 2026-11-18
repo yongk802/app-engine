@@ -221,7 +221,7 @@ def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
     required = {"apps_roots", "state_root", "multiplayer_root", "engine_user", "engine_group"}
     if (not isinstance(value, dict)
             or not required <= set(value)
-            or set(value) - required - {"package_tracker"}
+            or set(value) - required - {"package_tracker", "service_ports"}
             or not isinstance(value["apps_roots"], list)
             or not 1 <= len(value["apps_roots"]) <= 8
             or any(not isinstance(item, str) or not item.startswith("/")
@@ -238,10 +238,17 @@ def load_boundary(path: Path = _CONFIG_PATH) -> UnitBoundary:
         value["package_tracker"], owner_uid=0,
         engine_gid=grp.getgrnam(value["engine_group"]).gr_gid)
         if "package_tracker" in value else None)
+    services = value.get("service_ports", {})
+    if (not isinstance(services, dict) or len(services) > 128
+            or any(not _SAFE_APP_ID.fullmatch(app_id) or not isinstance(ports, list)
+                   or len(ports) > 32
+                   or any(type(port) is not int or not 1024 <= port <= 65535 for port in ports)
+                   for app_id, ports in services.items())):
+        raise ValueError("invalid service capability ports")
     return UnitBoundary(tuple(Path(item) for item in value["apps_roots"]),
                         Path(value["state_root"]), user.pw_uid,
                         value["engine_group"], Path(value["multiplayer_root"]),
-                        capability)
+                        capability, tuple((app_id, tuple(ports)) for app_id, ports in services.items()))
 
 
 def main() -> int:

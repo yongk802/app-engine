@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from . import __version__
 from .catalog import ImmutableAppCatalog
@@ -79,8 +80,12 @@ class LocalHostAdapter(HostAdapter):
         subject: HostSubject | None = None,
         trusted_roots: tuple[Path, ...] = (),
         studio_roots: tuple[StudioRoot, ...] | None = None,
+        subject_policy: Callable[[HostSubject], bool] | None = None,
+        approved_code: Callable[[str], bool] | None = None,
     ) -> None:
         self.subject = subject or HostSubject("local", "admin")
+        self._subject_policy = subject_policy
+        self._approved_code = approved_code
         self._apps_roots = tuple(Path(root).expanduser().resolve(strict=False) for root in apps_roots)
         self._state_root = Path(state_root).expanduser().resolve(strict=False)
         self._trusted_roots = tuple(Path(root).expanduser().resolve(strict=False) for root in trusted_roots)
@@ -155,6 +160,8 @@ class LocalHostAdapter(HostAdapter):
         trusted = all(
             self._contained(step.cwd, self._trusted_roots) for step in plan.steps
         )
+        if not trusted and self._approved_code is not None:
+            trusted = await asyncio.to_thread(self._approved_code, str(plan.request.app_id))
         return Authorization(
             allowed=True,
             approval_required=not trusted,
@@ -189,7 +196,7 @@ class LocalHostAdapter(HostAdapter):
         return hashlib.sha256(subject.subject_id.encode("utf-8")).hexdigest()
 
     def _require_subject(self, subject: HostSubject) -> None:
-        if subject != self.subject:
+        if subject != self.subject and not (self._subject_policy and self._subject_policy(subject)):
             raise PermissionError("standalone app-engine subject mismatch")
 
     @staticmethod
@@ -220,6 +227,7 @@ class DefaultAppEngineRuntime(AppEngineRuntime):
         runtime_root: Path,
         catalog_key: CatalogKey = CatalogKey("default"),
         providers: ProviderRegistry | None = None,
+        authorize_backend=None,
     ) -> None:
         self.host = host
         self.subject = subject
@@ -236,6 +244,7 @@ class DefaultAppEngineRuntime(AppEngineRuntime):
             catalog=self.catalog,
             lifecycle=self.lifecycle,
             catalog_key=catalog_key,
+            authorize_backend=authorize_backend,
         )
         self.studio = PortableStudioService(
             host=host,

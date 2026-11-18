@@ -30,6 +30,34 @@ def rpc(client, token, method, params=None, **kwargs):
     return client.post('/api/mcp', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json, text/event-stream', **kwargs}, json={'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params or {}})
 
 
+def test_mcp_and_browser_share_isolated_app_saves(engine_client):
+    module, client, admin = engine_client
+    root = module.APPS_DIR / "players"
+    root.mkdir()
+    (root / "app.json").write_text('{"id":"players","label":"Players","icon":"P"}')
+    (root / "index.html").write_text("test app")
+    assert client.post('/api/app-engine/catalog/refresh', headers=admin).status_code == 200
+    control = module.STATE_DIR / "players.json"
+    original = b'{"engine_canary":"private accounts"}'
+    control.write_bytes(original)
+    token = key(client, admin)
+
+    def call(name, arguments):
+        return rpc(client, token, 'tools/call', {'name': name, 'arguments': arguments}).json()['result']
+
+    current = call('apps_read_state', {'app_id': 'players'})['structuredContent']
+    assert current['state'] == {}
+    written = call('apps_write_state', {'app_id': 'players', 'revision': current['revision'], 'state': {'draft': 'mcp'}})
+    assert not written.get('isError'), written
+    headers = {'host': 'players.localhost', 'x-app-state-token': module._app_capability('players')}
+    assert client.get('/api/app-state/players', headers=headers).json() == {'draft': 'mcp'}
+    assert client.put('/api/app-state/players', headers=headers, json={'draft': 'browser'}).status_code == 200
+    assert call('apps_read_state', {'app_id': 'players'})['structuredContent']['state'] == {'draft': 'browser'}
+    stale = call('apps_write_state', {'app_id': 'players', 'revision': written['structuredContent']['revision'], 'state': {}})
+    assert stale['isError'], 'browser writes invalidate MCP revisions'
+    assert control.read_bytes() == original
+
+
 def test_settings_gated_persisted_and_key_not_stored_in_clear(engine_client):
     module, client, admin = engine_client
     assert client.get('/api/assistant/settings').status_code == 403
@@ -84,7 +112,7 @@ def test_mcp_state_roundtrip_open_and_lazy_catalog(engine_client):
     assert state['state'] == {}
     changed = call('apps_write_state', {'app_id': 'notes', 'revision': state['revision'], 'state': {'note': 'hello'}})
     assert not changed.get('isError')
-    assert json.loads((module.STATE_DIR / 'notes.json').read_text()) == {'note': 'hello'}
+    assert json.loads((module.STATE_DIR / 'saves' / 'owner' / 'notes.json').read_text()) == {'note': 'hello'}
     stale = call('apps_write_state', {'app_id': 'notes', 'revision': state['revision'], 'state': {}})
     assert stale['isError']
     assert call('apps_read_state', {'app_id': '../secret'})['isError']

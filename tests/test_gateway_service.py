@@ -257,6 +257,7 @@ async def test_legacy_entry_point_uses_the_same_safe_loopback_proxy(tmp_path):
         lifecycle=_Lifecycle(),
         catalog_key=CatalogKey("test"),
         transport=httpx.MockTransport(handler),
+        authorize_backend=lambda manifest, url: url == "http://127.0.0.1:8912/base",
     )
     session = await gateway.open(_open_request())
 
@@ -561,6 +562,38 @@ async def test_proxy_keeps_app_cookie_but_strips_engine_credentials(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('method,chunks,expected', [
+    ('GET', (), b''), ('GET', (b'', b''), b''),
+    ('GET', (b'', b'payload', b''), b'payload'),
+    ('HEAD', (), b''), ('DELETE', (), b''),
+])
+async def test_proxy_does_not_invent_chunked_framing_for_empty_bodies(
+        tmp_path, method, chunks, expected):
+    captured = []
+
+    async def upstream(request):
+        captured.append(request)
+        assert await request.aread() == expected
+        return httpx.Response(200, stream=_StreamingResponse())
+
+    gateway = _gateway_type()(
+        catalog=_Catalog(_manifest(tmp_path, managed=True)),
+        lifecycle=_Lifecycle(), catalog_key=CatalogKey('test'),
+        transport=httpx.MockTransport(upstream))
+    try:
+        session = await gateway.open(_open_request())
+        response = await gateway.proxy(session, ProxyRequest(
+            method=method, path='/', query=(), headers=(), body=_body(*chunks)))
+        assert b''.join([chunk async for chunk in response.body]) == b'event: one\n\nevent: two\n\n'
+        if expected:
+            assert captured[0].headers.get('transfer-encoding') == 'chunked'
+        else:
+            assert 'transfer-encoding' not in captured[0].headers
+    finally:
+        await gateway.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_proxy_preserves_stream_status_body_and_query_but_strips_hop_headers(
     tmp_path,
 ):
@@ -700,3 +733,32 @@ async def test_proxy_does_not_time_out_a_quiet_stream_but_bounds_its_start(
             ProxyRequest(method="GET", path="/slow", query=(), headers=(), body=_body()),
         )
     assert caught.value.code == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_empty_request_trickle_still_has_a_response_start_deadline(tmp_path, monkeypatch):
+    from app_engine import gateway as gateway_module
+    contacted = []
+
+    async def upstream(request):
+        contacted.append(request)
+        return httpx.Response(200)
+
+    async def trickle():
+        while True:
+            yield b''
+
+    gateway = _gateway_type()(
+        catalog=_Catalog(_manifest(tmp_path, managed=True)),
+        lifecycle=_Lifecycle(), catalog_key=CatalogKey('test'),
+        transport=httpx.MockTransport(upstream))
+    monkeypatch.setattr(gateway_module, 'PROXY_RESPONSE_START_TIMEOUT', .02)
+    try:
+        session = await gateway.open(_open_request())
+        with pytest.raises(TargetProviderError) as failure:
+            await asyncio.wait_for(gateway.proxy(session, ProxyRequest(
+                method='GET', path='/', query=(), headers=(), body=trickle())), timeout=1)
+        assert failure.value.code == 'upstream_unavailable'
+        assert contacted == []
+    finally:
+        await gateway.shutdown()

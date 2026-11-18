@@ -27,6 +27,11 @@ the key to the iframe, through its URL or through browser messages. Configure it
 in the harness explicitly. Revocation blocks new requests; it cannot undo an
 app action already dispatched.
 
+The state tools use the same owner saves as the browser under
+`APP_ENGINE_STATE_DIR/saves/owner/<app-id>.json`. They do not read engine control
+files at the state-directory root. See the README's per-app state isolation
+section for the automatic legacy-save migration and its exclusions.
+
 The harness must be able to reach this engine. On another machine,
 `127.0.0.1` means that machine, not yours: use an explicitly configured secure
 port forward or run the harness locally. The endpoint validates its loopback

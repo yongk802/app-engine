@@ -18,6 +18,7 @@ is how two machines share a table server over a LAN or VPN.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -25,9 +26,11 @@ import shutil
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import httpx
 
+from .code_approval import tree_digest
 from .isolation_client import IsolatedProcess, command_request
 from .process_isolation import IsolationMode, ProcessIsolationPolicy
 
@@ -64,6 +67,7 @@ class RoomProcess:
     ai: Path | None
     data_dir: Path
     process: asyncio.subprocess.Process | IsolatedProcess | None = None
+    fingerprint: str = ""
     base_url: str = ""
     logs: deque = field(default_factory=lambda: deque(maxlen=200))
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -83,7 +87,9 @@ class MultiplayerHost:
         external: str | None = None,
         package: Path | None = None,
         isolation_policy: ProcessIsolationPolicy | None = None,
+        approval_check: Callable[[str], bool] | None = None,
     ):
+        self.approval_check = approval_check or (lambda fingerprint: False)
         self.state_root = Path(state_root)
         self.node = node
         self.package = package or package_dir()
@@ -125,16 +131,40 @@ class MultiplayerHost:
 
     # ── process lifecycle ────────────────────────────────────────────────────
 
+    def preview(self, app_id: str, app_root: Path, spec: dict) -> str:
+        """Preview only; never import a rule or create a child process."""
+        decision = self.isolation_policy.decide("multiplayer", app_id)
+        if not _APP_ID.fullmatch(app_id) or not decision.allowed:
+            raise MultiplayerUnavailable("This app is blocked by the operator.")
+        root = Path(app_root).resolve(strict=True)
+        for name in (spec.get("rules"), spec.get("ai")):
+            if name is None:
+                continue
+            module = (root / name).resolve(strict=True)
+            if not module.is_file() or not module.is_relative_to(root):
+                raise MultiplayerUnavailable("The rules module must be inside the app.")
+        content = tree_digest(root)
+        structure = json.dumps({"app": app_id, "spec": spec, "content": content,
+                                "execution": decision.execution_class}, sort_keys=True)
+        return hashlib.sha256(structure.encode()).hexdigest()
+
     async def ensure(self, app_id: str, app_root: Path, spec: dict) -> str:
         """Return the base URL of a healthy room service for the app, starting it if needed."""
-        if not _APP_ID.match(app_id):
-            raise MultiplayerUnavailable("Unknown app.")
+        decision = self.isolation_policy.decide("multiplayer", app_id)
+        if not _APP_ID.fullmatch(app_id) or not decision.allowed:
+            raise MultiplayerUnavailable("This app is blocked by the operator.")
         external = self.external_url(app_id)
         isolated = self.isolation_policy.mode_for(app_id) is IsolationMode.ENFORCE
         if external:
             if isolated:
                 raise MultiplayerUnavailable("An isolated room service cannot use an external server override.")
             return external
+        try:
+            fingerprint = await asyncio.to_thread(self.preview, app_id, app_root, spec)
+        except (OSError, ValueError) as exc:
+            raise MultiplayerUnavailable("The app content cannot be approved.") from exc
+        if not self.approval_check(fingerprint):
+            raise MultiplayerUnavailable("The owner must approve this multiplayer code in the launcher.")
         rules = (Path(app_root) / spec["rules"]).resolve()
         ai = (Path(app_root) / spec["ai"]).resolve() if spec.get("ai") else None
         record = self._processes.get(app_id)
@@ -143,8 +173,15 @@ class MultiplayerHost:
                                  rules=rules, ai=ai, data_dir=self.data_dir(app_id))
             self._processes[app_id] = record
         async with record.lock:
-            if record.alive:
+            current = await asyncio.to_thread(self.preview, app_id, app_root, spec)
+            if current != fingerprint or not self.approval_check(current):
+                raise MultiplayerUnavailable("The multiplayer approval is stale.")
+            if record.alive and record.fingerprint == current:
                 return record.base_url
+            await self._terminate(record)
+            record.app_root = await asyncio.to_thread(Path(app_root).resolve)
+            record.rules, record.ai = rules, ai
+            record.fingerprint = current
             if isolated:
                 await self._start_isolated(record)
             else:

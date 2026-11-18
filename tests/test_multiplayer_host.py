@@ -37,14 +37,20 @@ def make_game(apps: Path, app_id: str, *, multiplayer=True, rules_name="rules.mj
     return root
 
 
-def load_engine(tmp_path, monkeypatch, **env):
+def load_engine(tmp_path, monkeypatch, *, approve=True, **env):
     monkeypatch.setenv("APP_ENGINE_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("APP_ENGINE_APPS_DIR", str(tmp_path / "apps"))
     monkeypatch.delenv("APP_ENGINE_MULTIPLAYER_SERVER", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     import engine
-    return importlib.reload(engine)
+    module = importlib.reload(engine)
+    if approve:
+        # Existing gameplay fixtures explicitly trust their test-owned rule code.
+        for app in module.discover().values():
+            if app.multiplayer and (Path(app.root) / app.multiplayer['rules']).is_file():
+                module._record_code_approval(module._multiplayer_plan(app.id))
+    return module
 
 
 def headers(module, app_id, credential=None):
@@ -175,7 +181,7 @@ def test_enforced_multiplayer_fails_closed_when_broker_is_unavailable(tmp_path, 
 
     monkeypatch.setattr("app_engine.multiplayer_host.IsolatedProcess.start", unavailable)
     fake_node = tmp_path / "node"
-    host = MultiplayerHost(tmp_path / "state", node=str(fake_node), isolation_policy=ProcessIsolationPolicy(
+    host = MultiplayerHost(tmp_path / "state", approval_check=lambda fingerprint: True, node=str(fake_node), isolation_policy=ProcessIsolationPolicy(
         IsolationMode.AUDIT, frozenset({"cards"})
     ))
 
@@ -196,7 +202,7 @@ def test_enforced_multiplayer_fails_closed_when_broker_is_unavailable(tmp_path, 
 def test_enforced_room_rejects_configured_external_webhooks(tmp_path, monkeypatch):
     root = make_game(tmp_path / "apps", "cards")
     monkeypatch.setenv("APP_ENGINE_WEBHOOK_ALLOWED_ORIGINS", "https://alerts.example")
-    host = MultiplayerHost(tmp_path / "state", node=str(tmp_path / "node"), isolation_policy=ProcessIsolationPolicy(
+    host = MultiplayerHost(tmp_path / "state", approval_check=lambda fingerprint: True, node=str(tmp_path / "node"), isolation_policy=ProcessIsolationPolicy(
         IsolationMode.AUDIT, frozenset({"cards"})
     ))
 
@@ -237,7 +243,7 @@ def test_the_log_pump_is_held_while_the_service_runs(tmp_path):
     """The event loop keeps only a weak reference to a task. An unheld pump can be
     collected mid-flight, and the room service then blocks on a full stdout pipe."""
     root = make_game(tmp_path / "apps", "cards")
-    host = MultiplayerHost(tmp_path / "state")
+    host = MultiplayerHost(tmp_path / "state", approval_check=lambda fingerprint: True)
 
     async def run():
         try:
@@ -256,7 +262,7 @@ def test_the_room_service_stops_when_the_engine_end_of_its_pipe_closes(tmp_path)
     """An engine that dies without stopping its service closes the stdin pipe; the service
     must follow instead of living on beside the next engine's service (audit A7)."""
     root = make_game(tmp_path / "apps", "cards")
-    host = MultiplayerHost(tmp_path / "state")
+    host = MultiplayerHost(tmp_path / "state", approval_check=lambda fingerprint: True)
 
     async def run():
         try:

@@ -30,6 +30,8 @@ Config via env:
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import os
 import platform
@@ -45,24 +47,57 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 
-from app_engine.assistant import create_assistant_router
-from app_engine.chat import ChatRuntime
-from app_engine.media_types import asset_media_type
-from app_engine.config import ConfigStore
-from app_engine.grounding import InvalidKnowledgePackError, KnowledgeBase, load_declared_knowledge
 from app_engine import manifest as _manifest
-from app_engine.manifest import ENGINE_VERSION
+from app_engine.app_saves import MAX_SAVE_BYTES, AppSaveStore
+from app_engine.assistant import create_assistant_router
+from app_engine.atrium_status import AtriumStatusProbe
+from app_engine.backend_bindings import binding_fingerprint
+from app_engine.chat import ChatRuntime
 from app_engine.chat_room import ChatRoom
-from app_engine.mailer import Mailer, SmtpSettings, clean_address, invitation_email, mailto_link
-from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY, MultiplayerHost, MultiplayerUnavailable, failure as multiplayer_failure
+from app_engine.code_approval import tree_digest
+from app_engine.config import ConfigStore
+from app_engine.contracts import HostSubject
+from app_engine.grounding import (
+    InvalidKnowledgePackError,
+    KnowledgeBase,
+    load_declared_knowledge,
+)
+from app_engine.host_gate import LocalHostGate
+from app_engine.listener_gate import LoopbackListenerGate
+from app_engine.mailer import (
+    Mailer,
+    SmtpSettings,
+    clean_address,
+    invitation_email,
+    mailto_link,
+)
+from app_engine.manifest import ENGINE_VERSION
+from app_engine.media_types import asset_media_type
+from app_engine.multiplayer_host import MAX_BODY as MULTIPLAYER_MAX_BODY
+from app_engine.multiplayer_host import MultiplayerHost, MultiplayerUnavailable
+from app_engine.multiplayer_host import failure as multiplayer_failure
+from app_engine.ollama import (
+    ConfirmationError,
+    OllamaManager,
+    OllamaOperationError,
+    UnmanagedModelError,
+)
+from app_engine.outbound_tls import OutboundTlsPolicy
+from app_engine.proxy_headers import forward_app_headers
 from app_engine.public_origin import (
     JOIN_ERROR_PAGE,
     LOCAL_SESSION,
-    Audit,
     SESSION_COOKIE,
     Accounts,
+    Audit,
     OwnerGate,
     PublicOrigin,
     RemoteApiCors,
@@ -70,6 +105,7 @@ from app_engine.public_origin import (
     SignInLimiter,
     bind_is_allowed,
     clear_session_cookie,
+    http_origin,
     invite_link,
     join_page,
     player_sign_in_page,
@@ -77,22 +113,16 @@ from app_engine.public_origin import (
     sign_in_page,
     startup_warnings,
 )
-from app_engine.proxy_headers import forward_app_headers
-from app_engine.outbound_tls import OutboundTlsPolicy
-from app_engine.atrium_status import AtriumStatusProbe
-from app_engine.host_gate import LocalHostGate
-from app_engine.response_headers import Nosniff
-from app_engine.listener_gate import LoopbackListenerGate
-from app_engine.ollama import ConfirmationError, OllamaManager, OllamaOperationError, UnmanagedModelError
 from app_engine.registry import InvalidRegistryError, ModelRegistry
+from app_engine.request_limits import RequestLimits
+from app_engine.response_headers import Nosniff
 from app_engine.routes import create_app_engine_router
 from app_engine.runtime import DefaultAppEngineRuntime, LocalHostAdapter
-from app_engine.store_bridge import StoreBridge
-from app_engine.store_routes import create_store_router
 from app_engine.search import category_counts, search_apps
 from app_engine.speech import SpeechService, SpeechSettings, SpeechUnavailable
+from app_engine.store_bridge import StoreBridge
+from app_engine.store_routes import create_store_router
 from app_engine.system_probe import SystemProbe
-from app_engine.contracts import HostSubject
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -117,6 +147,7 @@ def _close_state_dir(path: Path) -> None:
 
 
 _close_state_dir(STATE_DIR)
+_app_saves = AppSaveStore(STATE_DIR)
 _outbound_tls_file = os.environ.get("APP_ENGINE_OUTBOUND_MTLS_CONFIG", "").strip()
 _outbound_tls = (OutboundTlsPolicy.from_file(Path(_outbound_tls_file))
                  if _outbound_tls_file else OutboundTlsPolicy())
@@ -126,7 +157,7 @@ _atrium_status_probe = (AtriumStatusProbe(_atrium_status_url, _outbound_tls)
 _store_bridge = StoreBridge(STATE_DIR, STORE_APPS_DIR, local_roots=(APPS_DIR,),
                             tls_policy=_outbound_tls,
                             public_mode=bool(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN")))
-MAX_STATE_BYTES = 100 * 1024  # 100 KB, matches Atrium
+MAX_STATE_BYTES = MAX_SAVE_BYTES
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 # Browser apps run on per-app ``<id>.localhost`` origins. Unforgeable random
@@ -144,6 +175,13 @@ try:
     _PUBLIC = PublicOrigin.parse(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN"), os.environ.get("APP_ENGINE_APP_ORIGINS"))
 except ValueError as _exc:
     raise SystemExit(f"app-engine: {_exc}") from _exc
+if (_PUBLIC and _PUBLIC.layout == "same"
+        and os.environ.get("APP_ENGINE_TRUST_SAME_ORIGIN_APPS") != "1"):
+    raise SystemExit(
+        "app-engine: same-origin hosting gives apps launcher privileges; "
+        "use subdomain origins, or set APP_ENGINE_TRUST_SAME_ORIGIN_APPS=1 "
+        "only for apps you trust with owner access."
+    )
 _TRUST_PROXY = os.environ.get("APP_ENGINE_TRUST_PROXY", "") in {"1", "true", "yes"}
 _MCP_PROXY_SECRET = os.environ.get("APP_ENGINE_MCP_PROXY_SECRET", "")
 if _MCP_PROXY_SECRET and len(_MCP_PROXY_SECRET) < 32:
@@ -183,16 +221,27 @@ _runtime_host = LocalHostAdapter(
     apps_roots=(APPS_DIR, STORE_APPS_DIR),
     state_root=STATE_DIR,
     subject=_runtime_subject,
+    subject_policy=lambda subject: (
+        subject == HostSubject("admin", "admin") or bool(_accounts and any(
+            player['id'] == subject.subject_id and subject.role == "player" and not player.get('disabled')
+            for player in _accounts.players()))
+    ),
+    approved_code=lambda app_id: _managed_code_approved(app_id),
 )
 _app_runtime = DefaultAppEngineRuntime(
     host=_runtime_host,
     subject=_runtime_subject,
     runtime_root=STATE_DIR / "runtime",
+    authorize_backend=lambda manifest, url: _legacy_binding_authorized(str(manifest.app_id), manifest.root, url),
 )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await asyncio.to_thread(
+        _app_saves.migrate_legacy, inspect_apps()[0],
+        excluded_paths=(Path(_outbound_tls_file),) if _outbound_tls_file else (),
+    )
     if _PUBLIC:
         where = f"{_PUBLIC.origin}/apps/<id>/" if _PUBLIC.layout == "same" else f"<id>.{_PUBLIC.host}"
         # flush=True: under systemd stdout is a pipe, and the one-time secret must reach the journal now.
@@ -225,6 +274,11 @@ async def lifespan(_: FastAPI):
 # No /docs, /redoc or /openapi.json: nothing uses them, and they hand anyone who
 # can reach the port a map of every route.
 app = FastAPI(title="app-engine", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(
+    RequestLimits,
+    timeout_seconds=float(os.environ.get("APP_ENGINE_BODY_TIMEOUT_SECONDS", "10")),
+    proxy_bytes=int(os.environ.get("APP_ENGINE_MAX_PROXY_BODY_BYTES", str(8 * 1024 * 1024))),
+)
 if _PUBLIC:
     app.add_middleware(OwnerGate, accounts=_accounts, enabled=True,
                        mcp_proxy_secret=_MCP_PROXY_SECRET)
@@ -264,9 +318,9 @@ _PLAYER_ROUTE = re.compile(r"^/api/app-engine/(?:apps/(?P<app>[a-z0-9][a-z0-9-]*
 async def _runtime_authenticate(request: Request) -> HostSubject:
     """Gate the host router by session, then hand the runtime its one subject.
 
-    The runtime's host adapter is single-subject (configuration, state and
-    approvals belong to this installation, not to a person), so the owner and
-    every player act as that subject once the session and allow-list checks pass.
+    Each signed-in person keeps their runtime identity. Shared targets still
+    share one process; per-user targets, configuration and data remain scoped.
+    Code approval belongs to the owner and delegates only the approved content.
     """
     session = _session(request)
     # Apps may load a session's content on their isolated origin. Host controls
@@ -274,8 +328,8 @@ async def _runtime_authenticate(request: Request) -> HostSubject:
     gateway_request = re.fullmatch(
         r'/api/app-engine/sessions/[^/]+/(?:assets|proxy)/.*', request.url.path
     )
-    if not _is_launcher_host(request) and gateway_request is None:
-        raise HTTPException(403, 'launcher origin required')
+    if gateway_request is None:
+        _require_launcher_host(request)
     if request.method == 'POST' and re.fullmatch(
         r'/api/app-engine/plans/[^/]+/approve', request.url.path
     ):
@@ -293,7 +347,7 @@ async def _runtime_authenticate(request: Request) -> HostSubject:
     if session.role == "player":
         if not match or (match.group("app") and not session.may_open(match.group("app"))):
             raise HTTPException(404)
-    return _runtime_subject
+    return _runtime_subject if session.owner else HostSubject(session.subject_id, session.role)
 
 
 app.include_router(
@@ -302,6 +356,13 @@ app.include_router(
         authenticate=_runtime_authenticate,
         may_rebuild=lambda request: _session(request).role != "player",
         proxy_html_csp=_FRAME_ANCESTORS,
+        record_app_approval=lambda app_id: _record_code_approval(_managed_code_fingerprint(app_id)),
+        session_principal=lambda request, subject: _session(request).subject_id,
+        session_origin=lambda request, app_id: _app_origin(request, app_id),
+        authorize_session=lambda request, session: (
+            _session(request).may_open(str(session.app_id))
+            and (not _PUBLIC_APPS or str(session.app_id) in _PUBLIC_APPS)
+        ),
         standing_approval=(lambda fingerprint: _accounts.plan_approved(fingerprint)) if _accounts else None,
         record_approval=(lambda fingerprint: (_accounts.approve_plan(fingerprint), _audit.record("plan.approved", fingerprint=fingerprint))) if _accounts else _assistant_approved_plans.add,
     )
@@ -419,13 +480,37 @@ def discover() -> dict[str, App]:
 
 # ── App-state persistence (localStorage replacement) ──────────────────────────
 
-def _state_file(session: Session, app_id: str) -> Path:
-    """The owner's saves stay where they always were; each player has their own folder."""
-    if not _APP_ID_RE.match(app_id):
-        raise HTTPException(404)
-    if session.role == "player":
-        return STATE_DIR / "players" / session.subject_id / f"{app_id}.json"
-    return STATE_DIR / f"{app_id}.json"
+def _saved_state(session: Session, app_id: str) -> JSONResponse:
+    try:
+        raw = _app_saves.read(app_id, session.subject_id if session.role == "player" else None)
+    except (OSError, ValueError):
+        raise HTTPException(409, "app state storage unavailable") from None
+    if raw is None:
+        return JSONResponse({})
+    try:
+        return JSONResponse(json.loads(raw))
+    except (ValueError, UnicodeError):
+        return JSONResponse({})
+
+
+async def _save_state(session: Session, app_id: str, request: Request) -> JSONResponse:
+    raw = await request.body()
+    if len(raw) > MAX_STATE_BYTES:
+        raise HTTPException(413, "state too large")
+    try:
+        data = json.loads(raw)
+        encoded = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(400, "invalid JSON") from None
+    if not isinstance(data, (dict, list)):
+        raise HTTPException(400, "state must be object or array")
+    if len(encoded) > MAX_STATE_BYTES:
+        raise HTTPException(413, "state too large")
+    try:
+        _app_saves.write(app_id, encoded, session.subject_id if session.role == "player" else None)
+    except (OSError, ValueError):
+        raise HTTPException(409, "app state storage unavailable") from None
+    return JSONResponse({"ok": True})
 
 
 def _hostname(request: Request) -> str:
@@ -452,7 +537,18 @@ def _served_on_app_origin(request: Request, app_id: str) -> bool:
 
 def _is_launcher_host(request: Request) -> bool:
     host = _hostname(request)
-    return host in {"127.0.0.1", "localhost", "::1", "testserver"} or bool(_PUBLIC and host == _PUBLIC.hostname)
+    if _PUBLIC:
+        return host == _PUBLIC.hostname
+    return host in {"127.0.0.1", "localhost", "::1", "testserver"}
+
+
+def _require_launcher_host(request: Request) -> None:
+    if not _is_launcher_host(request):
+        raise HTTPException(403, "launcher origin required")
+    supplied = request.headers.get("origin")
+    expected = _PUBLIC.origin if _PUBLIC else f"{request.url.scheme}://{request.url.netloc}"
+    if supplied is not None and (http_origin(supplied) is None or http_origin(supplied) != http_origin(expected)):
+        raise HTTPException(403, "launcher origin required")
 
 
 def _app_origin(request: Request, app_id: str) -> str:
@@ -489,6 +585,7 @@ def _enforce_app_state_access(request: Request, app_id: str) -> Session:
 def _deny_app_iframe(request: Request) -> None:
     """Require the launcher-only capability for local-AI mutations."""
     _deny_public_local_ai()
+    _require_launcher_host(request)
     supplied = request.headers.get("x-app-engine-admin", "")
     if not _is_launcher_host(request) or not secrets.compare_digest(supplied, _admin_capability):
         raise HTTPException(403, "launcher capability required")
@@ -503,36 +600,82 @@ def _deny_public_local_ai() -> None:
 @app.get("/api/app-state/{app_id}")
 async def get_app_state(app_id: str, request: Request) -> JSONResponse:
     session = _enforce_app_state_access(request, app_id)
-    f = _state_file(session, app_id)
-    if not f.is_file():
-        return JSONResponse({})
-    try:
-        return JSONResponse(json.loads(f.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, UnicodeError, OSError):
-        return JSONResponse({})
+    return _saved_state(session, app_id)
 
 
 @app.put("/api/app-state/{app_id}")
 async def put_app_state(app_id: str, request: Request) -> JSONResponse:
     session = _enforce_app_state_access(request, app_id)
-    raw = await request.body()
-    if len(raw) > MAX_STATE_BYTES:
-        raise HTTPException(413, "state too large")
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise HTTPException(400, "invalid JSON")
-    if not isinstance(data, (dict, list)):
-        raise HTTPException(400, "state must be object or array")
-    target = _state_file(session, app_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data), encoding="utf-8")
-    return JSONResponse({"ok": True})
+    return await _save_state(session, app_id, request)
 
 
 # ── Multiplayer (host-run room service per app) ───────────────────────────────
 
-_multiplayer = MultiplayerHost(STATE_DIR)
+def _legacy_binding_authorized(app_id: str, root: Path, url: str) -> bool:
+    try:
+        fingerprint, _ = binding_fingerprint(app_id, root, url, (int(os.environ.get("APP_ENGINE_PORT", "8770")),))
+        return _code_approved(fingerprint)
+    except (OSError, ValueError):
+        return False
+
+
+def _backend_plan(app_id: str, request: Request) -> tuple[str, str]:
+    app_obj = discover().get(app_id)
+    if app_obj is None or not app_obj.entry_point:
+        raise HTTPException(404)
+    try:
+        return binding_fingerprint(app_id, Path(app_obj.root), app_obj.entry_point,
+                                   (request.url.port or 80, int(os.environ.get("APP_ENGINE_PORT", "8770"))))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(409, "This backend binding is not permitted.") from exc
+
+
+@app.get("/api/backend-plans/{app_id}")
+async def backend_plan(app_id: str, request: Request) -> JSONResponse:
+    _require_launcher_host(request)
+    _require_app_access(_session(request), app_id)
+    fingerprint, url = _backend_plan(app_id, request)
+    return JSONResponse({"fingerprint": fingerprint, "url": url, "approved": _code_approved(fingerprint)})
+
+
+@app.post("/api/backend-plans/{app_id}/approve")
+async def backend_approve(app_id: str, request: Request) -> JSONResponse:
+    _require_owner_action(request)
+    payload = await request.json()
+    fingerprint, _ = _backend_plan(app_id, request)
+    if not isinstance(payload, dict) or payload.get("fingerprint") != fingerprint:
+        raise HTTPException(409, "Backend approval is stale.")
+    _record_code_approval(fingerprint)
+    return JSONResponse({"approved": True})
+
+
+def _managed_code_approved(app_id: str) -> bool:
+    try:
+        return _code_approved(_managed_code_fingerprint(app_id))
+    except (OSError, ValueError):
+        return False
+
+
+def _managed_code_fingerprint(app_id: str) -> str:
+    app_obj = discover().get(app_id)
+    if app_obj is None:
+        raise ValueError("Unknown app")
+    return hashlib.sha256(("managed:" + app_id + tree_digest(Path(app_obj.root))).encode()).hexdigest()
+
+
+def _code_approved(fingerprint: str) -> bool:
+    return _accounts.plan_approved(fingerprint) if _accounts else fingerprint in _assistant_approved_plans
+
+
+def _record_code_approval(fingerprint: str) -> None:
+    if _accounts:
+        _accounts.approve_plan(fingerprint)
+        _audit.record("code.approved", fingerprint=fingerprint)
+    else:
+        _assistant_approved_plans.add(fingerprint)
+
+
+_multiplayer = MultiplayerHost(STATE_DIR, approval_check=_code_approved)
 
 
 def _multiplayer_reply(status: int, value: dict) -> JSONResponse:
@@ -542,6 +685,36 @@ def _multiplayer_reply(status: int, value: dict) -> JSONResponse:
 def _multiplayer_app(app_id: str) -> App | None:
     app_obj = discover().get(app_id)
     return app_obj if app_obj and app_obj.multiplayer else None
+
+
+def _multiplayer_plan(app_id: str) -> str:
+    app_obj = _multiplayer_app(app_id)
+    if app_obj is None:
+        raise HTTPException(404)
+    try:
+        return _multiplayer.preview(app_id, Path(app_obj.root), app_obj.multiplayer)
+    except (OSError, ValueError, MultiplayerUnavailable) as exc:
+        raise HTTPException(409, "Multiplayer code cannot be approved.") from exc
+
+
+@app.get("/api/multiplayer-plans/{app_id}")
+async def multiplayer_plan(app_id: str, request: Request) -> JSONResponse:
+    _require_launcher_host(request)
+    _require_app_access(_session(request), app_id)
+    fingerprint = _multiplayer_plan(app_id)
+    return JSONResponse({"fingerprint": fingerprint, "approved": _code_approved(fingerprint),
+                         "execution_class": _multiplayer.isolation_policy.decide("multiplayer", app_id).execution_class})
+
+
+@app.post("/api/multiplayer-plans/{app_id}/approve")
+async def multiplayer_approve(app_id: str, request: Request) -> JSONResponse:
+    _require_owner_action(request)
+    payload = await request.json()
+    fingerprint = _multiplayer_plan(app_id)
+    if not isinstance(payload, dict) or payload.get("fingerprint") != fingerprint:
+        raise HTTPException(409, "Multiplayer approval is stale.")
+    _record_code_approval(fingerprint)
+    return JSONResponse({"approved": True})
 
 
 async def _multiplayer_base(request: Request, app_id: str) -> str | JSONResponse:
@@ -567,6 +740,7 @@ async def app_multiplayer_command(app_id: str, request: Request) -> JSONResponse
     and becomes the service's bearer token. Bodies are bounded and must be JSON
     commands (``{"op": ..., ...}``); the service validates everything else.
     """
+    _enforce_app_state_access(request, app_id)
     if not re.match(r"^application/json(?:\s*;|$)", request.headers.get("content-type", ""), re.I):
         return _multiplayer_reply(415, multiplayer_failure("INVALID_REQUEST", "Commands require application/json."))
     raw = await request.body()
@@ -888,7 +1062,10 @@ async def shared_file(filename: str, request: Request) -> Response:
 
 
 async def _proxy_entry_point(app_obj: App, path: str, request: Request) -> Response:
-    target = app_obj.entry_point.rstrip("/") + "/" + path
+    fingerprint, pinned = _backend_plan(app_obj.id, request)
+    if not _code_approved(fingerprint):
+        raise HTTPException(403, "The owner must approve this backend binding in the launcher.")
+    target = pinned.rstrip("/") + "/" + path
     headers = dict(forward_app_headers(
         (k, v) for k, v in request.headers.items()
         if k.lower() not in ("host", "content-length", "transfer-encoding")
@@ -976,8 +1153,7 @@ async def api_apps(
     request: Request, q: str = "", category: list[str] = Query(default=[]),
 ) -> JSONResponse:
     """Launcher app list. ``q`` and ``category`` filter it and rank by relevance."""
-    if not _is_launcher_host(request):
-        raise HTTPException(403, "launcher origin required")
+    _require_launcher_host(request)
     session = _session(request)
     discovered = discover()   # one scan of the apps folder per request, not one per app
     apps = [a for a in search_apps(_app_listing(discovered), q, category) if session.may_open(a["id"])]
@@ -993,8 +1169,7 @@ async def api_apps(
 @app.get("/api/apps/categories")
 async def api_app_categories(request: Request) -> JSONResponse:
     """Category vocabulary with per-category app counts, for the filter control."""
-    if not _is_launcher_host(request):
-        raise HTTPException(403, "launcher origin required")
+    _require_launcher_host(request)
     session = _session(request)
     return JSONResponse(category_counts([a for a in _app_listing() if session.may_open(a["id"])]))
 
@@ -1029,8 +1204,7 @@ _LAUNCHER_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nos
 
 @app.get("/", response_class=HTMLResponse)
 async def launcher(request: Request) -> HTMLResponse:
-    if not _is_launcher_host(request):
-        raise HTTPException(403, "launcher origin required")
+    _require_launcher_host(request)
     session = _session(request)
     html = (Path(__file__).parent / "launcher.html").read_text(encoding="utf-8")
     # A player's page never carries the owner's capability: it cannot approve, install or configure.
@@ -1059,6 +1233,7 @@ def _require_owner(request: Request) -> Session:
     session = _session(request)
     if not session.owner:
         raise HTTPException(404)
+    _require_launcher_host(request)
     return session
 
 
@@ -1112,6 +1287,7 @@ app.include_router(create_assistant_router(
 async def join(code: str, request: Request) -> Response:
     """A one-time invitation link: the player chooses a password, then is signed in here."""
     _require_public()
+    _require_launcher_host(request)
     player = _accounts.invited_player(code)
     if player is None:
         return HTMLResponse(JOIN_ERROR_PAGE, status_code=404, headers=_NO_STORE)
@@ -1121,6 +1297,7 @@ async def join(code: str, request: Request) -> Response:
 @app.post("/join/{code}")
 async def join_submit(code: str, request: Request) -> Response:
     _require_public()
+    _require_launcher_host(request)
     player = _accounts.invited_player(code)
     if player is None:
         return HTMLResponse(JOIN_ERROR_PAGE, status_code=404, headers=_NO_STORE)
@@ -1144,6 +1321,7 @@ async def join_submit(code: str, request: Request) -> Response:
 @app.get("/sign-in", response_class=HTMLResponse)
 async def player_sign_in(request: Request) -> Response:
     _require_public()
+    _require_launcher_host(request)
     if request.scope.get("state", {}).get("session"):
         return RedirectResponse("/", status_code=303)
     return HTMLResponse(player_sign_in_page(), headers=_NO_STORE)
@@ -1152,6 +1330,7 @@ async def player_sign_in(request: Request) -> Response:
 @app.post("/sign-in")
 async def player_sign_in_submit(request: Request) -> Response:
     _require_public()
+    _require_launcher_host(request)
     address = request.client.host if request.client else ""
     if not _sign_in_limiter.allow(address):
         return HTMLResponse(player_sign_in_page("Too many attempts. Wait a minute."), status_code=429, headers=_NO_STORE)
@@ -1170,6 +1349,7 @@ async def player_sign_in_submit(request: Request) -> Response:
 @app.post("/sign-out")
 async def player_sign_out(request: Request) -> Response:
     _require_public()
+    _require_launcher_host(request)
     _accounts.revoke_session(request.cookies.get(SESSION_COOKIE))
     response = RedirectResponse("/sign-in", status_code=303)
     clear_session_cookie(response, _PUBLIC)
@@ -1204,12 +1384,14 @@ async def _chat_post(session: Session, request: Request) -> JSONResponse:
 @app.get("/api/chat")
 async def chat_read(request: Request) -> JSONResponse:
     _require_public()
+    _require_launcher_host(request)
     return _chat_read(_session(request), request)
 
 
 @app.post("/api/chat")
 async def chat_post(request: Request) -> JSONResponse:
     _require_public()
+    _require_launcher_host(request)
     _require_json_from_this_site(request)
     return await _chat_post(_session(request), request)
 
@@ -1282,13 +1464,7 @@ async def api_player_state_get(app_id: str, request: Request) -> JSONResponse:
     session = _bearer_session(request)
     if not _APP_ID_RE.match(app_id) or not session.may_open(app_id):
         raise HTTPException(404)
-    f = _state_file(session, app_id)
-    if not f.is_file():
-        return JSONResponse({})
-    try:
-        return JSONResponse(json.loads(f.read_text(encoding="utf-8")))
-    except (json.JSONDecodeError, UnicodeError, OSError):
-        return JSONResponse({})
+    return _saved_state(session, app_id)
 
 
 @app.put("/api/players/state/{app_id}")
@@ -1296,19 +1472,7 @@ async def api_player_state_put(app_id: str, request: Request) -> JSONResponse:
     session = _bearer_session(request)
     if not _APP_ID_RE.match(app_id) or not session.may_open(app_id):
         raise HTTPException(404)
-    raw = await request.body()
-    if len(raw) > MAX_STATE_BYTES:
-        raise HTTPException(413, "state too large")
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise HTTPException(400, "invalid JSON")
-    if not isinstance(data, (dict, list)):
-        raise HTTPException(400, "state must be object or array")
-    target = _state_file(session, app_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data), encoding="utf-8")
-    return JSONResponse({"ok": True})
+    return await _save_state(session, app_id, request)
 
 
 async def _remote_multiplayer_base(request: Request, app_id: str) -> str | JSONResponse:
@@ -1327,8 +1491,11 @@ async def _remote_multiplayer_base(request: Request, app_id: str) -> str | JSONR
 @app.post("/api/players/{app_id}/command")
 async def api_player_command(app_id: str, request: Request) -> JSONResponse:
     """A room command from a signed-in player's own game client, anywhere on the internet."""
-    if not _APP_ID_RE.match(app_id):
+    session = _bearer_session(request)
+    if not _APP_ID_RE.fullmatch(app_id):
         raise HTTPException(404)
+    if not session.may_open(app_id):
+        return _multiplayer_reply(404, multiplayer_failure("MULTIPLAYER_UNAVAILABLE", "You are not signed up for this game on this server."))
     raw = await request.body()
     if len(raw) > MULTIPLAYER_MAX_BODY:
         return _multiplayer_reply(413, multiplayer_failure("INVALID_REQUEST", "Request is too large."))
@@ -1476,6 +1643,7 @@ async def admin_players_delete(player_id: str, request: Request) -> Response:
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_sign_in(request: Request) -> Response:
     _require_public()
+    _require_launcher_host(request)
     if request.scope.get("state", {}).get("session"):
         return RedirectResponse("/", status_code=303)
     return HTMLResponse(sign_in_page(), headers={"Content-Security-Policy": "frame-ancestors 'none'", "Cache-Control": "no-store"})
@@ -1484,23 +1652,26 @@ async def admin_sign_in(request: Request) -> Response:
 @app.post("/admin/sign-in")
 async def admin_sign_in_submit(request: Request) -> Response:
     _require_public()
+    _require_launcher_host(request)
     address = request.client.host if request.client else ""
     if not _sign_in_limiter.allow(address):
         return HTMLResponse(sign_in_page("Too many attempts. Wait a minute."), status_code=429)
     form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
     secret = (form.get("secret") or [""])[0]
-    if not _accounts.verify_admin_secret(secret):
+    token = _accounts.sign_in_admin(secret)
+    if token is None:
         _audit.record("owner.sign_in.failed", address=address)
         return HTMLResponse(sign_in_page("That secret is not right."), status_code=403)
     _audit.record("owner.sign_in", address=address)
     response = RedirectResponse("/", status_code=303)
-    set_session_cookie(response, _accounts.create_admin_session(), _PUBLIC)
+    set_session_cookie(response, token, _PUBLIC)
     return response
 
 
 @app.post("/admin/sign-out")
 async def admin_sign_out(request: Request) -> Response:
     _require_public()
+    _require_launcher_host(request)
     _accounts.revoke_session(request.cookies.get(SESSION_COOKIE))
     response = RedirectResponse("/admin", status_code=303)
     clear_session_cookie(response, _PUBLIC)

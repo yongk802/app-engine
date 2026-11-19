@@ -8,7 +8,7 @@ production service was restarted or modified during inventory.
 |---|---|---|
 | .201, Yongs-MacBook-Pro | loopback 8770 reports 0.3.4; listener working directory `~/git/app-engine`, checkout `0b9b198` | Older than merged audit release. Effective environment and service activation require further reconciliation. Owner: Yong Kim; plan supported update after acceptance. |
 | .221, MACXKGKPY492Q | loopback 8770 reports 0.3.5; serving worktree clean at `d42fd186ae77b5760d8880216f6dbc89dbe08726`; launchd plist selects `APP_ENGINE_PROCESS_ISOLATION=audit` | Intentional trusted macOS RPMCC test host, outside Linux containment. State directory 0750, parent 0755; unrelated users cannot traverse state. No publisher policy configured in the reviewed plist. Owner: Yong Kim. |
-| VPS, srv1242099 | active app-engine service reports 0.2.1; checkout `2f64461a3a2cc029503481d2c4a0c38767c6120e`; no tracked modifications (untracked worktrees preserved) | Production deployment predates the audit merge. Requires separately reviewed rollout/migration and acceptance. Owner: Yong Kim. |
+| VPS | active app-engine service reports 0.2.1; checkout `2f64461a3a2cc029503481d2c4a0c38767c6120e`; no tracked modifications (untracked worktrees preserved) | Production deployment predates the audit merge. Requires separately reviewed rollout/migration and acceptance. Owner: Yong Kim. |
 
 VPS observed service controls: `User=appengine`, `NoNewPrivileges=yes`,
 `PrivateTmp=yes`, `ProtectSystem=full`, `ProtectHome=no`, empty capability
@@ -22,7 +22,7 @@ merge nor a Mac browser run proves the production installation is hardened.
 
 * Running process environment (read without exporting secrets) selects
   `APP_ENGINE_PROCESS_ISOLATION=enforce`, public origin
-  `https://play.srv1242099.hstgr.cloud`, and listener `127.0.0.1:8770`.
+  `https://play.srv123.provider.example`, and listener `127.0.0.1:8770`.
   This is an old runner implementation; the new resource policy is absent.
 * `/etc/app-engine-runner.json` is root-owned 0600, selecting the appengine
   user/group, app source under `/home/appengine/personal-apps`, runtime state
@@ -32,7 +32,7 @@ merge nor a Mac browser run proves the production installation is hardened.
   no app units were running during this observation. Actual new kernel
   containment and bounded storage on this host remain **unverified**.
 * `nginx -T` succeeds. The browser proxy's active config in
-  `/etc/nginx/conf.d/play.srv1242099.hstgr.cloud.conf` declares a 2 MiB
+  `/etc/nginx/conf.d/play.srv123.provider.example.conf` declares a 2 MiB
   request body cap, preserves `$host`, sets forwarded protocol to HTTPS and
   forwarded address to `$remote_addr`, and forwards to loopback 8770.
   TLS protocol directives permit TLS 1.2/1.3. The separate MCP proxy requires
@@ -41,7 +41,7 @@ merge nor a Mac browser run proves the production installation is hardened.
   the launcher. The certificate expires 2027-01-21 and covers launcher,
   cyberpunk-tcg and package-tracker names; it is **not a wildcard certificate**.
 * Launcher, cyberpunk-tcg and a synthetic wildcard DNS name resolve to the VPS
-  IPv4/IPv6 addresses. This proves resolution, not ownership of Hostinger's
+  IPv4/IPv6 addresses. This proves resolution, not ownership of the hosting provider's
   DNS zone or provider account. **Wildcard ownership remains unverified**.
 * TLS private key metadata: Let's Encrypt key root-owned 0600. Reviewed
   engine/store/MCP mTLS `.key` files are 0600, owned by their configured

@@ -595,7 +595,7 @@ const response = await this.fetch(`./api/app-engine/multiplayer/${encodeURICompo
 - [x] **Step 1: README** — add the multiplayer endpoint rows to the host↔app contract table and a "Play with friends (multiplayer)" section describing: manifest field, rules-module contract, per-app storage, `APP_ENGINE_MULTIPLAYER_SERVER` env override for a shared service, and the host-wide roster seam.
 - [x] **Step 2: CI** — add `node --test multiplayer/test/` to app-engine’s CI (in addition to pytest).
 - [x] **Step 3: End-to-end manual check** — on a dev box: `APP_ENGINE_APPS_DIR=personal-apps .venv/bin/python engine.py`, open Night City Table, create a table, join from a second origin, play a legal match to completion, rematch, run a tournament with an AI fill, set up friends, leave/rejoin; confirm solo play works with **no** room service configured.
-- [x] **Step 4: Remote test** — (optional, requires VPS) on `72.62.168.46`, run app-engine pointed at a checkout of personal-apps, open the port, and confirm two remote browsers can play over the internet (this validates the "people connect to it to play games they own" goal). Note TLS via a reverse proxy (Caddy/nginx) — browsers block mixed-content, so this is a deployment concern, not a code change.
+- [x] **Step 4: Remote test** — (optional, requires VPS) on `203.0.113.10`, run app-engine pointed at a checkout of personal-apps, open the port, and confirm two remote browsers can play over the internet (this validates the "people connect to it to play games they own" goal). Note TLS via a reverse proxy (Caddy/nginx) — browsers block mixed-content, so this is a deployment concern, not a code change.
 
 ---
 

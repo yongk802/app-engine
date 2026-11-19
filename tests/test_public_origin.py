@@ -473,12 +473,12 @@ def test_phase_four_limits_audit_and_same_origin_layout(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENGINE_RATE_LIMIT", "0.001,5")
     import app_engine.public_origin as public_origin
     importlib.reload(public_origin)
-    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN="https://srv1242099.hstgr.cloud", APP_ENGINE_APP_ORIGINS="same", APP_ENGINE_TRUST_SAME_ORIGIN_APPS="1", APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
+    module = load_engine(tmp_path, monkeypatch, APP_ENGINE_PUBLIC_ORIGIN="https://srv123.provider.example", APP_ENGINE_APP_ORIGINS="same", APP_ENGINE_TRUST_SAME_ORIGIN_APPS="1", APP_ENGINE_ADMIN_SECRET="hunter2-but-longer")
     assert module._PUBLIC.layout == "same"
     assert any("share one browser origin" in w for w in startup_warnings("127.0.0.1", module._PUBLIC, True))
     assert any("TRUST_PROXY" in w for w in startup_warnings("127.0.0.1", module._PUBLIC, False))
     assert any("public interface" in w for w in startup_warnings("0.0.0.0", module._PUBLIC, True))
-    base = "https://srv1242099.hstgr.cloud"
+    base = "https://srv123.provider.example"
     with TestClient(module.app, base_url=base) as client:
         assert client.post(f"{base}/admin/sign-in", data={"secret": "hunter2-but-longer"}, follow_redirects=False).status_code == 303
         listing = client.get(f"{base}/api/apps").json()
@@ -486,7 +486,7 @@ def test_phase_four_limits_audit_and_same_origin_layout(tmp_path, monkeypatch):
         token = listing[0]["url"].split("atrium_state_token=")[1]
         assert client.get(f"{base}/apps/cards/").status_code == 200
         assert client.put(f"{base}/api/app-state/cards", json={"n": 1}, headers={"x-app-state-token": token}).status_code == 200
-        assert client.get("https://cards.srv1242099.hstgr.cloud/apps/cards/", headers={"cookie": ""}).status_code in (401, 403), "subdomains are not the layout here"
+        assert client.get("https://cards.srv123.provider.example/apps/cards/", headers={"cookie": ""}).status_code in (401, 403), "subdomains are not the layout here"
         # Rate limiting: the busy surfaces answer 429 with Retry-After once the burst is spent.
         codes = [client.get(f"{base}/api/app-state/cards", headers={"x-app-state-token": token}).status_code for _ in range(7)]
         assert codes == [200] * 4 + [429] * 3, "the PUT above spent one of the five burst tokens; refill is negligible here"

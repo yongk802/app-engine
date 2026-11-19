@@ -1,8 +1,8 @@
-# Deploying a public app-engine on a Hostinger VPS
+# Deploying a public app-engine on a VPS
 
-Deployed and verified on `srv1242099.hstgr.cloud` (2026-09-13; two remote players signed in with passwords, were matched by the server's queue and played a full match over the internet): the VPS name resolves,
-Hostinger publishes a **wildcard** for it at any depth
-(`anything.play.srv1242099.hstgr.cloud` → the same address), `hstgr.cloud` is on
+Deployed and verified on `srv123.provider.example` (2026-09-13; two remote players signed in with passwords, were matched by the server's queue and played a full match over the internet): the VPS name resolves,
+the hosting provider publishes a **wildcard** for it at any depth
+(`anything.play.srv123.provider.example` → the same address), the provider's domain (`provider.example` here) is on
 the Public Suffix List (so the `srv…` name behaves like a domain of your own for
 cookies and certificate rate limits), and ports 80/443 are already served by
 **nginx for the AMP game panel** with a Let's Encrypt certificate for the base
@@ -12,9 +12,9 @@ Nothing about DNS needs to change. The layout:
 
 | Name | Serves |
 |---|---|
-| `srv1242099.hstgr.cloud` | AMP, untouched |
-| `play.srv1242099.hstgr.cloud` | the app-engine launcher (`APP_ENGINE_PUBLIC_ORIGIN`) and the player API games connect to |
-| `<app>.play.srv1242099.hstgr.cloud` | each app on its own origin (the default `subdomain` layout) |
+| `srv123.provider.example` | AMP, untouched |
+| `play.srv123.provider.example` | the app-engine launcher (`APP_ENGINE_PUBLIC_ORIGIN`) and the player API games connect to |
+| `<app>.play.srv123.provider.example` | each app on its own origin (the default `subdomain` layout) |
 
 ## 1. Install
 
@@ -23,7 +23,7 @@ pushed to it (`/home/deploy/git/*.git` already hosts `personal-apps`):
 
 ```bash
 # on your machine
-git -C ~/git/app-engine remote add vps root@72.62.168.46:/home/deploy/git/app-engine.git   # once (create the bare repo first: git init --bare)
+git -C ~/git/app-engine remote add vps root@203.0.113.10:/home/deploy/git/app-engine.git   # once (create the bare repo first: git init --bare)
 git -C ~/git/app-engine push vps main
 git -C ~/git/personal-apps push origin main            # origin is already the VPS bare repo
 
@@ -61,7 +61,7 @@ User=appengine
 WorkingDirectory=/home/appengine/app-engine
 Environment=APP_ENGINE_APPS_DIR=/home/appengine/personal-apps
 Environment=APP_ENGINE_STATE_DIR=/home/appengine/state
-Environment=APP_ENGINE_PUBLIC_ORIGIN=https://play.srv1242099.hstgr.cloud
+Environment=APP_ENGINE_PUBLIC_ORIGIN=https://play.srv123.provider.example
 Environment=APP_ENGINE_PUBLIC_APPS=cyberpunk-tcg
 Environment=APP_ENGINE_TRUST_PROXY=1
 Environment=APP_ENGINE_HOST=127.0.0.1
@@ -112,13 +112,13 @@ journalctl -u app-engine -n 20     # the public origin line and any warnings
 ## 3. Front it with the nginx that is already there
 
 Two steps, because the 443 block needs the certificate to exist: add the port-80
-block, reload, run certbot, then add the 443 block. `/etc/nginx/conf.d/play.srv1242099.hstgr.cloud.conf`:
+block, reload, run certbot, then add the 443 block. `/etc/nginx/conf.d/play.srv123.provider.example.conf`:
 
 ```nginx
 server {
     listen 80;
     listen [::]:80;
-    server_name play.srv1242099.hstgr.cloud *.play.srv1242099.hstgr.cloud;
+    server_name play.srv123.provider.example *.play.srv123.provider.example;
     location /.well-known/acme-challenge/ { root /var/www/html; }
     location / { return 301 https://$host$request_uri; }
 }
@@ -127,9 +127,9 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
-    server_name play.srv1242099.hstgr.cloud *.play.srv1242099.hstgr.cloud;
-    ssl_certificate /etc/letsencrypt/live/play.srv1242099.hstgr.cloud/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/play.srv1242099.hstgr.cloud/privkey.pem;
+    server_name play.srv123.provider.example *.play.srv123.provider.example;
+    ssl_certificate /etc/letsencrypt/live/play.srv123.provider.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/play.srv123.provider.example/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
@@ -152,35 +152,35 @@ timer). `APP_ENGINE_PUBLIC_APPS` and this list go together: when you host
 another app, add it to both and re-run certbot with `--expand`:
 
 ```bash
-certbot certonly --webroot -w /var/www/html --expand --cert-name play.srv1242099.hstgr.cloud \
-  -d play.srv1242099.hstgr.cloud \
-  -d cyberpunk-tcg.play.srv1242099.hstgr.cloud
+certbot certonly --webroot -w /var/www/html --expand --cert-name play.srv123.provider.example \
+  -d play.srv123.provider.example \
+  -d cyberpunk-tcg.play.srv123.provider.example
 nginx -t && systemctl reload nginx
 ```
 
-A wildcard certificate (`*.play.srv1242099.hstgr.cloud`) would need the DNS-01
-challenge, which requires control of the zone; Hostinger owns `hstgr.cloud`, so
+A wildcard certificate (`*.play.srv123.provider.example`) would need the DNS-01
+challenge, which requires control of the zone; the provider owns `provider.example`, so
 per-name certificates are the right tool here. Should you later point a domain
 of your own at the VPS, the same configuration works with your names, and a
 DNS-01 wildcard becomes possible.
 
 ## 4. First sign-in and players
 
-1. `https://play.srv1242099.hstgr.cloud/admin` — the admin secret from the
+1. `https://play.srv123.provider.example/admin` — the admin secret from the
    service log (or the one you configured). Open Night City Table once and
    approve its launch plan; that approval stands for players.
 2. Invite players from the launcher's **Players** panel or
-   `sudo -u appengine -H env APP_ENGINE_STATE_DIR=/home/appengine/state APP_ENGINE_PUBLIC_ORIGIN=https://play.srv1242099.hstgr.cloud /home/appengine/app-engine/.venv/bin/app-engine-players invite --username rook --apps cyberpunk-tcg`.
-3. Players open the game on their own computers, pick **Hostinger VPS** in the
+   `sudo -u appengine -H env APP_ENGINE_STATE_DIR=/home/appengine/state APP_ENGINE_PUBLIC_ORIGIN=https://play.srv123.provider.example /home/appengine/app-engine/.venv/bin/app-engine-players invite --username rook --apps cyberpunk-tcg`.
+3. Players open the game on their own computers, pick the server's entry in the
    Table server panel (the game's `app.json` lists
-   `https://play.srv1242099.hstgr.cloud`), sign in, and meet each other.
+   `https://play.srv123.provider.example`), sign in, and meet each other.
 
 ## Checks
 
 ```bash
-curl -sI https://play.srv1242099.hstgr.cloud/ | head -1            # 303 → /admin
-curl -s https://play.srv1242099.hstgr.cloud/api/engine              # {"name":"app-engine",...}
-curl -s -X POST https://play.srv1242099.hstgr.cloud/api/players/sign-in \
+curl -sI https://play.srv123.provider.example/ | head -1            # 303 → /admin
+curl -s https://play.srv123.provider.example/api/engine              # {"name":"app-engine",...}
+curl -s -X POST https://play.srv123.provider.example/api/players/sign-in \
   -H 'Content-Type: application/json' -d '{"username":"x","password":"y"}'   # 403 with an error body
 ```
 

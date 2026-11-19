@@ -7,7 +7,7 @@
 
 ## Goal
 
-`app-engine` on `72.62.168.46` (or any server) serves Night City Table to a
+`app-engine` on `203.0.113.10` (or any server) serves Night City Table to a
 handful of friends over the internet. They open one address, see the games
 they are allowed to play, and meet at the same tables; their saves and rosters
 are their own. The owner installs games, approves runtimes, manages players

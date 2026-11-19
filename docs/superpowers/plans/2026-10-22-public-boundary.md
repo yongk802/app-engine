@@ -55,7 +55,7 @@ Files: `tests/test_gateway_service.py`,
 ## Task 3: Startup and origin safety
 
 Files: `tests/test_startup.py`, `tests/test_public_origin.py`,
-`app_engine/public_origin.py`, `README.md`, `docs/deploy-hostinger.md`.
+`app_engine/public_origin.py`, `README.md`, `docs/deploy-vps.md`.
 
 1. Add tests that a public `APP_ENGINE_HOST=0.0.0.0` or LAN address refuses
    startup even with an admin secret; a loopback public deployment with proxy

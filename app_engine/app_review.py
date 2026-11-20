@@ -574,6 +574,7 @@ class _FileScan:
     root: Path
     app_id: str
     out: _Collector
+    profile: str = "local"
     files: int = 0
     text_bytes: int = 0
     total_bytes: int = 0
@@ -605,7 +606,7 @@ def review_app(root: Path, *, profile: str = "local", budget_seconds: float = 12
     if manifest is not None:
         _contract(root, raw, manifest, profile, out)
 
-    scan = _FileScan(root, app_id, out, deadline=time.monotonic() + budget_seconds)
+    scan = _FileScan(root, app_id, out, profile, deadline=time.monotonic() + budget_seconds)
     for rel, full, info in _walk(root):
         scan.files += 1
         if scan.files > MAX_FILES:
@@ -736,8 +737,14 @@ def _scan_entry(scan: _FileScan, rel: str, full: Path, info: os.stat_result) -> 
     _file_hygiene(scan, rel, full, info)
     suffix = full.suffix.lower()
     if _is_native(full, suffix):
-        scan.out.add("FS-NATIVE-CODE", "high", "A08", "Native executable or library",
-                     "Compiled code cannot be reviewed and runs outside the browser sandbox.",
+        # A store package must ship source: a prebuilt binary is unreviewable
+        # supply-chain code. In a local folder binaries are the owner's own build
+        # output (e.g. a runtime `go build`) and run only via owner-approved
+        # commands, so they are reported without blocking.
+        store = scan.profile == "store"
+        scan.out.add("FS-NATIVE-CODE", "high" if store else "medium", "A08", "Native executable or library",
+                     "Compiled code cannot be reviewed and runs outside the browser sandbox."
+                     + ("" if store else " (Local folder: likely a build output; packaged releases must not ship it.)"),
                      "Ship source (or WebAssembly) and build it in a declared runtime step.", path=rel,
                      key=_file_digest(full))
         return

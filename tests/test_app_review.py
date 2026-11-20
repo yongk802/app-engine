@@ -113,12 +113,12 @@ def test_hostile_markup_is_reviewed_in_linear_time(tmp_path):
 
 
 def test_whole_file_waivers_are_bound_to_content(tmp_path):
-    app = make_app(tmp_path / "apps", files={"tool.so": b"\x7fELF-one"})
+    app = make_app(tmp_path / "apps", files={"deploy.pem": b"-one-"})
     store = ReviewStore(tmp_path / "state")
     finding = store.report(app).blocking[0]
     store.set_waiver("clean", finding.fingerprint, "reviewed build")
     assert store.report(app, max_age=0).passed
-    (app / "tool.so").write_bytes(b"\x7fELF-two")
+    (app / "deploy.pem").write_bytes(b"-two-")
     assert not store.report(app, max_age=0).passed
 
 
@@ -155,13 +155,21 @@ def test_boundary_violations(tmp_path):
         "main.js": "fetch('/api/app-state/other-app');\nwindow.parent.document.title = 'x';\n",
         "tool.bin": b"\x7fELF\x02\x01\x01" + b"\0" * 32,
     })
-    expected = {"ACL-CROSS-APP-STATE", "ACL-FRAME-ESCAPE", "FS-NATIVE-CODE"}
+    expected = {"ACL-CROSS-APP-STATE", "ACL-FRAME-ESCAPE"}
     try:
         os.symlink(outside, app / "leak.txt")
         expected.add("FS-SYMLINK-ESCAPE")
     except OSError:   # Windows without the symlink privilege
         pass
     assert expected <= rules(review_app(app), blocking_only=True)
+    assert "FS-NATIVE-CODE" in rules(review_app(app, profile="store"), blocking_only=True)
+
+
+def test_local_build_outputs_are_reported_not_blocking(tmp_path):
+    app = make_app(tmp_path, files={"backend/server": b"\xcf\xfa\xed\xfe" + b"\0" * 64})
+    local = next(f for f in review_app(app).findings if f.rule == "FS-NATIVE-CODE")
+    assert local.severity == "medium" and review_app(app).passed
+    assert not review_app(app, profile="store").passed
 
 
 def test_own_state_and_generated_dirs_are_fine(tmp_path):

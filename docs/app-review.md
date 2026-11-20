@@ -9,13 +9,25 @@ review is static (app code is never run) and has two halves:
 | **Security** | OWASP Top 10 (2021) mapped scan of every shipped file | secrets and private keys (A02/A07), `eval`/`new Function`/HTML sinks/shell/SQL injection (A03), disabled TLS checks (A02), sandbox opt-outs, CORS `*`, `0.0.0.0` binds (A05), unpinned or http CDN code, known-vulnerable jQuery/lodash/AngularJS/… (A06/A08), `curl \| sh`, pickle, native binaries (A08), reaching the engine's owner API, another app's `/api/app-state/<id>`, or the launcher frame (A01) |
 
 Findings rated **critical** or **high** block the app. Medium and below are
-reported and lower the 0–100 score, but never block. Matches in test files
-(`tests/`, `*.test.js`, `test_*.py`, …) are reported at low severity: the
-engine never serves or runs them. Code-sink rules ignore matches inside string
-literals and prose, so a tutorial that *mentions* `eval()` is not flagged.
+reported and lower the 0–100 score, but never block.
 
-Not reviewed: what the store never packages (`.git`, `.venv`, `node_modules`,
-`__pycache__`, `private/`) and the engine's own runtime output (`.runtime`).
+Everything the engine can serve is reviewed at full severity: minified and
+vendored bundles, `node_modules`, long lines and browser files under `tests/`
+get no exemption. Only server-side test files (`test_*.py`, `tests/*.go`, …),
+which never run inside the app, are reported at low severity. Code-sink rules
+ignore matches inside balanced, interpolation-free string literals and HTML
+prose, so a tutorial that *mentions* `eval()` is not flagged.
+
+An incomplete review never passes: a browser file too large to scan, the
+file/byte limits, and the per-review time budget are blocking.
+
+Native executables block store packages (a release must ship source). In a
+local folder they are usually the app's own runtime build output, so they are
+reported at medium severity.
+
+Not reviewed, and therefore **never served** by the engine: `.git`, `.hg`,
+`.svn`, `.venv`, `venv`, `__pycache__`, tool caches, the engine's `.runtime`
+output and the owner-only `private/` folder (case-insensitive).
 
 ## Where the gate runs
 

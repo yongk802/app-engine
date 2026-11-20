@@ -11,12 +11,24 @@ Public-origin mode is gated by the owner session instead and is left alone.
 from __future__ import annotations
 
 import ipaddress
+import os
 
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-_LOCAL_NAMES = {"localhost", "testserver"}
+_LOCAL_NAMES = {"localhost"}
+
+
+def test_host_names() -> frozenset[str]:
+    """``testserver``, the name the test client addresses, but only under test.
+
+    A bare name like that is not reserved: on a hostile network it can resolve
+    to an attacker, who then rebinds it to 127.0.0.1 and reads the launcher
+    (and its owner capability) as the same origin. So it is a local name only
+    when the test suite says so with ``APP_ENGINE_TESTING=1``.
+    """
+    return frozenset({"testserver"}) if os.environ.get("APP_ENGINE_TESTING") == "1" else frozenset()
 
 
 def _hostname(authority: str) -> str:
@@ -31,7 +43,7 @@ def local_host_allowed(authority: str, extra: frozenset[str] = frozenset()) -> b
     host = _hostname(authority).rstrip(".")
     if not host:
         return False
-    if host in _LOCAL_NAMES or host.endswith(".localhost") or host in extra:
+    if host in _LOCAL_NAMES or host in test_host_names() or host.endswith(".localhost") or host in extra:
         return True
     try:
         return ipaddress.ip_address(host).is_loopback

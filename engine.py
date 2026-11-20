@@ -70,7 +70,8 @@ from app_engine.grounding import (
     KnowledgeBase,
     load_declared_knowledge,
 )
-from app_engine.host_gate import LocalHostGate
+from app_engine.host_gate import LocalHostGate, test_host_names
+from app_engine.origin_gate import AppOriginGate
 from app_engine.listener_gate import LoopbackListenerGate
 from app_engine.mailer import (
     Mailer,
@@ -278,6 +279,12 @@ async def lifespan(_: FastAPI):
 # No /docs, /redoc or /openapi.json: nothing uses them, and they hand anyone who
 # can reach the port a map of every route.
 app = FastAPI(title="app-engine", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# Innermost, so sign-in is asked for first: a launcher route is answered only on
+# the launcher's host name, never on an app's origin, where the app's own script
+# could call it with the visitor's session.
+app.add_middleware(AppOriginGate,
+                   is_launcher=lambda request: _is_launcher_host(request),
+                   trusted=lambda request: _is_mtls_request(request))
 app.add_middleware(
     RequestLimits,
     timeout_seconds=float(os.environ.get("APP_ENGINE_BODY_TIMEOUT_SECONDS", "10")),
@@ -543,7 +550,7 @@ def _is_launcher_host(request: Request) -> bool:
     host = _hostname(request)
     if _PUBLIC:
         return host == _PUBLIC.hostname
-    return host in {"127.0.0.1", "localhost", "::1", "testserver"}
+    return host in {"127.0.0.1", "localhost", "::1"} or host in test_host_names()
 
 
 def _require_launcher_host(request: Request) -> None:

@@ -155,9 +155,13 @@ def test_boundary_violations(tmp_path):
         "main.js": "fetch('/api/app-state/other-app');\nwindow.parent.document.title = 'x';\n",
         "tool.bin": b"\x7fELF\x02\x01\x01" + b"\0" * 32,
     })
-    os.symlink(outside, app / "leak.txt")
-    blocking = rules(review_app(app), blocking_only=True)
-    assert {"ACL-CROSS-APP-STATE", "ACL-FRAME-ESCAPE", "FS-NATIVE-CODE", "FS-SYMLINK-ESCAPE"} <= blocking
+    expected = {"ACL-CROSS-APP-STATE", "ACL-FRAME-ESCAPE", "FS-NATIVE-CODE"}
+    try:
+        os.symlink(outside, app / "leak.txt")
+        expected.add("FS-SYMLINK-ESCAPE")
+    except OSError:   # Windows without the symlink privilege
+        pass
+    assert expected <= rules(review_app(app), blocking_only=True)
 
 
 def test_own_state_and_generated_dirs_are_fine(tmp_path):

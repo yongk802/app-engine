@@ -706,7 +706,7 @@ def _is_native(full: Path, suffix: str) -> bool:
 
 
 def _file_hygiene(scan: _FileScan, rel: str, full: Path, info: os.stat_result) -> None:
-    if info.st_mode & 0o002:
+    if os.name != "nt" and info.st_mode & 0o002:   # Windows reports every file as 0o666
         scan.out.add("FS-WORLD-WRITABLE", "medium", "A05", "World-writable file",
                      "Any local user can change this file after review.", "chmod o-w the file.", path=rel)
     for pattern, severity, label in SENSITIVE_FILES:

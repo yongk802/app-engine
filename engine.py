@@ -122,7 +122,7 @@ from app_engine.search import category_counts, search_apps
 from app_engine.speech import SpeechService, SpeechSettings, SpeechUnavailable
 from app_engine.store_bridge import StoreBridge
 from app_engine.store_routes import create_store_router
-from app_engine.app_review import ReviewGate
+from app_engine.app_review import ReviewGate, is_unserved
 from app_engine.review_routes import create_review_router
 from app_engine.system_probe import SystemProbe
 
@@ -168,8 +168,8 @@ def _review_profile(root: Path) -> str:
     return "store" if Path(root).resolve().parent == STORE_APPS_DIR.resolve() else "local"
 
 
-def _review_refusal(root: Path) -> str | None:
-    admitted, report = _review_gate.admit(root, profile=_review_profile(root))
+def _review_refusal(root: Path, max_age: float = 3.0) -> str | None:
+    admitted, report = _review_gate.admit(root, profile=_review_profile(root), max_age=max_age)
     return None if admitted or report is None else "App Review: " + report.summary()
 
 
@@ -465,7 +465,9 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
         app_id = n["id"]
         if app_id in out:
             continue
-        refusal = _review_refusal(d)
+        # Request paths re-check a folder's signature at most every 30 s; the catalog
+        # (refreshed off the event loop) and store installs review current files.
+        refusal = _review_refusal(d, max_age=30.0)
         if refusal:
             rejected.append({"dir": d.name, "app_id": app_id, "reason": refusal, "review": True})
             continue
@@ -1135,8 +1137,8 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
         return await _proxy_entry_point(app_obj, path, request)
 
     safe = Path(path) if path else Path("index.html")
-    if ".." in safe.parts or safe.is_absolute():
-        raise HTTPException(404)
+    if ".." in safe.parts or safe.is_absolute() or is_unserved(safe):
+        raise HTTPException(404)   # App Review skips these folders, so they are never served
     root = Path(app_obj.root).resolve()
     full = (root / safe).resolve()
     try:

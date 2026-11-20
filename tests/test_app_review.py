@@ -73,11 +73,59 @@ def test_code_sinks_flag_code_but_not_prose_or_strings(tmp_path):
     assert not report.passed
 
 
-def test_test_files_are_reported_but_never_block(tmp_path):
-    app = make_app(tmp_path, files={"tests/runner.js": "eval(source);\n"})
-    report = review_app(app)
-    finding = next(f for f in report.findings if f.rule == "INJ-EVAL")
+def test_server_side_tests_never_block_but_served_test_code_does(tmp_path):
+    report = review_app(make_app(tmp_path, files={"tests/test_tool.py": "eval(source)\n"}))
+    finding = next(f for f in report.findings if f.rule == "INJ-PY-EVAL")
     assert finding.severity == "low" and report.passed
+    served = review_app(make_app(tmp_path, "served", files={"tests/runner.js": "eval(source);\n"}))
+    assert not served.passed and "INJ-EVAL" in rules(served, blocking_only=True)
+
+
+def test_no_folder_or_minified_hiding_place(tmp_path):
+    payload = "eval(location.hash.slice(1));fetch('/api/app-engine/stores');\n"
+    for name in ("lib/app.js", "vendor/x.min.js", "node_modules/pkg/index.js", "dist/bundle.js",
+                 "spec/helper.spec.js", "page.xhtml"):
+        app = make_app(tmp_path, name.replace("/", "-").replace(".", "-"), files={name: payload})
+        blocking = rules(review_app(app), blocking_only=True)
+        assert {"INJ-EVAL", "ACL-HOST-ADMIN"} <= blocking, (name, blocking)
+    long_line = make_app(tmp_path, "long", files={"main.js": "var a=1;" * 2000 + payload})
+    assert "INJ-EVAL" in rules(review_app(long_line), blocking_only=True)
+
+
+def test_quote_tricks_do_not_hide_code(tmp_path):
+    for code in ("x = /'/; eval(y);\n", "const s = `${eval(input)}`;\n"):
+        app = make_app(tmp_path, f"q{abs(hash(code)) % 10**6}", files={"main.js": code})
+        assert "INJ-EVAL" in rules(review_app(app), blocking_only=True), code
+
+
+def test_unreviewable_files_block(tmp_path):
+    big = make_app(tmp_path, "big", files={"main.js": "// " + "a" * (16 * 1024 * 1024 + 10) + "\n"})
+    report = review_app(big)
+    assert not report.passed and "SCAN-SKIPPED" in rules(report, blocking_only=True)
+
+
+def test_hostile_markup_is_reviewed_in_linear_time(tmp_path):
+    import time
+    app = make_app(tmp_path, files={"index.html": "<title>x</title>" + "<script " * 40000})
+    started = time.monotonic()
+    review_app(app)
+    assert time.monotonic() - started < 5
+
+
+def test_whole_file_waivers_are_bound_to_content(tmp_path):
+    app = make_app(tmp_path / "apps", files={"tool.so": b"\x7fELF-one"})
+    store = ReviewStore(tmp_path / "state")
+    finding = store.report(app).blocking[0]
+    store.set_waiver("clean", finding.fingerprint, "reviewed build")
+    assert store.report(app, max_age=0).passed
+    (app / "tool.so").write_bytes(b"\x7fELF-two")
+    assert not store.report(app, max_age=0).passed
+
+
+def test_skipped_folders_are_exactly_the_unserved_ones():
+    from app_engine.app_review import is_unserved
+    assert is_unserved("private/token.txt") and is_unserved("Private/x") and is_unserved(".venv/a.py")
+    assert not is_unserved("node_modules/x.js") and not is_unserved("lib/app.js")
 
 
 def test_remote_code_supply_chain(tmp_path):
@@ -116,7 +164,6 @@ def test_own_state_and_generated_dirs_are_fine(tmp_path):
     app = make_app(tmp_path, files={
         "main.js": "fetch('/api/app-state/clean');\n",
         ".venv/lib/evil.py": "import os; os.system('x')\n",
-        "node_modules/x/index.js": "eval(a)\n",
         "private/token.txt": "ghp_" + "a" * 40,
     })
     report = review_app(app)
@@ -261,6 +308,18 @@ def test_engine_blocks_failing_local_apps_and_owner_can_waive(tmp_path, monkeypa
         policy = page.headers["content-security-policy"]
         assert "frame-ancestors 'none'" in policy and "unsafe-inline" not in policy
         assert client.get("/api/app-engine/review/rules").json()["rules"]
+
+
+def test_engine_never_serves_folders_the_review_skips(tmp_path, monkeypatch):
+    make_app(tmp_path / "local", "good", files={"private/token.txt": "secret", "Private/x.js": "eval(a)",
+                                                 "node_modules/lib/ok.js": "export const ok = 1;\n"})
+    module = _engine(tmp_path, monkeypatch)
+    host = {"host": "good.localhost"}
+    with TestClient(module.app) as client:
+        assert client.get("/apps/good/main.js", headers=host).status_code == 200
+        assert client.get("/apps/good/node_modules/lib/ok.js", headers=host).status_code == 200
+        assert client.get("/apps/good/private/token.txt", headers=host).status_code == 404
+        assert client.get("/apps/good/Private/x.js", headers=host).status_code == 404
 
 
 def test_engine_warn_mode_serves_failing_apps(tmp_path, monkeypatch):

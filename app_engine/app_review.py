@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import bisect
 import sys
 import tempfile
 import threading
@@ -45,7 +46,7 @@ PROFILES = ("local", "store")
 _WEIGHT = {"critical": 40, "high": 20, "medium": 5, "low": 1, "info": 0}
 
 MAX_FILES = 20000
-MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
+MAX_TEXT_FILE_BYTES = 16 * 1024 * 1024
 MAX_TEXT_TOTAL_BYTES = 96 * 1024 * 1024
 MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 MAX_FINDINGS_PER_RULE = 25
@@ -54,14 +55,19 @@ TEXT_SUFFIXES = frozenset({
     ".html", ".htm", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".css", ".json",
     ".py", ".sh", ".bash", ".zsh", ".ps1", ".rb", ".go", ".php", ".txt", ".md",
     ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".env", ".xml", ".svg",
-    ".vue", ".svelte", ".lock", ".csv",
+    ".vue", ".svelte", ".lock", ".csv", ".xhtml", ".xht", ".shtml", ".mhtml", ".xsl", ".xslt",
 })
 CODE_SUFFIXES = frozenset({".html", ".htm", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
-                           ".vue", ".svelte"})
+                           ".vue", ".svelte", ".xhtml", ".xht", ".shtml", ".mhtml", ".svg", ".xsl", ".xslt"})
 NATIVE_SUFFIXES = frozenset({".exe", ".dll", ".so", ".dylib", ".bin", ".com", ".scr",
                              ".msi", ".app", ".jar", ".class", ".node"})
 MEDIA_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".wav", ".mp3", ".ogg",
                             ".mp4", ".webm", ".ttf", ".otf", ".woff", ".woff2", ".wasm"})
+BINARY_SUFFIXES = frozenset({".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".tar", ".rar", ".pak",
+                             ".pck", ".gguf", ".safetensors", ".onnx", ".pt", ".bin", ".npy", ".npz",
+                             ".glb", ".gltf", ".fbx", ".obj", ".blend", ".psd", ".ico", ".icns",
+                             ".bmp", ".tif", ".tiff", ".avif", ".heic", ".flac", ".aac", ".m4a", ".mov",
+                             ".mkv", ".avi", ".pyc", ".iso", ".img", ".dmg", ".parquet", ".pkl"})
 NATIVE_MAGIC = (b"\x7fELF", b"MZ", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
                 b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce", b"\xca\xfe\xba\xbe")
 OWASP = {
@@ -78,9 +84,10 @@ OWASP = {
     "contract": "App contract",
 }
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]", "0.0.0.0")
-# Not reviewed: never packaged by the app store (dev/runtime output, owner-only
-# private/), or created by the engine's own runtime install steps.
-SKIPPED_DIRS = frozenset({".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__",
+# Not reviewed: dev/runtime output and the owner-only private/ folder.
+# The engine refuses to serve these (see ``is_unserved``), so skipping them
+# leaves nothing reachable unreviewed. node_modules IS served, so it is reviewed.
+SKIPPED_DIRS = frozenset({".git", ".hg", ".svn", ".venv", "venv", "__pycache__",
                           ".pytest_cache", ".mypy_cache", ".ruff_cache", ".runtime", "private"})
 # Credential directories are never packaged either, but their presence is reported.
 FLAGGED_DIRS = frozenset({".ssh", ".aws", ".gnupg"})
@@ -194,7 +201,6 @@ class Rule:
     remediation: str
     pattern: re.Pattern
     suffixes: frozenset[str] = frozenset()   # empty = every text file
-    minified_ok: bool = True                  # also run on minified/vendored bundles
     secret: bool = False                      # redact the match in the excerpt
     unless_line: re.Pattern | None = None     # skip the match when the line matches
     code_only: bool = False                   # ignore matches inside string literals / prose
@@ -204,13 +210,13 @@ def _r(pattern: str, flags: int = 0) -> re.Pattern:
     return re.compile(pattern, flags)
 
 
-JS = frozenset({".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".html", ".htm", ".vue", ".svelte"})
+JS = CODE_SUFFIXES
 PY = frozenset({".py"})
 SHELL = frozenset({".sh", ".bash", ".zsh", ".ps1", ".md", ".txt", ".py", ".yml", ".yaml",
                    ".json", ".toml"})
-HTML = frozenset({".html", ".htm"})
+HTML = frozenset({".html", ".htm", ".xhtml", ".xht", ".shtml", ".mhtml", ".svg"})
 SERVER = frozenset({".py", ".js", ".mjs", ".cjs", ".ts", ".go", ".rb", ".php"})
-PLACEHOLDER = _r(r"(?i)(example|placeholder|your[-_ ]?|changeme|xxxx|\*\*\*\*|<[^>]+>|\$\{|process\.env|os\.environ|getenv|dummy|test[-_]?key|redacted)")
+PLACEHOLDER = _r(r"(?i)(example|placeholder|your[-_ ]?|changeme|xxxx|\*\*\*\*|<[^>]{1,40}>|\$\{|process\.env|os\.environ|getenv|dummy|test[-_]?key|redacted)")
 
 RULES: tuple[Rule, ...] = (
     # A02 / A07 — secrets shipped inside the app
@@ -223,17 +229,17 @@ RULES: tuple[Rule, ...] = (
          _r(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), secret=True),
     Rule("SEC-GITHUB-TOKEN", "critical", "A07", "GitHub token",
          "A GitHub token is embedded in the app.", "Remove and revoke the token.",
-         _r(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})\b"), secret=True),
+         _r(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{60,255})\b"), secret=True),
     Rule("SEC-SLACK-TOKEN", "critical", "A07", "Slack token",
          "A Slack token is embedded in the app.", "Remove and revoke the token.",
-         _r(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"), secret=True),
+         _r(r"\bxox[abprs]-[A-Za-z0-9-]{10,255}\b"), secret=True),
     Rule("SEC-AI-KEY", "critical", "A07", "AI provider API key",
          "An OpenAI/Anthropic style API key is embedded in the app.",
          "Remove and revoke the key; route model calls through the engine's Local AI or a backend that holds the key.",
-         _r(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}\b"), secret=True),
+         _r(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,255}\b"), secret=True),
     Rule("SEC-STRIPE-KEY", "critical", "A07", "Stripe live secret key",
          "A live Stripe secret key is embedded in the app.", "Remove and roll the key.",
-         _r(r"\b(?:sk|rk)_live_[0-9A-Za-z]{20,}\b"), secret=True),
+         _r(r"\b(?:sk|rk)_live_[0-9A-Za-z]{20,255}\b"), secret=True),
     Rule("SEC-GOOGLE-KEY", "high", "A07", "Google API key",
          "A Google API key is embedded in the app.",
          "Remove it, or restrict the key by referrer/API and document why it must ship.",
@@ -241,50 +247,49 @@ RULES: tuple[Rule, ...] = (
     Rule("SEC-GENERIC-SECRET", "medium", "A07", "Hard-coded credential",
          "A value that looks like a password, token or API key is assigned in source.",
          "Load credentials from configuration at runtime; never ship them in app files.",
-         _r(r"""(?i)\b(?:api[_-]?key|secret(?:[_-]?key)?|passw(?:or)?d|access[_-]?token|auth[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']([^"'\s]{12,})["']"""),
-         suffixes=frozenset(TEXT_SUFFIXES - {".md", ".txt", ".csv"}), minified_ok=False,
+         _r(r"""(?i)\b(?:api[_-]?key|secret(?:[_-]?key)?|passw(?:or)?d|access[_-]?token|auth[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["']([^"'\s]{12,512})["']"""),
+         suffixes=frozenset(TEXT_SUFFIXES - {".md", ".txt", ".csv"}),
          secret=True, unless_line=PLACEHOLDER),
     Rule("SEC-JWT", "medium", "A07", "Embedded JSON Web Token",
          "A signed JWT is embedded in the app; it may grant access to someone's account.",
          "Remove the token.",
-         _r(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), secret=True),
+         _r(r"\beyJ[A-Za-z0-9_-]{10,2048}\.eyJ[A-Za-z0-9_-]{10,4096}\.[A-Za-z0-9_-]{10,1024}"), secret=True),
 
     # A03 — injection sinks
     Rule("INJ-EVAL", "high", "A03", "Dynamic code evaluation (eval)",
          "eval() runs a string as code; any attacker-influenced text becomes script.",
          "Parse data with JSON.parse or a real parser instead of evaluating it.",
-         _r(r"(?<![\w.$])eval\s*\("), suffixes=JS, minified_ok=False,
+         _r(r"(?<![\w.$])eval\s*\("), suffixes=JS,
          unless_line=_r(r"^\s*(?://|\*|/\*)"), code_only=True),
     Rule("INJ-NEW-FUNCTION", "high", "A03", "Dynamic code construction (new Function)",
          "new Function() compiles a string into code, the same risk as eval().",
          "Replace with ordinary functions or a data-driven interpreter.",
-         _r(r"\bnew\s+Function\s*\("), suffixes=JS, minified_ok=False,
+         _r(r"\bnew\s+Function\s*\("), suffixes=JS,
          unless_line=_r(r"^\s*(?://|\*|/\*)"), code_only=True),
     Rule("INJ-STRING-TIMER", "medium", "A03", "String passed to setTimeout/setInterval",
          "Timers given a string evaluate it as code.", "Pass a function instead of a string.",
-         _r(r"\bset(?:Timeout|Interval)\s*\(\s*[\"'`]"), suffixes=JS, minified_ok=False, code_only=True),
+         _r(r"\bset(?:Timeout|Interval)\s*\(\s*[\"'`]"), suffixes=JS, code_only=True),
     Rule("INJ-DOC-WRITE", "medium", "A03", "document.write",
          "document.write injects raw HTML and is a common DOM-XSS sink.",
          "Build nodes with createElement/textContent.",
-         _r(r"\bdocument\.write(?:ln)?\s*\("), suffixes=JS, minified_ok=False, code_only=True),
+         _r(r"\bdocument\.write(?:ln)?\s*\("), suffixes=JS, code_only=True),
     Rule("INJ-HTML-SINK", "medium", "A03", "Raw HTML sink with dynamic content",
          "innerHTML/outerHTML/insertAdjacentHTML with a non-literal value can execute injected markup.",
          "Use textContent, or sanitize with a vetted sanitizer before assignment.",
-         _r(r"""(?:\.(?:inner|outer)HTML\s*\+?=\s*(?![\s]*(?:["'][^"'`$]*["']\s*;?\s*$|``\s*;?\s*$|$))|\.insertAdjacentHTML\s*\(\s*["'][a-z]+["']\s*,\s*(?!["'][^"']*["']\s*\)))"""),
-         suffixes=JS, minified_ok=False),
+         _r(r"""(?:\.(?:inner|outer)HTML\s*\+?=\s*(?![\s]{0,20}(?:["'][^"'`$]{0,500}["']\s{0,5};?\s{0,20}$|``\s{0,5};?\s{0,20}$|$))|\.insertAdjacentHTML\s*\(\s*["'][a-z]{1,20}["']\s*,\s*(?!["'][^"']{0,500}["']\s*\)))"""),
+         suffixes=JS),
     Rule("INJ-JS-URL", "medium", "A03", "javascript: URL",
          "javascript: URLs execute code on navigation and bypass event-handler CSP.",
          "Attach event listeners instead.",
-         _r(r"""(?i)(?:href|src|action)\s*=\s*["']\s*javascript:"""), suffixes=JS, minified_ok=False),
+         _r(r"""(?i)(?:href|src|action)\s*=\s*["']\s*javascript:"""), suffixes=JS),
     Rule("INJ-SHELL", "high", "A03", "OS command injection risk",
          "Commands run through a shell; interpolated input can run arbitrary commands.",
          "Use subprocess with an argument list and shell=False.",
-         _r(r"\bsubprocess\.\w+\([^\n]*shell\s*=\s*True|\bos\.(?:system|popen)\s*\("), suffixes=PY, code_only=True),
+         _r(r"\bsubprocess\.\w{1,30}\([^\n]{0,300}shell\s*=\s*True|\bos\.(?:system|popen)\s*\("), suffixes=PY, code_only=True),
     Rule("INJ-NODE-EXEC", "high", "A03", "Node shell execution",
          "child_process.exec/execSync run through a shell.",
          "Use execFile/spawn with an argument array.",
-         _r(r"\b(?:child_process|cp)\.exec(?:Sync)?\s*\(|\bexecSync\s*\("), suffixes=frozenset({".js", ".mjs", ".cjs", ".ts"}),
-         minified_ok=False, code_only=True),
+         _r(r"\b(?:child_process|cp)\.exec(?:Sync)?\s*\(|\bexecSync\s*\("), suffixes=frozenset({".js", ".mjs", ".cjs", ".ts"}), code_only=True),
     Rule("INJ-PY-EVAL", "high", "A03", "Python eval/exec",
          "eval()/exec() run strings as Python code.",
          "Use ast.literal_eval or a real parser.",
@@ -293,7 +298,7 @@ RULES: tuple[Rule, ...] = (
     Rule("INJ-SQL", "high", "A03", "SQL built from string formatting",
          "SQL text built with f-strings, % or .format() is injectable.",
          "Use parameterized queries (placeholders + parameters).",
-         _r(r"""\.execute(?:many|script)?\s*\(\s*(?:f["']|["'][^"']*["']\s*(?:%|\.format\s*\()|[^,)]*\+\s*\w)"""),
+         _r(r"""\.execute(?:many|script)?\s*\(\s*(?:f["']|["'][^"']{0,500}["']\s*(?:%|\.format\s*\()|[^,)]{0,300}\+\s*\w)"""),
          suffixes=PY, unless_line=_r(r"(?i)execute\w*\s*\(\s*f?[\"'](?:ALTER|CREATE|DROP|PRAGMA)\b")),
 
     # A02 — transport and crypto
@@ -306,12 +311,12 @@ RULES: tuple[Rule, ...] = (
          "Math.random is predictable and must not produce tokens, ids or keys.",
          "Use crypto.getRandomValues / crypto.randomUUID.",
          _r(r"(?i)(?:token|secret|password|nonce|session|api[_-]?key)[^\n]{0,60}Math\.random\(|Math\.random\(\)[^\n]{0,60}(?:token|secret|password|nonce|session)"),
-         suffixes=JS, minified_ok=False),
+         suffixes=JS),
     Rule("NET-CLEARTEXT", "medium", "A02", "Cleartext network request",
          "Requests over http:// or ws:// to a remote host can be read and altered in transit.",
          "Use https:// / wss://.",
          _r(r"""(?:fetch|WebSocket|EventSource|open)\s*\(\s*(?:["'`])(?:http|ws)://(?!localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)"""),
-         suffixes=JS, minified_ok=False),
+         suffixes=JS),
 
     # A05 — misconfiguration
     Rule("CFG-CORS-ANY", "medium", "A05", "CORS allows any origin",
@@ -322,56 +327,56 @@ RULES: tuple[Rule, ...] = (
     Rule("CFG-BIND-ALL", "medium", "A05", "Backend listens on every interface",
          "Binding 0.0.0.0 exposes the app backend to the whole network, outside the engine's gateway.",
          "Bind 127.0.0.1; the engine proxies loopback backends.",
-         _r(r"""host\s*=\s*["']0\.0\.0\.0["']|--host[ =]0\.0\.0\.0|listen\([^)]*["']0\.0\.0\.0["']"""),
+         _r(r"""host\s*=\s*["']0\.0\.0\.0["']|--host[ =]0\.0\.0\.0|listen\([^)]{0,200}["']0\.0\.0\.0["']"""),
          suffixes=SERVER | SHELL),
     Rule("CFG-DEBUG", "medium", "A05", "Debug mode enabled",
          "Debug servers expose tracebacks and sometimes an interactive console.",
          "Turn debug off for shipped apps.",
-         _r(r"\.run\([^\n]*debug\s*=\s*True|DEBUG\s*=\s*True"), suffixes=PY),
+         _r(r"\.run\([^\n]{0,300}debug\s*=\s*True|DEBUG\s*=\s*True"), suffixes=PY),
 
     # A08 — integrity of code and data
     Rule("INT-CURL-PIPE", "high", "A08", "Remote script piped into a shell",
          "curl|sh runs whatever the server returns at that moment, unreviewed.",
          "Download to a file, verify a pinned checksum, then run it.",
-         _r(r"(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z)?sh\b|\biex\s*\(\s*(?:iwr|Invoke-WebRequest|New-Object\s+Net\.WebClient)"),
+         _r(r"(?:curl|wget)\b[^\n|]{0,500}\|\s*(?:sudo\s+)?(?:ba|z)?sh\b|\biex\s*\(\s*(?:iwr|Invoke-WebRequest|New-Object\s+Net\.WebClient)"),
          suffixes=SHELL),
     Rule("INT-PICKLE", "high", "A08", "Unsafe deserialization",
          "pickle/marshal/yaml.load on untrusted data executes code.",
          "Use JSON, or yaml.safe_load.",
-         _r(r"\b(?:pickle|cPickle|marshal|dill)\.loads?\s*\(|\byaml\.load\s*\((?![^)]*SafeLoader)"), suffixes=PY, code_only=True),
+         _r(r"\b(?:pickle|cPickle|marshal|dill)\.loads?\s*\(|\byaml\.load\s*\((?![^)]{0,300}SafeLoader)"), suffixes=PY, code_only=True),
     Rule("INT-REMOTE-IMPORT", "high", "A08", "Unpinned code imported from a remote URL",
          "The module URL names no exact version, so the code that runs can change after review.",
          "Pin an exact version (pkg@1.2.3), or better, vendor the module into the app.",
-         _r(r"""(?:\bimport\s*\(\s*|\bimportScripts\s*\(\s*|^\s*import\s[^'"\n]*from\s*)["'`](https?://(?![^"'`]*@\d)[^"'`]+)"""),
-         suffixes=JS, minified_ok=False),
+         _r(r"""(?:\bimport\s*\(\s*|\bimportScripts\s*\(\s*|^\s*import\s[^'"\n]{0,300}from\s*)["'`](https?://(?![^"'`]{0,2048}@\d)[^"'`]{1,2048})"""),
+         suffixes=JS),
     Rule("INT-REMOTE-IMPORT-PINNED", "low", "A08", "Pinned code imported from a remote URL",
          "A version-pinned module still loads from the network at runtime (no integrity check for ES imports).",
          "Vendor the module so the reviewed bytes are the bytes that run, and the app works offline.",
-         _r(r"""(?:\bimport\s*\(\s*|\bimportScripts\s*\(\s*|^\s*import\s[^'"\n]*from\s*)["'`](https?://[^"'`]*@\d[^"'`]*)"""),
-         suffixes=JS, minified_ok=False),
+         _r(r"""(?:\bimport\s*\(\s*|\bimportScripts\s*\(\s*|^\s*import\s[^'"\n]{0,300}from\s*)["'`](https?://[^"'`]{0,2048}@\d[^"'`]{0,2048})"""),
+         suffixes=JS),
 
     # A01 — reaching past the app's own boundary
     Rule("ACL-HOST-ADMIN", "high", "A01", "Calls the engine's owner-only API",
          "The app references owner/admin endpoints or the launcher capability header.",
          "Apps must use only their own app-state and the documented app APIs.",
          _r(r"""x-app-engine-admin|/api/app-engine/(?:stores|store-installs|review|assistant)|/api/local-ai/(?:profile|authorize|install|start|pull|verify)|/admin/sign-"""),
-         suffixes=JS | SERVER, minified_ok=False),
+         suffixes=JS | SERVER),
     Rule("ACL-FRAME-ESCAPE", "high", "A01", "Reaches into the launcher frame",
          "Accessing parent/top documents or storage tries to escape the app's iframe.",
          "Communicate with postMessage and validate origins.",
          _r(r"\b(?:window\.)?(?:parent|top)\.(?:document|localStorage|sessionStorage|frames|location\.href\s*=)"),
-         suffixes=JS, minified_ok=False),
+         suffixes=JS),
     Rule("ACL-POSTMESSAGE-ANY", "medium", "A01", "postMessage to any origin",
          "Posting with targetOrigin '*' sends data to whatever page is embedding or embedded.",
          "Pass the exact target origin.",
-         _r(r"""postMessage\s*\([^;\n]*,\s*["']\*["']"""), suffixes=JS, minified_ok=False),
+         _r(r"""postMessage\s*\([^;\n]{0,300},\s*["']\*["']"""), suffixes=JS),
 )
 
 VULNERABLE_LIBRARIES = (
     # (name, detector, fixed-in, severity, advisory)
     ("jquery", _r(r"(?i)jquery[.@/-]v?(\d+\.\d+\.\d+)|jQuery (?:JavaScript Library )?v(\d+\.\d+\.\d+)"), (3, 5, 0), "high",
      "CVE-2020-11022/11023: XSS in HTML manipulation"),
-    ("lodash", _r(r"(?i)lodash[.@/-](\d+\.\d+\.\d+)|@license\s+Lodash[^\n]*?(\d+\.\d+\.\d+)"), (4, 17, 21), "high",
+    ("lodash", _r(r"(?i)lodash[.@/-](\d+\.\d+\.\d+)|@license\s+Lodash[^\n]{0,200}?(\d+\.\d+\.\d+)"), (4, 17, 21), "high",
      "CVE-2021-23337/CVE-2020-8203: command injection and prototype pollution"),
     ("angularjs", _r(r"(?i)angular(?:js)?[.@/-](1\.\d+\.\d+)|AngularJS v(1\.\d+\.\d+)"), (2, 0, 0), "high",
      "AngularJS 1.x is end-of-life with unpatched sandbox-escape XSS"),
@@ -379,7 +384,7 @@ VULNERABLE_LIBRARIES = (
      "CVE-2021-23369: remote code execution in templates"),
     ("bootstrap", _r(r"(?i)bootstrap[.@/-]v?(\d+\.\d+\.\d+)|Bootstrap v(\d+\.\d+\.\d+)"), (3, 4, 1), "medium",
      "CVE-2019-8331: XSS in tooltip/popover"),
-    ("moment", _r(r"(?i)moment[.@/-](\d+\.\d+\.\d+)|//! moment\.js[^\n]*?(\d+\.\d+\.\d+)"), (2, 29, 4), "medium",
+    ("moment", _r(r"(?i)moment[.@/-](\d+\.\d+\.\d+)|//! moment\.js[^\n]{0,200}?(\d+\.\d+\.\d+)"), (2, 29, 4), "medium",
      "CVE-2022-31129: ReDoS in RFC 2822 parsing"),
     ("dompurify", _r(r"(?i)dompurify[.@/-](\d+\.\d+\.\d+)|DOMPurify (\d+\.\d+\.\d+)"), (2, 4, 2), "high",
      "Mutation-XSS bypasses fixed in 2.4.2+"),
@@ -388,14 +393,16 @@ VULNERABLE_LIBRARIES = (
 )
 _BOOTSTRAP4_FIXED = (4, 3, 1)
 
-EXTERNAL_TAG = _r(r"""(?is)<(script|link)\b([^>]*?)\b(src|href)\s*=\s*["']((?:https?:)?//[^"']+)["']([^>]*)>""")
+TAG_START = _r(r"(?i)<(script|link|img|audio|video|source|iframe)\b")
+TAG_URL = _r(r"""(?i)\b(src|href)\s*=\s*["']([^"']{1,2048})["']""")
+MAX_TAG_CHARS = 4096
+MAX_TAG_BUDGET = 8 * 1024 * 1024
 CDN_HOSTS = ("cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "esm.sh", "cdn.skypack.dev",
              "ga.jspm.io", "code.jquery.com", "cdn.tailwindcss.com", "esm.run")
-LOCAL_REF = _r(r"""(?i)<(?:script|img|link|audio|video|source|iframe)\b[^>]*?\b(?:src|href)\s*=\s*["']([^"'#?]+)""")
 APP_STATE_REF = _r(r"""/api/app-state/([a-z0-9][a-z0-9-]*)""")
 USES_PERMISSION = {
-    "microphone": _r(r"getUserMedia\s*\([^)]*audio|SpeechRecognition|webkitSpeechRecognition"),
-    "camera": _r(r"getUserMedia\s*\([^)]*video"),
+    "microphone": _r(r"getUserMedia\s*\([^)]{0,200}audio|SpeechRecognition|webkitSpeechRecognition"),
+    "camera": _r(r"getUserMedia\s*\([^)]{0,200}video"),
     "display-capture": _r(r"getDisplayMedia\s*\("),
     "geolocation": _r(r"navigator\.geolocation\."),
     "midi": _r(r"requestMIDIAccess\s*\("),
@@ -427,7 +434,7 @@ SENSITIVE_FILES = (
 # ── Scanning ─────────────────────────────────────────────────────────────────
 
 def _fingerprint(rule: str, path: str, text: str) -> str:
-    norm = re.sub(r"\s+", " ", text.strip())[:200]
+    norm = re.sub(r"\s+", " ", text.strip())
     return hashlib.sha256(f"{rule}\0{path}\0{norm}".encode()).hexdigest()[:20]
 
 
@@ -456,7 +463,14 @@ def _in_string(line: str, index: int) -> bool:
                 quote = ""
         elif char in "\"'`":
             quote = char
-    return bool(quote) or bool(re.search(r"<(?:code|pre|p|li|td|span)\b[^>]*>[^<]*$", line[:index]))
+    if quote:
+        # Unbalanced quotes (a regex literal, an apostrophe in a comment) or an
+        # interpolation (`${…}`, f"{…}") mean the match may well be live code.
+        if any((line.count(q) - line.count("\\" + q)) & 1 for q in "\"'`"):
+            return False
+        opened = max(line.rfind(quote, 0, index), 0)
+        return "{" not in line[opened:index]
+    return bool(re.search(r"<(?:code|pre|p|li|td)\b[^>]{0,200}>[^<]{0,2000}$", line[max(0, index - 2500):index]))
 
 
 def _is_minified(path: str, text: str) -> bool:
@@ -482,8 +496,11 @@ class _Collector:
     def add(self, rule: str, severity: str, owasp: str, title: str, detail: str,
             remediation: str = "", path: str = "", line: int = 0, excerpt: str = "",
             key: str = "", waivable: bool = True) -> None:
-        if path and TEST_PATH.search(path) and severity in BLOCKING and not rule.startswith(("FS-", "CONTRACT-")):
-            # Test code is not served or run by the engine; keep it visible, not blocking.
+        if (path and TEST_PATH.search(path) and severity in BLOCKING and waivable
+                and Path(path).suffix.lower() not in CODE_SUFFIXES
+                and not rule.startswith(("FS-", "CONTRACT-", "SCAN-"))):
+            # Server-side test code (test_*.py …) never runs in the app; a browser
+            # file is reviewed at full severity wherever it lives, since it is served.
             severity = "medium" if rule.startswith("SEC-") else "low"
             detail += " (test file)"
         count = self._per_rule.get(rule, 0)
@@ -510,7 +527,7 @@ class _Collector:
 def _walk(root: Path):
     """Yield (relative posix path, absolute path, lstat) without following links."""
     for directory, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = sorted(name for name in dirs if name not in SKIPPED_DIRS)
+        dirs[:] = sorted(name for name in dirs if name.casefold() not in SKIPPED_DIRS)
         base = Path(directory)
         for name in sorted(dirs):
             full = base / name
@@ -528,12 +545,17 @@ def _walk(root: Path):
 _SCANNER_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 
 
+def is_unserved(relative: Path | str) -> bool:
+    """True for paths inside a folder App Review skips; the engine must not serve them."""
+    return any(part.casefold() in SKIPPED_DIRS for part in Path(relative).parts)
+
+
 def tree_signature(root: Path) -> str:
     """Cheap change detector: paths, sizes, mtimes and modes, never contents."""
     digest = hashlib.sha256(f"review-v{REVIEW_VERSION}-{_SCANNER_DIGEST}".encode())
     try:
         for rel, _, info in _walk(Path(root)):
-            digest.update(f"{rel}\0{info.st_size}\0{info.st_mtime_ns}\0{info.st_mode}\n".encode())
+            digest.update(f"{rel}\0{info.st_size}\0{info.st_mtime_ns}\0{info.st_ctime_ns}\0{info.st_mode}\n".encode())
     except OSError:
         digest.update(b"unreadable")
     return digest.hexdigest()
@@ -556,10 +578,12 @@ class _FileScan:
     text_bytes: int = 0
     total_bytes: int = 0
     truncated: bool = False
+    deadline: float = 0.0
+    timed_out: bool = False
     texts: dict[str, str] = field(default_factory=dict)
 
 
-def review_app(root: Path, *, profile: str = "local") -> ReviewReport:
+def review_app(root: Path, *, profile: str = "local", budget_seconds: float = 120.0) -> ReviewReport:
     """Review one app directory. Never raises on app content."""
     if profile not in PROFILES:
         raise ValueError(f"profile must be one of {PROFILES}")
@@ -581,11 +605,14 @@ def review_app(root: Path, *, profile: str = "local") -> ReviewReport:
     if manifest is not None:
         _contract(root, raw, manifest, profile, out)
 
-    scan = _FileScan(root, app_id, out)
+    scan = _FileScan(root, app_id, out, deadline=time.monotonic() + budget_seconds)
     for rel, full, info in _walk(root):
         scan.files += 1
         if scan.files > MAX_FILES:
             scan.truncated = True
+            break
+        if time.monotonic() > scan.deadline:
+            scan.timed_out = True
             break
         _scan_entry(scan, rel, full, info)
     _scan_totals(scan, profile)
@@ -605,17 +632,37 @@ def review_app(root: Path, *, profile: str = "local") -> ReviewReport:
 
 
 def _scan_totals(scan: _FileScan, profile: str) -> None:
+    # Anything unreviewed may be served, so an incomplete review never passes.
     if scan.truncated:
-        scan.out.add("SCAN-TRUNCATED", "medium", "A09", "Review was incomplete",
+        scan.out.add("SCAN-TRUNCATED", "high", "A09", "Review was incomplete",
                      f"The app exceeds review limits ({MAX_FILES} files / {MAX_TEXT_TOTAL_BYTES // 2**20} MiB of text).",
-                     "Remove unneeded files so the whole app can be reviewed.")
+                     "Remove unneeded files so the whole app can be reviewed.", waivable=False)
+    if scan.timed_out:
+        scan.out.add("SCAN-TIMEOUT", "high", "A09", "Review ran out of time",
+                     "The review stopped before every file was checked.",
+                     "Remove unneeded files so the whole app can be reviewed.", waivable=False)
     if profile == "store" and scan.total_bytes > MAX_PACKAGE_BYTES:
         scan.out.add("CONTRACT-SIZE", "high", "contract", "App exceeds the package size limit",
                      f"{scan.total_bytes // 2**20} MiB > {MAX_PACKAGE_BYTES // 2**20} MiB.",
                      "Remove unused assets or move them under private/.")
 
 
+def _file_digest(full: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with full.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError:
+        return "unreadable"
+    return digest.hexdigest()
+
+
 def _scan_link(scan: _FileScan, rel: str, full: Path) -> None:
+    try:
+        link = os.readlink(full)
+    except OSError:
+        link = ""
     try:
         target = full.resolve()
         inside = target == scan.root or scan.root in target.parents
@@ -624,11 +671,25 @@ def _scan_link(scan: _FileScan, rel: str, full: Path) -> None:
     if inside:
         scan.out.add("FS-SYMLINK", "low", "A05", "Symbolic link inside the app",
                      "Links make the reviewed tree differ from what gets packaged.",
-                     "Replace the link with the file it points to.", path=rel)
+                     "Replace the link with the file it points to.", path=rel, key=link)
     else:
         scan.out.add("FS-SYMLINK-ESCAPE", "high", "A01", "Symbolic link leaves the app folder",
                      "The link exposes files outside the app to anything that serves or packages it.",
-                     "Remove the link and copy the needed file into the app.", path=rel)
+                     "Remove the link and copy the needed file into the app.", path=rel, key=link)
+
+
+def _is_text(full: Path, suffix: str) -> bool:
+    """Known text types, plus any unknown type whose first bytes hold no NUL."""
+    if suffix in TEXT_SUFFIXES or full.name in {"Dockerfile", "Makefile", "Procfile"}:
+        return True
+    if suffix in MEDIA_SUFFIXES or suffix in BINARY_SUFFIXES:
+        return False
+    try:
+        with full.open("rb") as handle:
+            head = handle.read(8192)
+    except OSError:
+        return False
+    return b"\0" not in head
 
 
 def _is_native(full: Path, suffix: str) -> bool:
@@ -644,7 +705,7 @@ def _is_native(full: Path, suffix: str) -> bool:
     return any(head.startswith(magic) for magic in NATIVE_MAGIC)
 
 
-def _file_hygiene(scan: _FileScan, rel: str, info: os.stat_result) -> None:
+def _file_hygiene(scan: _FileScan, rel: str, full: Path, info: os.stat_result) -> None:
     if info.st_mode & 0o002:
         scan.out.add("FS-WORLD-WRITABLE", "medium", "A05", "World-writable file",
                      "Any local user can change this file after review.", "chmod o-w the file.", path=rel)
@@ -653,7 +714,7 @@ def _file_hygiene(scan: _FileScan, rel: str, info: os.stat_result) -> None:
             scan.out.add("FS-SENSITIVE-FILE", severity, "A05" if severity == "low" else "A02",
                          f"Ships a {label}", f"{rel} should not be distributed with an app.",
                          "Delete it from the app folder (or move it under private/ outside the package).",
-                         path=rel)
+                         path=rel, key=_file_digest(full))
             break
     if info.st_size > 50 * 1024 * 1024:
         scan.out.add("FS-LARGE-FILE", "low", "A04", "Very large file",
@@ -672,20 +733,24 @@ def _scan_entry(scan: _FileScan, rel: str, full: Path, info: os.stat_result) -> 
     if not stat.S_ISREG(mode):
         return
     scan.total_bytes += info.st_size
-    _file_hygiene(scan, rel, info)
+    _file_hygiene(scan, rel, full, info)
     suffix = full.suffix.lower()
     if _is_native(full, suffix):
         scan.out.add("FS-NATIVE-CODE", "high", "A08", "Native executable or library",
                      "Compiled code cannot be reviewed and runs outside the browser sandbox.",
-                     "Ship source (or WebAssembly) and build it in a declared runtime step.", path=rel)
+                     "Ship source (or WebAssembly) and build it in a declared runtime step.", path=rel,
+                     key=_file_digest(full))
         return
-    if suffix not in TEXT_SUFFIXES and full.name not in {"Dockerfile", "Makefile", "Procfile"}:
+    if not _is_text(full, suffix):
         return
     if info.st_size > MAX_TEXT_FILE_BYTES or scan.text_bytes + info.st_size > MAX_TEXT_TOTAL_BYTES:
-        scan.truncated = True
-        scan.out.add("SCAN-SKIPPED", "low", "A09", "File too large to review",
-                     "The review skipped this file; it may hide unreviewed code.",
-                     "Split or minimize the file, or vendor a smaller build.", path=rel)
+        browser_code = suffix in CODE_SUFFIXES
+        scan.truncated = scan.truncated or scan.text_bytes + info.st_size > MAX_TEXT_TOTAL_BYTES
+        scan.out.add("SCAN-SKIPPED", "high" if browser_code else "low", "A09", "File too large to review",
+                     "The review skipped this file" + (", and the engine serves it to browsers." if browser_code
+                                                       else "; it may hide unreviewed code."),
+                     "Split or minimize the file, or vendor a smaller build.", path=rel,
+                     key=_file_digest(full))
         return
     try:
         text = full.read_text("utf-8", errors="replace")
@@ -693,79 +758,149 @@ def _scan_entry(scan: _FileScan, rel: str, full: Path, info: os.stat_result) -> 
         return
     scan.text_bytes += info.st_size
     scan.texts[rel] = text
-    _scan_text(rel, text, suffix, scan.app_id, scan.out)
+    try:
+        _scan_text(rel, text, suffix, scan.app_id, scan.out, scan.deadline)
+    except _ScanTimeout:
+        scan.timed_out = True
 
 
-def _scan_text(rel: str, text: str, suffix: str, app_id: str, out: _Collector) -> None:
-    minified = _is_minified(rel, text)
+class _Lines:
+    """Line numbers by offset in O(log n), so many matches stay linear overall."""
+
+    def __init__(self, text: str) -> None:
+        self.breaks = [i for i, char in enumerate(text) if char == "\n"]
+
+    def number(self, offset: int) -> int:
+        return bisect.bisect_left(self.breaks, offset) + 1
+
+
+def _waiver_key(line: str, match: re.Match) -> str:
+    # A waiver covers exactly this statement: the whole line, not just the token,
+    # so a sink added later is never pre-waived. Minified lines are huge, so key
+    # them on the match's neighbourhood and column instead.
+    if len(line) <= 400:
+        return line.strip()
+    return f"{match.start()}:{line[max(0, match.start() - 120):match.end() + 120]}"
+
+
+class _ScanTimeout(Exception):
+    pass
+
+
+def _scan_text(rel: str, text: str, suffix: str, app_id: str, out: _Collector,
+               deadline: float = float("inf")) -> None:
+    """Every rule runs on every line: minified or vendored code is served too.
+
+    Work per line is linear: the string-literal heuristic only runs on ordinary
+    lines (a huge line is treated as code), and each line yields a bounded
+    number of matches per rule.
+    """
     lines = text.splitlines()
     for rule in RULES:
         if rule.suffixes and suffix not in rule.suffixes:
             continue
-        if minified and not rule.minified_ok:
-            continue
+        if time.monotonic() > deadline:
+            raise _ScanTimeout()
         for number, line in enumerate(lines, 1):
-            if len(line) > 5000 and not rule.minified_ok:
+            if rule.unless_line is not None and rule.pattern.search(line) and rule.unless_line.search(line):
                 continue
-            match = rule.pattern.search(line)
-            if not match:
-                continue
-            if rule.unless_line is not None and rule.unless_line.search(line):
-                continue
-            if rule.code_only and _in_string(line, match.start()):
-                continue
-            secret_text = match.group(match.lastindex or 0)
-            excerpt = _redact(secret_text) if rule.secret else _excerpt(line, match.start(), match.end())
-            out.add(rule.rule, rule.severity, rule.owasp, rule.title, rule.detail, rule.remediation,
-                    path=rel, line=number, excerpt=excerpt,
-                    # A waiver covers exactly this statement: the whole line, not
-                    # just the token, so a new sink added later is never pre-waived.
-                    key=secret_text if rule.secret else line.strip())
-    if suffix in JS or suffix in PY:
-        if re.search(r"""addEventListener\s*\(\s*["']message["']|\bonmessage\s*=""", text) and not minified \
-                and not re.search(r"\.origin\b|\.source\s*[!=]==?", text):
-            out.add("ACL-MESSAGE-NO-ORIGIN", "medium", "A01", "message handler never checks the sender",
-                    "A window 'message' listener without an origin/source check accepts commands from any page.",
-                    "Compare event.origin (or event.source) against the expected sender first.", path=rel)
+            for seen, match in enumerate(rule.pattern.finditer(line)):
+                if seen > MAX_FINDINGS_PER_RULE:
+                    break
+                if rule.code_only and len(line) <= 2000 and _in_string(line, match.start()):
+                    continue
+                secret_text = match.group(match.lastindex or 0)
+                excerpt = _redact(secret_text) if rule.secret else _excerpt(line, match.start(), match.end())
+                out.add(rule.rule, rule.severity, rule.owasp, rule.title, rule.detail, rule.remediation,
+                        path=rel, line=number, excerpt=excerpt,
+                        key=secret_text if rule.secret else _waiver_key(line, match))
+                if len(line) <= 400:
+                    break   # one finding per rule per ordinary line
+    index = _Lines(text)
+    if (suffix in JS or suffix in PY) and re.search(r"""addEventListener\s*\(\s*["']message["']|\bonmessage\s*=""", text) \
+            and not re.search(r"\.origin\b|\.source\s*[!=]==?", text):
+        out.add("ACL-MESSAGE-NO-ORIGIN", "medium", "A01", "message handler never checks the sender",
+                "A window 'message' listener without an origin/source check accepts commands from any page.",
+                "Compare event.origin (or event.source) against the expected sender first.", path=rel,
+                key=hashlib.sha256(text.encode("utf-8", "replace")).hexdigest())
     for match in APP_STATE_REF.finditer(text):
         other = match.group(1)
         if other != app_id:
-            number = text.count("\n", 0, match.start()) + 1
             out.add("ACL-CROSS-APP-STATE", "high", "A01", "Accesses another app's saved state",
                     f"References /api/app-state/{other} but this app is {app_id}.",
-                    "Apps may only read and write their own state.", path=rel, line=number,
+                    "Apps may only read and write their own state.", path=rel, line=index.number(match.start()),
                     excerpt=match.group(0), key=other)
     if suffix in HTML:
-        _external_tags(rel, text, out)
+        _external_tags(rel, text, index, out)
     _vulnerable_libraries(rel, text, out)
 
 
-def _external_tags(rel: str, text: str, out: _Collector) -> None:
-    for match in EXTERNAL_TAG.finditer(text):
-        tag, before, _attr, url, after = match.groups()
-        attrs = (before + after).lower()
-        if tag.lower() == "link" and "stylesheet" not in attrs and "modulepreload" not in attrs:
+def _tags(text: str):
+    """Yield (tag name, attribute text, offset) for resource tags, in linear time.
+
+    The closing '>' is found by bisecting precomputed offsets instead of a
+    backtracking regex, and the total attribute text parsed per file is capped,
+    so hostile markup cannot stall the review.
+    """
+    closers = [i for i, char in enumerate(text) if char == ">"]
+    budget = MAX_TAG_BUDGET
+    for match in TAG_START.finditer(text):
+        position = bisect.bisect_left(closers, match.end())
+        if position == len(closers):
+            return
+        close = closers[position]
+        if close - match.end() > MAX_TAG_CHARS:
             continue
-        number = text.count("\n", 0, match.start()) + 1
-        host = re.sub(r"^(?:https?:)?//", "", url).split("/")[0].lower()
-        if url.startswith("http://") and not host.startswith(LOOPBACK_HOSTS):
-            out.add("SUPPLY-CLEARTEXT", "high", "A08", "Remote code loaded over http://",
-                    "A network attacker can replace this file in transit.", "Load it over https or vendor it.",
+        budget -= close - match.end()
+        if budget < 0:
+            raise _ScanBudgetExceeded()
+        yield match.group(1).lower(), text[match.end():close], match.start()
+
+
+class _ScanBudgetExceeded(Exception):
+    pass
+
+
+def _external_tags(rel: str, text: str, index: _Lines, out: _Collector) -> None:
+    try:
+        for tag, attrs, offset in _tags(text):
+            if tag not in {"script", "link"}:
+                continue
+            found = TAG_URL.search(attrs)
+            if not found or not re.match(r"(?i)(?:https?:)?//", found.group(2)):
+                continue
+            lowered = attrs.lower()
+            if tag == "link" and "stylesheet" not in lowered and "modulepreload" not in lowered:
+                continue
+            _external_resource(rel, tag, found.group(2), lowered, index.number(offset), out)
+    except _ScanBudgetExceeded:
+        out.add("SCAN-SKIPPED", "high", "A09", "Markup too large to review",
+                "The page has more tag markup than the review budget allows.",
+                "Split the page or vendor generated markup.", path=rel,
+                key=hashlib.sha256(text.encode("utf-8", "replace")).hexdigest())
+
+
+def _external_resource(rel: str, tag: str, url: str, attrs: str, number: int, out: _Collector) -> None:
+    host = re.sub(r"^(?:https?:)?//", "", url).split("/")[0].lower()
+    if url.startswith("http://") and not host.startswith(LOOPBACK_HOSTS):
+        out.add("SUPPLY-CLEARTEXT", "high", "A08", "Remote code loaded over http://",
+                "A network attacker can replace this file in transit.", "Load it over https or vendor it.",
+                path=rel, line=number, excerpt=url)
+    if tag == "script" and "integrity=" not in attrs:
+        out.add("SUPPLY-NO-SRI", "medium", "A08", "Remote script without Subresource Integrity",
+                f"{url} can change after review and the browser will still run it.",
+                "Vendor the file into the app, or add integrity=\"sha384-…\" crossorigin=\"anonymous\".",
+                path=rel, line=number, excerpt=url)
+    if any(host.endswith(cdn) for cdn in CDN_HOSTS):
+        path = url.split(host, 1)[1]
+        unpinned = (re.search(r"@latest\b|@next\b", path)
+                    or (host in {"cdn.jsdelivr.net", "unpkg.com", "esm.sh", "esm.run"} and not re.search(r"@\d", path))
+                    or (host == "cdn.tailwindcss.com" and not re.search(r"/\d", path)))
+        if unpinned:
+            out.add("SUPPLY-UNPINNED", "high", "A06", "Remote dependency is not pinned to a version",
+                    f"{url} resolves to whatever version is newest, so reviewed code is not what runs.",
+                    "Pin an exact version (pkg@1.2.3) and add SRI, or vendor it.",
                     path=rel, line=number, excerpt=url)
-        if tag.lower() == "script" and "integrity=" not in attrs:
-            out.add("SUPPLY-NO-SRI", "medium", "A08", "Remote script without Subresource Integrity",
-                    f"{url} can change after review and the browser will still run it.",
-                    "Vendor the file into the app, or add integrity=\"sha384-…\" crossorigin=\"anonymous\".",
-                    path=rel, line=number, excerpt=url)
-        if any(host.endswith(cdn) for cdn in CDN_HOSTS):
-            path = url.split(host, 1)[1]
-            if re.search(r"@latest\b|@next\b", path) or (
-                    host in {"cdn.jsdelivr.net", "unpkg.com", "esm.sh", "esm.run"}
-                    and not re.search(r"@\d", path)) or host == "cdn.tailwindcss.com" and not re.search(r"/\d", path):
-                out.add("SUPPLY-UNPINNED", "high", "A06", "Remote dependency is not pinned to a version",
-                        f"{url} resolves to whatever version is newest, so reviewed code is not what runs.",
-                        "Pin an exact version (pkg@1.2.3) and add SRI, or vendor it.",
-                        path=rel, line=number, excerpt=url)
 
 
 def _vulnerable_libraries(rel: str, text: str, out: _Collector) -> None:
@@ -809,10 +944,15 @@ def _contract_index(root: Path, out: _Collector) -> None:
         out.add("CONTRACT-TITLE", "low", "contract", "index.html has no <title>",
                 "The browser tab and accessibility tools show a blank name.", "Add a <title>.",
                 path="index.html")
-    for match in LOCAL_REF.finditer(index):
-        ref = match.group(1).strip()
-        if ref and not re.match(r"(?i)^(?:[a-z][a-z0-9+.-]*:|//|data:|blob:)", ref):
-            _contract_ref(root, ref, index.count("\n", 0, match.start()) + 1, out)
+    lines = _Lines(index)
+    try:
+        for _tag, attrs, offset in _tags(index):
+            found = TAG_URL.search(attrs)
+            ref = re.split(r"[#?]", found.group(2), maxsplit=1)[0].strip() if found else ""
+            if ref and not re.match(r"(?i)^(?:[a-z][a-z0-9+.-]*:|//|data:|blob:)", ref):
+                _contract_ref(root, ref, lines.number(offset), out)
+    except _ScanBudgetExceeded:
+        pass   # _external_tags reports the oversized page
 
 
 def _contract_ref(root: Path, ref: str, number: int, out: _Collector) -> None:
@@ -1068,10 +1208,11 @@ class ReviewGate:
     def from_env(cls, state_dir: Path) -> "ReviewGate":
         return cls(ReviewStore(state_dir), os.environ.get("APP_ENGINE_APP_REVIEW", "enforce"))
 
-    def admit(self, root: Path, *, profile: str = "local") -> tuple[bool, ReviewReport | None]:
+    def admit(self, root: Path, *, profile: str = "local",
+              max_age: float = 3.0) -> tuple[bool, ReviewReport | None]:
         if self.mode == "off":
             return True, None
-        report = self.store.report(root, profile=profile)
+        report = self.store.report(root, profile=profile, max_age=max_age)
         return (report.passed or self.mode == "warn"), report
 
 

@@ -14,8 +14,9 @@ APP_ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
 
 
 class StoreError(ValueError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, review: dict | None = None):
         self.code = code
+        self.review = review   # the App Review report when admission was refused
         super().__init__(message)
 
 

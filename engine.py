@@ -123,6 +123,8 @@ from app_engine.search import category_counts, search_apps
 from app_engine.speech import SpeechService, SpeechSettings, SpeechUnavailable
 from app_engine.store_bridge import StoreBridge
 from app_engine.store_routes import create_store_router
+from app_engine.app_review import ReviewGate, is_unserved
+from app_engine.review_routes import create_review_router
 from app_engine.system_probe import SystemProbe
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -158,9 +160,24 @@ _atrium_status_probe = (AtriumStatusProbe(_atrium_status_url, _outbound_tls)
 from app_engine.publisher_trust import PublisherPolicy
 _publisher_policy_file = os.environ.get('APP_ENGINE_PUBLISHER_POLICY', '').strip()
 _publisher_policy = PublisherPolicy.from_file(Path(_publisher_policy_file)) if _publisher_policy_file else PublisherPolicy()
+# App Review: the admission gate every app passes before it is served or installed.
+_review_gate = ReviewGate.from_env(STATE_DIR)
+
+
+def _review_profile(root: Path) -> str:
+    """Store-installed apps meet the store profile; local folders the local one."""
+    return "store" if Path(root).resolve().parent == STORE_APPS_DIR.resolve() else "local"
+
+
+def _review_refusal(root: Path, max_age: float = 3.0) -> str | None:
+    admitted, report = _review_gate.admit(root, profile=_review_profile(root), max_age=max_age)
+    return None if admitted or report is None else "App Review: " + report.summary()
+
+
 _store_bridge = StoreBridge(STATE_DIR, STORE_APPS_DIR, local_roots=(APPS_DIR,),
                             tls_policy=_outbound_tls,
                             publisher_policy=_publisher_policy,
+                            review_gate=_review_gate,
                             public_mode=bool(os.environ.get("APP_ENGINE_PUBLIC_ORIGIN")))
 MAX_STATE_BYTES = MAX_SAVE_BYTES
 _APP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -238,6 +255,7 @@ _app_runtime = DefaultAppEngineRuntime(
     subject=_runtime_subject,
     runtime_root=STATE_DIR / "runtime",
     authorize_backend=lambda manifest, url: _legacy_binding_authorized(str(manifest.app_id), manifest.root, url),
+    reviewer=lambda manifest, source: _review_refusal(manifest.root),
 )
 
 
@@ -453,6 +471,12 @@ def inspect_apps() -> tuple[dict[str, App], list[dict]]:
         n = _manifest.normalize(m, d.name)
         app_id = n["id"]
         if app_id in out:
+            continue
+        # Request paths re-check a folder's signature at most every 30 s; the catalog
+        # (refreshed off the event loop) and store installs review current files.
+        refusal = _review_refusal(d, max_age=30.0)
+        if refusal:
+            rejected.append({"dir": d.name, "app_id": app_id, "reason": refusal, "review": True})
             continue
         out[app_id] = App(
             id=app_id,
@@ -1120,8 +1144,8 @@ async def serve_app(app_id: str, request: Request, path: str = "") -> Response:
         return await _proxy_entry_point(app_obj, path, request)
 
     safe = Path(path) if path else Path("index.html")
-    if ".." in safe.parts or safe.is_absolute():
-        raise HTTPException(404)
+    if ".." in safe.parts or safe.is_absolute() or is_unserved(safe):
+        raise HTTPException(404)   # App Review skips these folders, so they are never served
     root = Path(app_obj.root).resolve()
     full = (root / safe).resolve()
     try:
@@ -1282,6 +1306,30 @@ app.include_router(create_store_router(
     is_launcher_host=_is_launcher_host,
     admin_capability=_admin_capability,
     available=_stores_available,
+))
+
+
+def _review_roots():
+    for root in (APPS_DIR, STORE_APPS_DIR):
+        if root.is_dir():
+            for d in sorted(root.iterdir()):
+                if d.is_dir() and not d.name.startswith(".") and (d / "app.json").is_file():
+                    yield d, _review_profile(d)
+
+
+async def _review_changed() -> None:
+    await _app_runtime.catalog.configure(_app_runtime.catalog_key,
+                                         await _app_runtime.host.sources(_app_runtime.subject))
+
+
+app.include_router(create_review_router(
+    _review_gate,
+    app_roots=_review_roots,
+    on_change=_review_changed,
+    require_owner=_require_owner,
+    require_owner_action=_require_owner_action,
+    is_launcher_host=_is_launcher_host,
+    admin_capability=_admin_capability,
 ))
 
 

@@ -324,6 +324,18 @@ action, **not** something an app can drive — those endpoints reject requests
 originating from an app iframe. Read-only `GET /api/local-ai/status` stays open
 so tutor panels can poll readiness.
 
+## App Review: every app is checked before it runs
+
+Before an app is served from a local folder or installed from a store, the
+engine reviews it: the **contract** (valid manifest, launch surface, referenced
+assets, declared permissions, complete store listing) and an **OWASP Top 10**
+mapped security scan (secrets, injection sinks, disabled TLS, unpinned or
+vulnerable remote code, native binaries, reaching another app's state or the
+owner API). Critical and high findings block the app; the owner reviews
+reports and waives intentional findings in **Security ↗** in the launcher.
+Check an app before shipping it with `app-engine-review path/to/app
+[--profile store]`. Details: [docs/app-review.md](docs/app-review.md).
+
 ## Multiplayer: tables hosted for any game
 
 app-engine runs a **room service** for every app that names a rules module:
@@ -373,6 +385,7 @@ route and falls back to its own backend proxy on hosts without it.
 | Var | Default | Meaning |
 |---|---|---|
 | `APP_ENGINE_APPS_DIR` | `./apps` | directory whose children are apps |
+| `APP_ENGINE_APP_REVIEW` | `enforce` | [App Review](docs/app-review.md) policy: `enforce` refuses apps with blocking findings, `warn` reports but serves them, `off` skips review |
 | `APP_ENGINE_STATE_DIR` | `~/.config/app-engine/app-state` | per-app state storage |
 | `APP_ENGINE_HOST` / `APP_ENGINE_PORT` | `127.0.0.1` / `8770` | bind address |
 | `APP_ENGINE_MULTIPLAYER_SERVER` | *(unset: run one per app)* | relay room commands to a shared room service instead |

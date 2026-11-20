@@ -8,13 +8,14 @@ Filesystem work is confined to :meth:`configure`, :meth:`refresh`, and
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .contracts import (
     AppCatalog,
     AppId,
+    AppManifest,
     AppSource,
     CatalogApp,
     CatalogEvent,
@@ -34,7 +35,12 @@ class ImmutableAppCatalog(AppCatalog):
     a source.  Rejected and shadowed candidates remain visible for diagnosis.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, reviewer: Callable[[AppManifest, AppSource], str | None] | None = None
+    ) -> None:
+        # ``reviewer`` is the admission gate: it returns a rejection detail for
+        # an app that must not be served (see ``app_engine.app_review``).
+        self._reviewer = reviewer
         self._snapshots: dict[CatalogKey, CatalogSnapshot] = {}
         self._sources: dict[CatalogKey, tuple[AppSource, ...]] = {}
         self._subscribers: dict[
@@ -142,9 +148,15 @@ class ImmutableAppCatalog(AppCatalog):
             if old.get(app_id) != new.get(app_id)
         )
 
-    @staticmethod
     def _scan(
+        self, sources: tuple[AppSource, ...]
+    ) -> tuple[tuple[CatalogApp, ...], tuple[CatalogRejection, ...]]:
+        return self._materialize(sources, self._reviewer)
+
+    @staticmethod
+    def _materialize(
         sources: tuple[AppSource, ...],
+        reviewer: Callable[[AppManifest, AppSource], str | None] | None = None,
     ) -> tuple[tuple[CatalogApp, ...], tuple[CatalogRejection, ...]]:
         candidates: list[tuple[int, int, CatalogApp]] = []
         rejections: list[CatalogRejection] = []
@@ -215,6 +227,19 @@ class ImmutableAppCatalog(AppCatalog):
                                 "app requires app-engine "
                                 f"{manifest.metadata.min_engine_version} or newer"
                             ),
+                            source=source,
+                        )
+                    )
+                    continue
+
+                refusal = reviewer(manifest, source) if reviewer is not None else None
+                if refusal:
+                    rejections.append(
+                        CatalogRejection(
+                            root=manifest.root,
+                            app_id=str(manifest.app_id),
+                            reason="review_failed",
+                            detail=refusal,
                             source=source,
                         )
                     )

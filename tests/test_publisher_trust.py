@@ -14,6 +14,8 @@ def test_unsigned_store_install_requires_owner_and_does_not_approve_or_execute_c
     marker = tmp_path / 'must-not-run'
     code = f'from pathlib import Path; Path({str(marker)!r}).write_text("executed")'
     manifest = {'id': 'reviewed', 'version': '1.0.0', 'label': 'Reviewed', 'icon': 'R',
+                'description': 'A fixture app whose runtime records whether it ran.',
+                'author': 'Fixture', 'categories': ['developer'],
                 'manifest_version': 2, 'default_target': 'web', 'targets': {'web': {'kind': 'web',
                 'runtime': {'driver': 'process', 'install': [{'argv': [sys.executable, '-c', code]}],
                             'start': {'argv': [sys.executable, '-c', code]}}}}}

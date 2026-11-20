@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="app-engine-admin" content="__APP_ENGINE_ADMIN_CAPABILITY__">
+<title>Security · app-engine</title>
+<style>
+:root { color-scheme:dark; font:15px system-ui,sans-serif; background:#10141c; color:#e7edf5;
+  --line:#344155; --panel:#171e2a; --well:#101722; --muted:#a8b5c7;
+  --critical:#ff6b7a; --high:#ff9b6b; --medium:#f2c94c; --low:#7cc4ff; --info:#8b98ab; --pass:#6fd39b; }
+* { box-sizing:border-box; }
+body { max-width:1180px; margin:auto; padding:32px 24px; }
+header { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:22px; flex-wrap:wrap; }
+h1 { margin:0 0 6px; font-size:30px; } h2 { font-size:20px; margin:0; } h3 { margin:0; font-size:16px; }
+p { line-height:1.5; } .muted,small { color:var(--muted); } a { color:#a3c3ff; }
+button { font:inherit; border:1px solid #40516a; border-radius:8px; padding:8px 12px; background:#27354a; color:inherit; cursor:pointer; }
+button.primary { background:#2862cf; border-color:#2862cf; } button:disabled { opacity:.5; cursor:wait; }
+button.link { background:none; border:none; padding:0; color:#a3c3ff; text-decoration:underline; }
+section { border:1px solid var(--line); background:var(--panel); border-radius:14px; padding:20px; margin-bottom:22px; }
+#message { border-radius:8px; padding:12px; background:#133425; } #message.error { background:#47252b; color:#ffd4d7; } #message:empty { display:none; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:22px; }
+.stat { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.stat b { display:block; font-size:28px; font-variant-numeric:tabular-nums; } .stat span { color:var(--muted); font-size:13px; }
+.mode { border-radius:999px; padding:4px 12px; font-size:13px; border:1px solid var(--line); }
+.mode.enforce { color:var(--pass); border-color:#2f6b4a; } .mode.warn { color:var(--medium); border-color:#6b5a2f; } .mode.off { color:var(--critical); border-color:#6b2f37; }
+.layout { display:grid; grid-template-columns:minmax(280px,380px) 1fr; gap:22px; align-items:start; }
+#apps { display:grid; gap:8px; }
+.app { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; text-align:left; width:100%;
+  background:var(--well); border:1px solid var(--line); border-radius:10px; padding:12px; }
+.app[aria-current="true"] { border-color:#5b8cff; box-shadow:0 0 0 1px #5b8cff inset; }
+.app .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .app small { display:block; }
+.score { font-variant-numeric:tabular-nums; font-weight:700; width:44px; height:44px; border-radius:50%; display:grid; place-items:center; border:3px solid; font-size:14px; }
+.score.pass { border-color:var(--pass); color:var(--pass); } .score.fail { border-color:var(--critical); color:var(--critical); }
+.pill { border-radius:999px; padding:2px 9px; font-size:12px; font-weight:600; white-space:nowrap; }
+.pill.pass { background:#173a29; color:var(--pass); } .pill.fail { background:#47252b; color:#ffd4d7; } .pill.warn { background:#3d3417; color:var(--medium); }
+.sev { border-radius:6px; padding:1px 7px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
+.sev.critical { background:#5c1f29; color:var(--critical); } .sev.high { background:#4f2a17; color:var(--high); }
+.sev.medium { background:#463a12; color:var(--medium); } .sev.low { background:#16344c; color:var(--low); } .sev.info { background:#262e3a; color:var(--info); }
+.counts { display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
+#detail-head { display:flex; justify-content:space-between; gap:14px; align-items:start; flex-wrap:wrap; margin-bottom:12px; }
+.filters { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; }
+.filters button[aria-pressed="true"] { background:#2862cf; border-color:#2862cf; }
+details.group { border-top:1px solid var(--line); padding:12px 0 4px; } details.group > summary { cursor:pointer; font-weight:600; }
+.finding { background:var(--well); border:1px solid var(--line); border-left:4px solid var(--info); border-radius:8px; padding:12px 14px; margin:10px 0; overflow-wrap:anywhere; }
+.finding.critical { border-left-color:var(--critical); } .finding.high { border-left-color:var(--high); }
+.finding.medium { border-left-color:var(--medium); } .finding.low { border-left-color:var(--low); }
+.finding.waived { opacity:.6; }
+.finding .top { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.finding .rule { font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); }
+.finding p { margin:6px 0; } .finding code, pre { font-family:ui-monospace,monospace; font-size:12.5px; }
+.finding pre { background:#0b1018; border-radius:6px; padding:8px 10px; margin:6px 0; white-space:pre-wrap; }
+.finding .fix { color:#bfe3cc; } .finding .actions { margin-top:8px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+summary h2 { display:inline; } .alert { color:#ffd4d7; }
+.blocking { color:var(--critical); font-weight:700; font-size:12px; }
+.empty { color:var(--muted); padding:24px 0; text-align:center; }
+table { width:100%; border-collapse:collapse; font-size:14px; } th,td { text-align:left; padding:6px 8px; border-top:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:500; }
+dialog { width:min(560px,calc(100vw - 32px)); background:var(--panel); color:inherit; border:1px solid #526783; border-radius:14px; padding:22px; }
+dialog::backdrop { background:#000a; } textarea { width:100%; min-height:90px; font:inherit; background:var(--well); color:inherit; border:1px solid #40516a; border-radius:8px; padding:10px; }
+.dialog-actions { display:flex; justify-content:end; gap:10px; margin-top:14px; }
+@media(max-width:820px) { body { padding:20px 16px; } .layout { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Security</h1><span class="muted">App Review: every app must pass the contract and OWASP security checks before app-engine serves it.</span></div>
+  <div><span id="mode" class="mode">…</span> <a href="/" target="_blank" rel="noopener">Open launcher ↗</a></div>
+</header>
+<p id="message" role="status" aria-live="polite"></p>
+<div class="stats" id="stats"></div>
+<div class="layout">
+  <section aria-labelledby="apps-title"><h2 id="apps-title">Apps</h2><p class="muted" id="apps-note">Blocked apps first.</p><div id="apps"></div></section>
+  <section aria-labelledby="detail-title" id="detail">
+    <div id="detail-head"><div><h2 id="detail-title">Select an app</h2><small id="detail-sub"></small></div><div id="detail-actions"></div></div>
+    <div id="detail-body"><p class="empty">Pick an app on the left to see its review.</p></div>
+  </section>
+</div>
+<section aria-labelledby="rules-title">
+  <details><summary><h2 id="rules-title" class="inline">What App Review checks</h2></summary>
+    <p class="muted">Findings rated <b>critical</b> or <b>high</b> block an app unless the owner waives that exact finding with a reason. Waivers live in the engine's state folder, never in the app, so an app cannot approve itself. Contract checks also run: valid manifest, a launch surface, referenced assets, declared permissions; store releases additionally need version, description, author and categories.</p>
+    <table><thead><tr><th>Rule</th><th>Severity</th><th>Category</th><th>Checks for</th></tr></thead><tbody id="rules"></tbody></table>
+  </details>
+</section>
+<dialog id="waive-dialog" aria-labelledby="waive-title">
+  <form method="dialog" id="waive-form">
+    <h2 id="waive-title">Waive finding</h2>
+    <p id="waive-what" class="muted"></p>
+    <label for="waive-reason">Why is this acceptable? (recorded with the waiver)</label>
+    <textarea id="waive-reason" required minlength="3" maxlength="500"></textarea>
+    <div class="dialog-actions"><button value="cancel" type="button" id="waive-cancel">Cancel</button><button class="primary" value="ok" id="waive-ok">Waive finding</button></div>
+  </form>
+</dialog>
+<script>
+const ADMIN = document.querySelector('meta[name="app-engine-admin"]').content;
+const API = '/api/app-engine/review';
+const SEVERITIES = ['critical','high','medium','low','info'];
+const $ = sel => document.querySelector(sel);
+const state = { apps: [], mode: '', selected: '', report: null, filter: 'open' };
+
+function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
+function say(text, error) { const m = $('#message'); m.textContent = text || ''; m.className = error ? 'error' : ''; }
+async function api(path, opts = {}) {
+  const init = { ...opts, headers: { ...(opts.headers || {}) } };
+  if (init.method && init.method !== 'GET') init.headers['x-app-engine-admin'] = ADMIN;
+  if (init.body && typeof init.body !== 'string') { init.body = JSON.stringify(init.body); init.headers['content-type'] = 'application/json'; }
+  const res = await window.fetch(API + path, init);
+  const value = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof value.detail === 'string' ? value.detail : (value.detail?.message || `HTTP ${res.status}`));
+  return value;
+}
+function sev(name) { return el('span', 'sev ' + name, name); }
+
+function renderStats() {
+  const apps = state.apps, failed = apps.filter(a => a.verdict === 'fail');
+  const blocked = failed.filter(a => !a.served);
+  const waived = apps.reduce((n, a) => n + (a.counts.waived || 0), 0);
+  const avg = apps.length ? Math.round(apps.reduce((n, a) => n + a.score, 0) / apps.length) : 0;
+  const host = $('#stats'); host.replaceChildren();
+  for (const [value, label] of [[apps.length, 'apps reviewed'], [apps.length - failed.length, 'passed'],
+      [state.mode === 'enforce' ? blocked.length : failed.length, state.mode === 'enforce' ? 'blocked from serving' : 'failing (not blocked)'],
+      [waived, 'waived findings'], [avg, 'average score']]) {
+    const s = el('div', 'stat'); s.append(el('b', '', String(value)), el('span', '', label)); host.append(s);
+  }
+  const mode = $('#mode'); mode.className = 'mode ' + state.mode;
+  mode.textContent = { enforce: 'Enforcing', warn: 'Warn only', off: 'Review off' }[state.mode] || state.mode;
+  mode.title = 'APP_ENGINE_APP_REVIEW=' + state.mode;
+}
+
+function renderApps() {
+  const host = $('#apps'); host.replaceChildren();
+  if (!state.apps.length) { host.append(el('p', 'empty', 'No apps found.')); return; }
+  for (const app of state.apps) {
+    const b = el('button', 'app'); b.type = 'button'; b.setAttribute('aria-current', String(app.app_id === state.selected));
+    const ring = el('span', 'score ' + app.verdict, String(app.score)); ring.title = 'Score ' + app.score + '/100';
+    const mid = el('span'); mid.append(el('span', 'name', app.label), el('small', '', `${app.app_id} · ${app.version || 'unversioned'} · ${app.profile}`));
+    const counts = el('span', 'counts');
+    for (const s of SEVERITIES.slice(0, 4)) if (app.counts[s]) counts.append(sev(s), document.createTextNode(String(app.counts[s])));
+    mid.append(counts);
+    const status = app.verdict === 'pass' ? el('span', 'pill pass', 'Pass') : (app.served ? el('span', 'pill warn', 'Fails · served') : el('span', 'pill fail', 'Blocked'));
+    b.append(ring, mid, status);
+    b.onclick = () => select(app.app_id);
+    host.append(b);
+  }
+}
+
+function findingNode(f) {
+  const box = el('article', 'finding ' + f.severity + (f.waived ? ' waived' : ''));
+  const top = el('div', 'top'); top.append(sev(f.severity), el('strong', '', f.title));
+  if (f.blocking) top.append(el('span', 'blocking', 'BLOCKING'));
+  if (f.waived) top.append(el('span', 'pill pass', 'Waived'));
+  top.append(el('span', 'rule', f.rule));
+  box.append(top);
+  if (f.path) box.append(el('p', 'muted', f.line ? `${f.path}:${f.line}` : f.path));
+  box.append(el('p', '', f.detail));
+  if (f.excerpt) box.append(el('pre', '', f.excerpt));
+  if (f.remediation) box.append(el('p', 'fix', 'Fix: ' + f.remediation));
+  if (f.waived && f.waiver_reason) box.append(el('p', 'muted', 'Waiver: ' + f.waiver_reason));
+  const actions = el('div', 'actions');
+  if (f.waived) {
+    const b = el('button', '', 'Remove waiver'); b.type = 'button';
+    b.onclick = () => act(b, () => api(`/apps/${state.selected}/waivers/${f.fingerprint}`, { method: 'DELETE' }), 'Waiver removed.');
+    actions.append(b);
+  } else if (f.waivable && (f.severity === 'critical' || f.severity === 'high')) {
+    const b = el('button', '', 'Waive…'); b.type = 'button'; b.onclick = () => waive(f); actions.append(b);
+  } else if (!f.waivable && f.blocking) {
+    actions.append(el('small', '', 'Cannot be waived: the app must be fixed.'));
+  }
+  if (actions.childNodes.length) box.append(actions);
+  return box;
+}
+
+function renderDetail() {
+  const r = state.report, body = $('#detail-body'), actions = $('#detail-actions');
+  actions.replaceChildren(); body.replaceChildren();
+  if (!r) return;
+  $('#detail-title').textContent = r.label;
+  $('#detail-sub').textContent = `${r.app_id} · ${r.version || 'unversioned'} · ${r.profile} profile · ${r.files_scanned} files · scanned ${new Date(r.scanned_at).toLocaleString()}`;
+  const verdict = r.verdict === 'pass' ? el('span', 'pill pass', `Pass · ${r.score}/100`) : el('span', 'pill fail', `${r.served ? 'Fails (served: warn mode)' : 'Blocked'} · ${r.score}/100`);
+  const rescan = el('button', 'primary', 'Rescan'); rescan.type = 'button';
+  rescan.onclick = () => act(rescan, () => api(`/apps/${r.app_id}/rescan`, { method: 'POST' }), 'Rescanned.');
+  actions.append(verdict, document.createTextNode(' '), rescan);
+  body.append(el('p', r.verdict === 'pass' ? 'muted' : 'alert', r.summary === 'passed' ? 'No blocking findings.' : r.summary));
+  const filters = el('div', 'filters');
+  const counts = { open: r.findings.filter(f => !f.waived).length, blocking: r.findings.filter(f => f.blocking).length,
+    waived: r.findings.filter(f => f.waived).length, all: r.findings.length };
+  for (const key of ['open', 'blocking', 'waived', 'all']) {
+    const b = el('button', '', `${key[0].toUpperCase() + key.slice(1)} (${counts[key]})`); b.type = 'button';
+    b.setAttribute('aria-pressed', String(state.filter === key)); b.onclick = () => { state.filter = key; renderDetail(); };
+    filters.append(b);
+  }
+  body.append(filters);
+  const shown = r.findings.filter(f => state.filter === 'all' || (state.filter === 'open' && !f.waived) ||
+    (state.filter === 'blocking' && f.blocking) || (state.filter === 'waived' && f.waived));
+  if (!shown.length) { body.append(el('p', 'empty', 'Nothing here.')); return; }
+  const groups = new Map();
+  for (const f of shown) { if (!groups.has(f.category)) groups.set(f.category, []); groups.get(f.category).push(f); }
+  const order = [...groups.entries()].sort((a, b) => worst(a[1]) - worst(b[1]) || a[0].localeCompare(b[0]));
+  for (const [category, items] of order) {
+    const d = el('details', 'group'); d.open = items.some(f => f.blocking) || order.length <= 3;
+    const s = el('summary', '', `${category} — ${items.length}`); d.append(s);
+    for (const f of items) d.append(findingNode(f));
+    body.append(d);
+  }
+}
+function worst(items) { return Math.min(...items.map(f => SEVERITIES.indexOf(f.severity))); }
+
+async function act(button, op, done) {
+  button.disabled = true;
+  try { state.report = await op(); say(done); await loadApps(); renderDetail(); }
+  catch (e) { say(e.message, true); }
+  finally { button.disabled = false; }
+}
+
+function waive(f) {
+  const dlg = $('#waive-dialog');
+  $('#waive-what').textContent = `${f.rule} — ${f.title}${f.path ? ' (' + f.path + (f.line ? ':' + f.line : '') + ')' : ''}`;
+  $('#waive-reason').value = '';
+  $('#waive-cancel').onclick = () => dlg.close();
+  $('#waive-form').onsubmit = async ev => {
+    ev.preventDefault();
+    const reason = $('#waive-reason').value.trim();
+    if (reason.length < 3) return;
+    dlg.close();
+    await act($('#waive-ok'), () => api(`/apps/${state.selected}/waivers`, { method: 'POST', body: { fingerprint: f.fingerprint, reason } }), 'Finding waived.');
+  };
+  dlg.showModal();
+}
+
+async function select(appId) {
+  state.selected = appId; state.filter = 'open'; renderApps();
+  try { state.report = await api(`/apps/${appId}`); renderDetail(); window.history.replaceState(null, '', '#' + appId); }
+  catch (e) { say(e.message, true); }
+}
+
+async function loadApps() {
+  const value = await api('');
+  state.apps = value.apps; state.mode = value.mode;
+  renderStats(); renderApps();
+}
+
+async function loadRules() {
+  const value = await api('/rules'), body = $('#rules');
+  for (const r of value.rules) {
+    const tr = el('tr'); const td = el('td'); td.append(el('code', '', r.rule));
+    const s = el('td'); s.append(sev(r.severity));
+    tr.append(td, s, el('td', '', r.category), el('td', '', r.title)); body.append(tr);
+  }
+}
+
+(async () => {
+  try {
+    await loadApps();
+    const wanted = window.location.hash.slice(1);
+    const first = state.apps.find(a => a.app_id === wanted) || state.apps[0];
+    if (first) await select(first.app_id);
+    loadRules().catch(() => {});
+  } catch (e) { say(e.message, true); }
+})();
+</script>
+</body>
+</html>

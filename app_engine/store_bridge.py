@@ -22,6 +22,7 @@ from .store_contracts import (
 )
 from .store_packages import extract_package
 from .publisher_trust import PublisherPolicy
+from .app_review import ReviewGate, review_app
 
 
 async def _finish_thread(operation: Callable[..., None], *args: object) -> None:
@@ -42,7 +43,8 @@ class StoreBridge:
     def __init__(self, state_dir: Path, apps_dir: Path, *,
                  local_roots: tuple[Path, ...] = (), client: httpx.AsyncClient | None = None,
                  tls_policy: OutboundTlsPolicy | None = None,
-                 public_mode: bool = False, publisher_policy: PublisherPolicy | None = None):
+                 public_mode: bool = False, publisher_policy: PublisherPolicy | None = None,
+                 review_gate: ReviewGate | None = None):
         self.path = Path(state_dir) / 'stores.json'
         self.apps_dir = Path(apps_dir).resolve()
         self.local_roots = tuple(Path(root).resolve() for root in local_roots)
@@ -51,6 +53,7 @@ class StoreBridge:
         self._tls_policy = tls_policy or OutboundTlsPolicy()
         self._public_mode = public_mode
         self._publisher_policy = publisher_policy or PublisherPolicy()
+        self._review_gate = review_gate
         self._mtls_clients: dict[object, httpx.AsyncClient] = {}
         self._stores: tuple[StoreConnection, ...] = self._load()
         self._previews: dict[str, InstallPreview] = {}
@@ -240,9 +243,21 @@ class StoreBridge:
             staged = Path(stage) / 'app'
             staged.mkdir()
             extract_package(body, staged, release)
+            self._review(staged, release)
             self._check_conflict(release.id)
             # rename never replaces an installed non-empty app directory.
             staged.rename(self.apps_dir / release.id)
+
+    def _review(self, staged: Path, release: Release) -> None:
+        """Run App Review on the extracted package before it can be installed."""
+        gate = self._review_gate
+        if gate is None or gate.mode == 'off':
+            return
+        report = review_app(staged, profile='store').with_waivers(gate.store.waivers(release.id))
+        if not report.passed and gate.mode == 'enforce':
+            value = report.to_dict()
+            value['root'] = ''
+            raise StoreError('review_failed', f'App Review refused {release.id} {release.version}: {report.summary()}', value)
 
     async def close(self) -> None:
         if self._owns_client and self._client is not None:

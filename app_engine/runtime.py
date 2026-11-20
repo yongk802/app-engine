@@ -228,12 +228,13 @@ class DefaultAppEngineRuntime(AppEngineRuntime):
         catalog_key: CatalogKey = CatalogKey("default"),
         providers: ProviderRegistry | None = None,
         authorize_backend=None,
+        reviewer=None,
     ) -> None:
         self.host = host
         self.subject = subject
         self.catalog_key = catalog_key
         self.providers = providers or ProviderRegistry()
-        self.catalog = ImmutableAppCatalog()
+        self.catalog = ImmutableAppCatalog(reviewer=reviewer)
         self.lifecycle = ProcessLifecycleManager(
             catalog=self.catalog,
             catalog_key=catalog_key,

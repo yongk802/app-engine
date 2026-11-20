@@ -29,7 +29,7 @@ def load(tmp_path, monkeypatch, public=False, shared_origin=False):
 def transport():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
-        archive.writestr('app.json', json.dumps({'id': 'store-hello', 'version': '1.0.0', 'label': 'Store Hello', 'icon': 'H'}))
+        archive.writestr('app.json', json.dumps({'id': 'store-hello', 'version': '1.0.0', 'label': 'Store Hello', 'icon': 'H', 'description': 'Says hello after a store install.', 'author': 'Fixture', 'categories': ['developer']}))
         archive.writestr('index.html', '<title>Installed from store</title>')
     body = buffer.getvalue()
     release = dict(id='store-hello', version='1.0.0', label='Store Hello', icon='H', description='', categories=[], author='', min_engine_version='', package_url='api/v1/packages/store-hello/1.0.0', sha256=hashlib.sha256(body).hexdigest(), size_bytes=len(body))

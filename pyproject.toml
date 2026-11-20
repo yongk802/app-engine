@@ -21,6 +21,7 @@ dependencies = [
 app-engine = "app_engine.__main__:main"
 app-engine-manifest = "app_engine.__main__:manifest_main"
 app-engine-players = "app_engine.__main__:players_main"
+app-engine-review = "app_engine.app_review:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -38,6 +39,7 @@ app_engine = [
     "knowledge/**/*.json",
     "studio/**/*",
     "store_ui/**/*",
+    "review_ui/**/*",
     "assistant_ui/*.js",
     "assistant_ui/*.css",
     "templates/**/*",

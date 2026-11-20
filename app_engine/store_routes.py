@@ -10,18 +10,24 @@ from .response_headers import nonce_page
 from .store_contracts import StoreError
 
 
+_STATUS = {'install_conflict': 409, 'release_changed': 409, 'store_unavailable': 502,
+           'store_not_found': 404, 'release_not_found': 404, 'review_failed': 422}
+
+
+def store_error(exc: StoreError) -> HTTPException:
+    """Map a store failure to its HTTP answer; an App Review refusal carries its report."""
+    detail = {'code': exc.code, 'message': str(exc)}
+    if exc.review:
+        detail['review'] = exc.review
+    return HTTPException(_STATUS.get(exc.code, 400), detail=detail)
+
+
 def create_store_router(bridge, runtime, *, require_owner, require_owner_action,
                         is_launcher_host, admin_capability, available) -> APIRouter:
     router = APIRouter(prefix='/api/app-engine', tags=['stores'])
     headers = {'Cache-Control': 'no-store'}
     limits = {'url': 2048, 'name': 200, 'store_id': 64, 'app_id': 64,
               'version': 64, 'fingerprint': 100}
-
-    def store_error(exc):
-        status = {'install_conflict': 409, 'release_changed': 409,
-                  'store_unavailable': 502, 'store_not_found': 404,
-                  'release_not_found': 404}.get(exc.code, 400)
-        return HTTPException(status, detail={'code': exc.code, 'message': str(exc)})
 
     def require_read(request):
         require_owner(request)

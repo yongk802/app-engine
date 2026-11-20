@@ -455,11 +455,11 @@ Node.js 18+ for multiplayer, clone your apps collection (Night City Table
 needs its card catalog imported on the server), and run the engine under a
 service manager with the variables above.
 
-A worked example for a Hostinger VPS, using the nginx already on the box and
-per-name certificates, is in [docs/deploy-hostinger.md](docs/deploy-hostinger.md).
+A worked example for a rented VPS, using the nginx already on the box and
+per-name certificates, is in [docs/deploy-vps.md](docs/deploy-vps.md).
 
 **Only one host name and no wildcard?** A hosting provider's name such as
-`srv1242099.hstgr.cloud` has no wildcard, so `<id>.<host>` cannot resolve. Set
+`srv123.provider.example` has no wildcard, so `<id>.<host>` cannot resolve. Set
 `APP_ENGINE_APP_ORIGINS=same` together with `APP_ENGINE_TRUST_SAME_ORIGIN_APPS=1`
 permits trusted apps under `https://<host>/apps/<id>/`. Every app then has the
 launcher's browser privileges, including owner access; use this only for apps
@@ -467,7 +467,7 @@ you trust at that level. Without the explicit trust setting, startup is refused.
 Caddy needs only that one certificate:
 
 ```caddyfile
-srv1242099.hstgr.cloud {
+srv123.provider.example {
     reverse_proxy 127.0.0.1:8770
 }
 ```

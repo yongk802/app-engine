@@ -142,6 +142,51 @@ def test_unsafe_archives_never_publish(tmp_path, entry):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize('entry', ['.runtime/helper', '.RUNTIME/helper', 'private/token', 'web/__pycache__/x.pyc',
+                                   '.git/config', '.venv/bin/python', 'venv/x', '.hg/x', '.svn/x', '.ruff_cache/x'])
+def test_packages_with_unreviewed_folders_never_publish(tmp_path, entry):
+    """App Review skips these folders, so a package must not carry them: a
+    prebuilt binary under .runtime/ would otherwise install unreviewed."""
+    async def run():
+        from app_engine.store_bridge import StoreError
+        service, client = bridge(tmp_path, body=package(extra={entry: b'\xcf\xfa\xed\xfe native'}))
+        store = await service.add_store('http://one.test')
+        plan = await service.preview(store.id, 'hello', '1.0.0')
+        with pytest.raises(StoreError) as exc:
+            await service.install(plan.fingerprint)
+        assert exc.value.code == 'invalid_package'
+        assert not (tmp_path / 'installed' / 'hello').exists()
+        await client.aclose()
+    asyncio.run(run())
+
+
+def test_every_folder_app_review_skips_is_refused_at_extraction(tmp_path):
+    from app_engine.app_review import SKIPPED_DIRS
+    from app_engine.store_contracts import Release, StoreError
+    from app_engine.store_packages import extract_package
+    for name in sorted(SKIPPED_DIRS):
+        body = package(extra={f'nested/{name}/file': 'x'})
+        destination = tmp_path / name
+        destination.mkdir()
+        with pytest.raises(StoreError) as exc:
+            extract_package(body, destination, Release.parse(release(body)))
+        assert exc.value.code == 'invalid_package', name
+
+
+def test_similarly_named_folders_still_install(tmp_path):
+    async def run():
+        service, client = bridge(tmp_path, body=package(extra={'runtime/app.js': 'ok', '.runtime-notes.txt': 'ok',
+                                                               'privacy/index.html': 'ok'}))
+        store = await service.add_store('http://one.test')
+        plan = await service.preview(store.id, 'hello', '1.0.0')
+        await service.install(plan.fingerprint)
+        installed = tmp_path / 'installed' / 'hello'
+        assert (installed / 'runtime' / 'app.js').read_text() == 'ok'
+        assert (installed / 'privacy' / 'index.html').is_file()
+        await client.aclose()
+    asyncio.run(run())
+
+
 def test_changed_release_invalidates_preview(tmp_path):
     async def run():
         from app_engine.store_bridge import StoreError

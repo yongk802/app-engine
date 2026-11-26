@@ -27,7 +27,11 @@ reported at medium severity.
 
 Not reviewed, and therefore **never served** by the engine: `.git`, `.hg`,
 `.svn`, `.venv`, `venv`, `__pycache__`, tool caches, the engine's `.runtime`
-output and the owner-only `private/` folder (case-insensitive).
+output and the owner-only `private/` folder (case-insensitive). A store package
+that contains any of them is refused at extraction (`invalid_package`), so an
+installed release holds nothing that skipped review; only the app's own install
+and start steps may create them on the host (for example a native helper built
+from reviewed source into `.runtime/`). `app-store publish` omits them.
 
 ## Where the gate runs
 

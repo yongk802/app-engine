@@ -60,6 +60,24 @@ def test_secrets_block_and_are_redacted(tmp_path):
     assert key not in json.dumps(report.to_dict())
 
 
+def test_private_key_bodies_block_but_header_markers_do_not(tmp_path):
+    header = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
+    body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB"
+    shipped = {
+        "id_ed25519": f"{header}\n{body}\n-----END OPENSSH PRIVATE KEY-----\n",
+        "key.js": f"const k = '{header}\\n{body}';\n",
+        "key.py": f'KEY = """{header}\n{body}\n"""\n',
+        "split.js": f"const k = '{header}' +\n  '{body}';\n",
+    }
+    for name, content in shipped.items():
+        app = make_app(tmp_path / name.replace(".", "-"), files={name: content})
+        assert "SEC-PRIVATE-KEY" in rules(review_app(app), blocking_only=True), name
+    parser = make_app(tmp_path / "parser", files={"keyd.swift": (
+        f'guard text.contains("{header}"), let decoded = Data(base64Encoded: body) else {{ throw Failure() }}\n'
+        f'if line.startsWith("{header}") && ok {{ parse(line) }}\n')})
+    assert "SEC-PRIVATE-KEY" not in rules(review_app(parser))
+
+
 def test_code_sinks_flag_code_but_not_prose_or_strings(tmp_path):
     app = make_app(tmp_path, files={
         "main.js": "const run = s => eval(s);\nconst f = new Function('a', 'return a');\n",

@@ -223,7 +223,11 @@ RULES: tuple[Rule, ...] = (
     Rule("SEC-PRIVATE-KEY", "critical", "A02", "Private key in app files",
          "A PEM private key ships with the app; anyone who can load the app can read it.",
          "Remove the key, rotate it, and load keys from the host's configuration instead.",
-         _r(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----"), secret=True),
+         # A key's body follows its header on the next line (or after an escaped
+         # newline inside a string); a header followed by more code on the same
+         # line is a format marker a key parser compares against, not a key.
+         _r(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----"
+            r"(?=[ \t]*$|[ \t]*(?:\\r)?\\n|[ \t]*[\"'`]?[ \t]*[+,;)]?[ \t]*$)"), secret=True),
     Rule("SEC-AWS-KEY", "critical", "A07", "AWS access key",
          "An AWS access key id is embedded in the app.", "Remove and rotate the key.",
          _r(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), secret=True),

@@ -280,7 +280,9 @@ RULES: tuple[Rule, ...] = (
     Rule("INJ-HTML-SINK", "medium", "A03", "Raw HTML sink with dynamic content",
          "innerHTML/outerHTML/insertAdjacentHTML with a non-literal value can execute injected markup.",
          "Use textContent, or sanitize with a vetted sanitizer before assignment.",
-         _r(r"""(?:\.(?:inner|outer)HTML\s*\+?=\s*(?![\s]{0,20}(?:["'][^"'`$]{0,500}["']\s{0,5};?\s{0,20}$|``\s{0,5};?\s{0,20}$|$))|\.insertAdjacentHTML\s*\(\s*["'][a-z]{1,20}["']\s*,\s*(?!["'][^"']{0,500}["']\s*\)))"""),
+         _r(r"""(?:\.(?:inner|outer)HTML\s*\+?=\s*"""
+            r"""(?![\s]{0,20}(?:["'][^"'`$]{0,500}["']\s{0,5};?\s{0,20}$|``\s{0,5};?\s{0,20}$|$))"""
+            r"""|\.insertAdjacentHTML\s*\(\s*["'][a-z]{1,20}["']\s*,\s*(?!["'][^"']{0,500}["']\s*\)))"""),
          suffixes=JS),
     Rule("INJ-JS-URL", "medium", "A03", "javascript: URL",
          "javascript: URLs execute code on navigation and bypass event-handler CSP.",

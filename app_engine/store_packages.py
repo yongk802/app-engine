@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import zipfile
 
+from .app_review import is_unserved
 from .manifest import is_compatible, parse_manifest
 from .store_contracts import Release, StoreError, safe_path
 
@@ -23,13 +24,17 @@ def extract_package(body: bytes, destination: Path, release: Release) -> None:
                 raise ValueError('Archive exceeds installation limits.')
             seen: set[str] = set()
             for item in members:
+                # A folder App Review skips (VCS, venvs, caches, .runtime,
+                # private/) would land unreviewed yet still be executable by
+                # the app's runtime steps. Store packages never carry them
+                # (app-store publish omits them), so one that does is refused.
                 name = item.filename.rstrip('/') if item.is_dir() else item.filename
                 mode = item.external_attr >> 16
                 if (item.orig_filename != item.filename or
                         not safe_path(name) or name.casefold() in seen or
                         item.flag_bits & 1 or stat.S_ISLNK(mode) or
                         (stat.S_IFMT(mode) not in {0, stat.S_IFREG, stat.S_IFDIR}) or
-                        any(part.casefold() in {'.git', '.venv'} for part in name.split('/'))):
+                        is_unserved(name)):
                     raise ValueError('Archive contains an unsafe or duplicate entry.')
                 seen.add(name.casefold())
                 target = destination.joinpath(*name.split('/'))

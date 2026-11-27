@@ -654,6 +654,16 @@ def _scan_totals(scan: _FileScan, profile: str) -> None:
                      "Remove unused assets or move them under private/.")
 
 
+_WHOLE_FILE_WAIVER_RULES = frozenset({
+    "ACL-MESSAGE-NO-ORIGIN", "FS-SENSITIVE-FILE", "FS-NATIVE-CODE", "SCAN-SKIPPED",
+})
+_MARKUP_BUDGET_TITLE = "Markup too large to review"
+
+
+def _decoded_text_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+
 def _file_digest(full: Path) -> str:
     digest = hashlib.sha256()
     try:
@@ -835,7 +845,7 @@ def _scan_text(rel: str, text: str, suffix: str, app_id: str, out: _Collector,
         out.add("ACL-MESSAGE-NO-ORIGIN", "medium", "A01", "message handler never checks the sender",
                 "A window 'message' listener without an origin/source check accepts commands from any page.",
                 "Compare event.origin (or event.source) against the expected sender first.", path=rel,
-                key=hashlib.sha256(text.encode("utf-8", "replace")).hexdigest())
+                key=_decoded_text_digest(text))
     for match in APP_STATE_REF.finditer(text):
         other = match.group(1)
         if other != app_id:
@@ -887,10 +897,10 @@ def _external_tags(rel: str, text: str, index: _Lines, out: _Collector) -> None:
                 continue
             _external_resource(rel, tag, found.group(2), lowered, index.number(offset), out)
     except _ScanBudgetExceeded:
-        out.add("SCAN-SKIPPED", "high", "A09", "Markup too large to review",
+        out.add("SCAN-SKIPPED", "high", "A09", _MARKUP_BUDGET_TITLE,
                 "The page has more tag markup than the review budget allows.",
                 "Split the page or vendor generated markup.", path=rel,
-                key=hashlib.sha256(text.encode("utf-8", "replace")).hexdigest())
+                key=_decoded_text_digest(text))
 
 
 def _external_resource(rel: str, tag: str, url: str, attrs: str, number: int, out: _Collector) -> None:
@@ -1124,6 +1134,54 @@ def _npm_package(root: Path, rel: str, text: str, out: _Collector) -> None:
 
 # ── Owner waivers and cached reports ─────────────────────────────────────────
 
+def _cached_waivers_current(root: Path, report: ReviewReport, waivers: dict[str, str]) -> bool:
+    """Verify only the content-bound findings that would receive a waiver."""
+    wanted: dict[str, list[Finding]] = {}
+    for item in report.findings:
+        if item.waivable and item.fingerprint in waivers and item.rule in _WHOLE_FILE_WAIVER_RULES:
+            wanted.setdefault(item.path, []).append(item)
+    if not wanted:
+        return True
+
+    try:
+        for relative, full, info in _walk(root):
+            findings = wanted.pop(relative, ())
+            if not findings:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                # The sensitive-directory rule binds to the directory finding itself.
+                if not all(item.rule == "FS-SENSITIVE-FILE"
+                           and item.title.endswith(" credential directory") for item in findings):
+                    return False
+            elif not stat.S_ISREG(info.st_mode) or not _file_waivers_current(full, info, findings):
+                return False
+            if not wanted:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _file_waivers_current(full: Path, info: os.stat_result, findings: list[Finding]) -> bool:
+    digests: dict[bool, str] = {}
+    for item in findings:
+        decoded_text = item.rule == "ACL-MESSAGE-NO-ORIGIN" or (
+            item.rule == "SCAN-SKIPPED" and item.title == _MARKUP_BUDGET_TITLE
+        )
+        if decoded_text not in digests:
+            if decoded_text:
+                if info.st_size > MAX_TEXT_FILE_BYTES:
+                    return False
+                digests[decoded_text] = _decoded_text_digest(full.read_text("utf-8", errors="replace"))
+            else:
+                digests[decoded_text] = _file_digest(full)
+                if digests[decoded_text] == "unreadable":
+                    return False
+        if _fingerprint(item.rule, item.path, digests[decoded_text]) != item.fingerprint:
+            return False
+    return True
+
+
 class ReviewStore:
     """Cached reports and owner waivers under ``<state>/app-review``."""
 
@@ -1177,29 +1235,31 @@ class ReviewStore:
         with self._lock:
             now = time.monotonic()
             cached = self._memo.get(memo_key)
-            if cached and not force and now - cached[0] < max_age:
-                report = cached[2]
-            else:
+            recent = cached is not None and not force and now - cached[0] < max_age
+            report = cached[2] if recent else None
+            if not recent and not force:
                 signature = tree_signature(root)
-                report = None
-                if not force:
-                    if cached and cached[1] == signature:
-                        report = cached[2]
-                    else:
-                        try:
-                            stored = ReviewReport.from_dict(json.loads(self._cache_path(root, profile).read_text("utf-8")))
-                            if stored.signature == signature and stored.review_version == REVIEW_VERSION:
-                                report = stored
-                        except (OSError, ValueError, TypeError, KeyError):
-                            report = None
-                if report is None:
-                    report = review_app(root, profile=profile)
+                if cached and cached[1] == signature:
+                    report = cached[2]
+                else:
                     try:
-                        self._write(self._cache_path(root, profile), report.to_dict())
-                    except OSError:
-                        pass
+                        stored = ReviewReport.from_dict(json.loads(self._cache_path(root, profile).read_text("utf-8")))
+                        if stored.signature == signature and stored.review_version == REVIEW_VERSION:
+                            report = stored
+                    except (OSError, ValueError, TypeError, KeyError):
+                        report = None
+            waivers = self.waivers(report.app_id) if report else {}
+            if report is None or not _cached_waivers_current(root, report, waivers):
+                report = review_app(root, profile=profile)
+                waivers = self.waivers(report.app_id)
+                try:
+                    self._write(self._cache_path(root, profile), report.to_dict())
+                except OSError:
+                    pass
+                recent = False
+            if not recent:
                 self._memo[memo_key] = (now, report.signature, report)
-        return report.with_waivers(self.waivers(report.app_id))
+            return report.with_waivers(waivers)
 
 
 class ReviewGate:

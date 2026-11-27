@@ -1243,6 +1243,8 @@ class ReviewStore:
         self.dir = Path(state_dir) / "app-review"
         self._lock = threading.RLock()
         self._memo: dict[tuple[str, str], tuple[float, str, ReviewReport]] = {}
+        # Separate from the scan lock: queueing must never wait for a scan.
+        self._queue_lock = threading.Lock()
         self._queue: dict[tuple[str, str], None] = {}
         self._scanning: tuple[str, str] | None = None
         self._worker: threading.Thread | None = None
@@ -1348,7 +1350,7 @@ class ReviewStore:
 
     def refresh_later(self, items: Iterable[tuple[Path, str]]) -> None:
         """Rescan these (root, profile) pairs on one background thread."""
-        with self._lock:
+        with self._queue_lock:
             for root, profile in items:
                 self._queue.setdefault((str(Path(root).resolve()), profile), None)
             if self._queue and (self._worker is None or not self._worker.is_alive()):
@@ -1361,7 +1363,7 @@ class ReviewStore:
 
     def _drain(self) -> None:
         while True:
-            with self._lock:
+            with self._queue_lock:
                 if not self._queue:
                     self._scanning = None
                     return

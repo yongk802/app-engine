@@ -11,7 +11,7 @@ import re
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .app_review import BLOCKING, OWASP, RULES, ReviewGate, ReviewReport
+from .app_review import BLOCKING, OWASP, RULES, ReviewGate, ReviewReport, app_id_of
 from .response_headers import nonce_page
 
 _APP_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -39,22 +39,42 @@ class _ReviewApi:
         if not self.is_launcher_host(request):
             raise HTTPException(403, "launcher origin required")
 
-    def reports(self, force_id: str = "") -> dict[str, ReviewReport]:
-        out: dict[str, ReviewReport] = {}
+    def snapshot(self) -> tuple[dict[str, tuple[ReviewReport, bool]], int]:
+        """Every known report without scanning, plus how many scans are pending.
+
+        Apps whose report is stale or missing are rescanned in the background,
+        so the first visit after a restart or an engine update answers at once.
+        """
+        store = self.gate.store
+        out: dict[str, tuple[ReviewReport, bool]] = {}
+        claimed: set[str] = set()
+        stale: list[tuple[Path, str]] = []
         for root, profile in self.app_roots():
-            report = self.gate.store.report(root, profile=profile)
-            if report.app_id == force_id:
-                report = self.gate.store.report(root, profile=profile, force=True)
-            out.setdefault(report.app_id, report)
-        return out
+            report, current = store.peek(root, profile=profile)
+            app_id = report.app_id if report is not None else app_id_of(root)
+            if app_id in claimed:
+                continue
+            claimed.add(app_id)
+            if not current:
+                stale.append((root, profile))
+            if report is not None:
+                out[app_id] = (report, current)
+        if stale:
+            store.refresh_later(stale)
+        return out, store.pending()
 
     def one(self, app_id: str, force: bool = False) -> ReviewReport:
+        """Scan only the requested app, the first root (by priority) that serves it."""
         if not _APP_ID.match(app_id):
             raise HTTPException(404)
-        found = self.reports(app_id if force else "").get(app_id)
-        if found is None:
-            raise HTTPException(404, "no such app")
-        return found
+        for root, profile in self.app_roots():
+            report, _ = self.gate.store.peek(root, profile=profile)
+            if (report.app_id if report is not None else app_id_of(root)) != app_id:
+                continue
+            report = self.gate.store.report(root, profile=profile, force=force)
+            if report.app_id == app_id:
+                return report
+        raise HTTPException(404, "no such app")
 
     def served(self, report: ReviewReport) -> bool:
         return report.passed or self.gate.mode != "enforce"
@@ -67,13 +87,15 @@ class _ReviewApi:
     async def overview(self, request: Request):
         self.require_read(request)
         apps = []
-        for report in (await asyncio.to_thread(self.reports)).values():
+        reports, pending = await asyncio.to_thread(self.snapshot)
+        for report, current in reports.values():
             value = report.to_dict()
             value.pop("findings")
             value["served"] = self.served(report)
+            value["stale"] = not current
             apps.append(value)
         apps.sort(key=lambda item: (item["verdict"] == "pass", item["score"], item["app_id"]))
-        return JSONResponse({"mode": self.gate.mode, "apps": apps}, headers=_HEADERS)
+        return JSONResponse({"mode": self.gate.mode, "apps": apps, "scanning": pending}, headers=_HEADERS)
 
     async def rules(self, request: Request):
         self.require_read(request)

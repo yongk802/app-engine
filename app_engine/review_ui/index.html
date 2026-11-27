@@ -32,6 +32,7 @@ section { border:1px solid var(--line); background:var(--panel); border-radius:1
 .app .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .app small { display:block; }
 .score { font-variant-numeric:tabular-nums; font-weight:700; width:44px; height:44px; border-radius:50%; display:grid; place-items:center; border:3px solid; font-size:14px; }
 .score.pass { border-color:var(--pass); color:var(--pass); } .score.fail { border-color:var(--critical); color:var(--critical); }
+.score.stale { opacity:.45; }
 .pill { border-radius:999px; padding:2px 9px; font-size:12px; font-weight:600; white-space:nowrap; }
 .pill.pass { background:#173a29; color:var(--pass); } .pill.fail { background:#47252b; color:#ffd4d7; } .pill.warn { background:#3d3417; color:var(--medium); }
 .sev { border-radius:6px; padding:1px 7px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
@@ -129,10 +130,11 @@ function renderStats() {
 
 function renderApps() {
   const host = $('#apps'); host.replaceChildren();
-  if (!state.apps.length) { host.append(el('p', 'empty', 'No apps found.')); return; }
+  if (!state.apps.length) { host.append(el('p', 'empty', state.scanning ? 'Reviewing apps…' : 'No apps found.')); return; }
   for (const app of state.apps) {
     const b = el('button', 'app'); b.type = 'button'; b.setAttribute('aria-current', String(app.app_id === state.selected));
-    const ring = el('span', 'score ' + app.verdict, String(app.score)); ring.title = 'Score ' + app.score + '/100';
+    const ring = el('span', 'score ' + app.verdict + (app.stale ? ' stale' : ''), String(app.score));
+    ring.title = 'Score ' + app.score + '/100' + (app.stale ? ' (rescanning)' : '');
     const mid = el('span'); mid.append(el('span', 'name', app.label), el('small', '', `${app.app_id} · ${app.version || 'unversioned'} · ${app.profile}`));
     const counts = el('span', 'counts');
     for (const s of SEVERITIES.slice(0, 4)) if (app.counts[s]) counts.append(sev(s), document.createTextNode(String(app.counts[s])));
@@ -233,10 +235,23 @@ async function select(appId) {
   catch (e) { say(e.message, true); }
 }
 
+// Cached reports show at once; stale or missing ones rescan on the server
+// in the background, so poll until it reports nothing left to scan.
+let refreshTimer = 0;
 async function loadApps() {
   const value = await api('');
-  state.apps = value.apps; state.mode = value.mode;
+  state.apps = value.apps; state.mode = value.mode; state.scanning = value.scanning || 0;
   renderStats(); renderApps();
+  const scanning = state.scanning;
+  $('#apps-note').textContent = 'Blocked apps first.' + (scanning ? ` Scanning ${scanning} app${scanning === 1 ? '' : 's'}…` : '');
+  window.clearTimeout(refreshTimer);
+  if (scanning) refreshTimer = window.setTimeout(() => loadApps().catch(e => say(e.message, true)), 2000);
+  if (!state.selected && state.apps.length) {
+    // Wait for the app named in the URL while it is still being scanned.
+    const wanted = window.location.hash.slice(1);
+    const first = state.apps.find(a => a.app_id === wanted) || (wanted && scanning ? null : state.apps[0]);
+    if (first) await select(first.app_id);
+  }
 }
 
 async function loadRules() {
@@ -251,9 +266,6 @@ async function loadRules() {
 (async () => {
   try {
     await loadApps();
-    const wanted = window.location.hash.slice(1);
-    const first = state.apps.find(a => a.app_id === wanted) || state.apps[0];
-    if (first) await select(first.app_id);
     loadRules().catch(() => {});
   } catch (e) { say(e.message, true); }
 })();

@@ -25,7 +25,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -35,6 +37,8 @@ import sys
 import tempfile
 import threading
 import time
+import tokenize
+from collections.abc import Iterable
 
 from . import __version__
 from .manifest import parse_manifest
@@ -479,6 +483,53 @@ def _in_string(line: str, index: int) -> bool:
     return bool(re.search(r"<(?:code|pre|p|li|td)\b[^>]{0,200}>[^<]{0,2000}$", line[max(0, index - 2500):index]))
 
 
+# Python prose: ``#`` comments and bare string statements (docstrings) never
+# run, so code rules skip them. Exotic line breaks would desynchronise the
+# tokenizer's line numbers from ``str.splitlines``; such files get no mask.
+_PY_PROSE_LIMIT = 2 * 2**20
+_EXOTIC_BREAK = re.compile("\r(?!\n)|[\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+_STRING_PREFIX = re.compile(r"^([A-Za-z]*)[\"']")
+
+
+def _python_prose(text: str) -> dict[int, list[tuple[int, int]]]:
+    """Column spans of comments and docstrings by 1-based line number."""
+    if len(text) > _PY_PROSE_LIMIT or _EXOTIC_BREAK.search(text):
+        return {}
+    spans: dict[int, list[tuple[int, int]]] = {}
+
+    def add(start: tuple[int, int], end: tuple[int, int]) -> None:
+        for number in range(start[0], end[0] + 1):
+            spans.setdefault(number, []).append((start[1] if number == start[0] else 0,
+                                                 end[1] if number == end[0] else sys.maxsize))
+
+    trivia = {tokenize.NL, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING}
+    at_statement, candidate = True, None
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type == tokenize.COMMENT:
+                add(token.start, token.end)
+            elif token.type in trivia:
+                continue
+            elif token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
+                if candidate is not None:
+                    add(*candidate)
+                at_statement, candidate = True, None
+            elif token.type == tokenize.STRING and at_statement:
+                prefix = _STRING_PREFIX.match(token.string)
+                # An f-string statement still evaluates its expressions.
+                candidate = None if prefix is None or "f" in prefix.group(1).lower() else (token.start, token.end)
+                at_statement = False
+            else:
+                at_statement, candidate = False, None
+    except (tokenize.TokenError, SyntaxError):
+        return {}
+    return spans
+
+
+def _in_prose(spans: dict[int, list[tuple[int, int]]], number: int, column: int) -> bool:
+    return any(start <= column < end for start, end in spans.get(number, ()))
+
+
 def _is_minified(path: str, text: str) -> bool:
     if re.search(r"(?i)\.min\.(?:js|mjs|css)$|(?:^|/)(?:vendor|vendors|node_modules|lib|libs|third[_-]?party|dist)/", path):
         return True
@@ -819,6 +870,7 @@ def _scan_text(rel: str, text: str, suffix: str, app_id: str, out: _Collector,
     number of matches per rule.
     """
     lines = text.splitlines()
+    prose = _python_prose(text) if suffix in PY else {}
     for rule in RULES:
         if rule.suffixes and suffix not in rule.suffixes:
             continue
@@ -831,6 +883,8 @@ def _scan_text(rel: str, text: str, suffix: str, app_id: str, out: _Collector,
                 if seen > MAX_FINDINGS_PER_RULE:
                     break
                 if rule.code_only and len(line) <= 2000 and _in_string(line, match.start()):
+                    continue
+                if not rule.secret and _in_prose(prose, number, match.start()):
                     continue
                 secret_text = match.group(match.lastindex or 0)
                 excerpt = _redact(secret_text) if rule.secret else _excerpt(line, match.start(), match.end())
@@ -1189,6 +1243,9 @@ class ReviewStore:
         self.dir = Path(state_dir) / "app-review"
         self._lock = threading.RLock()
         self._memo: dict[tuple[str, str], tuple[float, str, ReviewReport]] = {}
+        self._queue: dict[tuple[str, str], None] = {}
+        self._scanning: tuple[str, str] | None = None
+        self._worker: threading.Thread | None = None
 
     def _write(self, path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1260,6 +1317,66 @@ class ReviewStore:
             if not recent:
                 self._memo[memo_key] = (now, report.signature, report)
             return report.with_waivers(waivers)
+
+
+    def peek(self, root: Path, *, profile: str = "local") -> tuple[ReviewReport | None, bool]:
+        """The newest known report and whether it is current, without scanning.
+
+        Lock-free so an overview stays responsive while a scan holds the lock:
+        a stale report (files or scanner changed) is still returned, marked so.
+        """
+        root = Path(root).resolve()
+        cached = self._memo.get((str(root), profile))
+        signature = tree_signature(root)
+        report = cached[2] if cached else None
+        current = cached is not None and cached[1] == signature
+        if not current:
+            try:
+                stored = ReviewReport.from_dict(json.loads(self._cache_path(root, profile).read_text("utf-8")))
+            except (OSError, ValueError, TypeError, KeyError):
+                stored = None
+            if stored is not None:
+                current = stored.signature == signature and stored.review_version == REVIEW_VERSION
+                report = stored if current or report is None else report
+                if current:
+                    self._memo[(str(root), profile)] = (time.monotonic(), signature, stored)
+        if report is None:
+            return None, False
+        waivers = self.waivers(report.app_id)
+        current = current and _cached_waivers_current(root, report, waivers)
+        return report.with_waivers(waivers), current
+
+    def refresh_later(self, items: Iterable[tuple[Path, str]]) -> None:
+        """Rescan these (root, profile) pairs on one background thread."""
+        with self._lock:
+            for root, profile in items:
+                self._queue.setdefault((str(Path(root).resolve()), profile), None)
+            if self._queue and (self._worker is None or not self._worker.is_alive()):
+                self._worker = threading.Thread(target=self._drain, name="app-review-refresh", daemon=True)
+                self._worker.start()
+
+    def pending(self) -> int:
+        """Background scans queued or running."""
+        return len(self._queue) + (self._scanning is not None)
+
+    def _drain(self) -> None:
+        while True:
+            with self._lock:
+                if not self._queue:
+                    self._scanning = None
+                    return
+                key = next(iter(self._queue))
+                del self._queue[key]
+                self._scanning = key
+            try:
+                self.report(Path(key[0]), profile=key[1], max_age=0)
+            except Exception:  # noqa: BLE001 - one unreadable app must not stop the rest
+                logging.getLogger(__name__).warning("App Review: background scan of %s failed", key[0], exc_info=True)
+
+
+def app_id_of(root: Path) -> str:
+    """The id an app's report will carry, read cheaply from its manifest."""
+    return str(_read_raw(Path(root)).get("id") or Path(root).name)
 
 
 class ReviewGate:

@@ -91,6 +91,93 @@ def test_code_sinks_flag_code_but_not_prose_or_strings(tmp_path):
     assert not report.passed
 
 
+PROSE_SERVER = '''"""Loopback client.
+
+Never pass verify=False to requests here.
+"""
+import os
+import requests
+
+
+def fetch(url):
+    """Docstring: os.system(cmd) is banned."""
+    # verify=False would disable checks; os.system(cmd) too
+    return requests.get(url, verify=False)
+
+
+def other(cmd):
+    f"{os.system(cmd)}"
+    # FAKE_KEY
+'''.replace("FAKE_KEY", "AKIA" + "Q" * 16)
+
+
+def test_python_comments_and_docstrings_are_prose(tmp_path):
+    report = review_app(make_app(tmp_path, files={"server.py": PROSE_SERVER}))
+    found = {(f.rule, f.line) for f in report.findings if f.path == "server.py"}
+    # Docstrings (lines 1-4, 10) and the comment (11) are prose; the real call
+    # (12), the f-string statement (16) and a key in a comment (17) are not.
+    assert ("TLS-VERIFY-OFF", 12) in found
+    assert ("INJ-SHELL", 16) in found
+    assert ("SEC-AWS-KEY", 17) in found
+    assert not any(line in {1, 2, 3, 4, 10, 11} for _, line in found)
+
+
+def test_python_prose_mask_falls_back_to_scanning_everything(tmp_path):
+    from app_engine.app_review import _python_prose
+    assert _python_prose('x = 1\n\x0c"""verify=False"""\n') == {}       # exotic break: no mask
+    report = review_app(make_app(tmp_path, files={"bad.py": "def f(:\n    '''verify=False'''\n"}))
+    assert "TLS-VERIFY-OFF" in rules(report)                              # untokenizable: no mask
+
+
+def test_store_peek_never_scans_and_refreshes_in_background(tmp_path):
+    app = make_app(tmp_path / "apps", files={"main.js": "eval(code);\n"})
+    store = ReviewStore(tmp_path / "state")
+    assert store.peek(app) == (None, False)                 # nothing known yet, nothing scanned
+    store.refresh_later([(app, "local")])
+    store._worker.join(30)
+    assert store.pending() == 0
+    report, current = store.peek(app)
+    assert current and not report.passed
+    (app / "main.js").write_text("document.body.textContent = 'fixed';\n")
+    os.utime(app / "main.js", ns=(1, 1))
+    report, current = store.peek(app)                       # stale, served as-is
+    assert not current and not report.passed
+    store.refresh_later([(app, "local")])
+    store._worker.join(30)
+    report, current = store.peek(app)
+    assert current and report.passed
+
+
+def test_review_overview_answers_from_cache_and_scans_in_background(tmp_path):
+    from fastapi import FastAPI
+    from app_engine.review_routes import create_review_router
+
+    apps = tmp_path / "apps"
+    failing = make_app(apps, "failing", files={"main.js": "eval(code);\n"})
+    make_app(apps, "clean")
+    store = ReviewStore(tmp_path / "state")
+    store.report(failing)                                   # one report cached, one never scanned
+
+    async def changed():
+        return None
+
+    app = FastAPI()
+    app.include_router(create_review_router(
+        ReviewGate(store, "warn"), app_roots=lambda: [(p, "local") for p in sorted(apps.iterdir())],
+        on_change=changed, require_owner=lambda _r: None, require_owner_action=lambda _r: None,
+        is_launcher_host=lambda _r: True, admin_capability=""))
+    client = TestClient(app)
+    first = client.get("/api/app-engine/review").json()
+    assert [a["app_id"] for a in first["apps"]] == ["failing"] and not first["apps"][0]["stale"]
+    assert first["scanning"] >= 1
+    store._worker.join(30)
+    second = client.get("/api/app-engine/review").json()
+    assert second["scanning"] == 0 and {a["app_id"] for a in second["apps"]} == {"failing", "clean"}
+    # The detail route scans only the app asked for.
+    assert client.get("/api/app-engine/review/apps/clean").json()["verdict"] == "pass"
+    assert client.get("/api/app-engine/review/apps/missing").status_code == 404
+
+
 def test_server_side_tests_never_block_but_served_test_code_does(tmp_path):
     report = review_app(make_app(tmp_path, files={"tests/test_tool.py": "eval(source)\n"}))
     finding = next(f for f in report.findings if f.rule == "INJ-PY-EVAL")

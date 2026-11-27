@@ -130,7 +130,7 @@ function renderStats() {
 
 function renderApps() {
   const host = $('#apps'); host.replaceChildren();
-  if (!state.apps.length) { host.append(el('p', 'empty', 'No apps found.')); return; }
+  if (!state.apps.length) { host.append(el('p', 'empty', state.scanning ? 'Reviewing apps…' : 'No apps found.')); return; }
   for (const app of state.apps) {
     const b = el('button', 'app'); b.type = 'button'; b.setAttribute('aria-current', String(app.app_id === state.selected));
     const ring = el('span', 'score ' + app.verdict + (app.stale ? ' stale' : ''), String(app.score));
@@ -240,12 +240,18 @@ async function select(appId) {
 let refreshTimer = 0;
 async function loadApps() {
   const value = await api('');
-  state.apps = value.apps; state.mode = value.mode;
+  state.apps = value.apps; state.mode = value.mode; state.scanning = value.scanning || 0;
   renderStats(); renderApps();
-  const scanning = value.scanning || 0;
+  const scanning = state.scanning;
   $('#apps-note').textContent = 'Blocked apps first.' + (scanning ? ` Scanning ${scanning} app${scanning === 1 ? '' : 's'}…` : '');
   window.clearTimeout(refreshTimer);
   if (scanning) refreshTimer = window.setTimeout(() => loadApps().catch(e => say(e.message, true)), 2000);
+  if (!state.selected && state.apps.length) {
+    // Wait for the app named in the URL while it is still being scanned.
+    const wanted = window.location.hash.slice(1);
+    const first = state.apps.find(a => a.app_id === wanted) || (wanted && scanning ? null : state.apps[0]);
+    if (first) await select(first.app_id);
+  }
 }
 
 async function loadRules() {
@@ -260,9 +266,6 @@ async function loadRules() {
 (async () => {
   try {
     await loadApps();
-    const wanted = window.location.hash.slice(1);
-    const first = state.apps.find(a => a.app_id === wanted) || state.apps[0];
-    if (first) await select(first.app_id);
     loadRules().catch(() => {});
   } catch (e) { say(e.message, true); }
 })();

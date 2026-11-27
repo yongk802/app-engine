@@ -148,6 +148,32 @@ def test_store_peek_never_scans_and_refreshes_in_background(tmp_path):
     assert current and report.passed
 
 
+def test_queueing_a_refresh_never_waits_for_a_running_scan(tmp_path):
+    import threading
+    import time
+
+    app = make_app(tmp_path / "apps")
+    store = ReviewStore(tmp_path / "state")
+    scanning, release = threading.Event(), threading.Event()
+
+    def long_scan():
+        with store._lock:                                   # what report() holds while it scans
+            scanning.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=long_scan)
+    holder.start()
+    scanning.wait(5)
+    started = time.monotonic()
+    store.refresh_later([(app, "local")])
+    assert store.peek(app) == (None, False) and store.pending() == 1
+    assert time.monotonic() - started < 1
+    release.set()
+    holder.join(5)
+    store._worker.join(30)
+    assert store.peek(app)[1]
+
+
 def test_review_overview_answers_from_cache_and_scans_in_background(tmp_path):
     from fastapi import FastAPI
     from app_engine.review_routes import create_review_router

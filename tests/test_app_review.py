@@ -140,6 +140,98 @@ def test_whole_file_waivers_are_bound_to_content(tmp_path):
     assert not store.report(app, max_age=0).passed
 
 
+@pytest.mark.parametrize("cache", ["memory", "signature", "disk"])
+def test_cached_whole_file_waiver_revalidates_current_bytes(tmp_path, monkeypatch, cache):
+    from app_engine import app_review
+
+    app = make_app(tmp_path / "apps", files={"deploy.pem": b"-one-"})
+    store = ReviewStore(tmp_path / "state")
+    gate = ReviewGate(store)
+    _, original = gate.admit(app)
+    finding = next(item for item in original.blocking if item.path == "deploy.pem")
+    store.set_waiver("clean", finding.fingerprint, "reviewed build")
+
+    walk = app_review._walk
+    stats = {relative: info for relative, _, info in walk(app)}
+
+    def coarse_timestamps(root):
+        for relative, path, info in walk(root):
+            yield relative, path, stats.get(relative, info)
+
+    monkeypatch.setattr(app_review, "_walk", coarse_timestamps)
+    if cache == "disk":
+        gate = ReviewGate(ReviewStore(tmp_path / "state"))
+    max_age = 30 if cache == "memory" else 0
+
+    def unexpected_scan(*args, **kwargs):
+        pytest.fail("matching whole-file waiver should reuse the cached scan")
+
+    with monkeypatch.context() as cached:
+        cached.setattr(app_review, "review_app", unexpected_scan)
+        assert gate.admit(app, max_age=max_age)[0]
+
+    (app / "deploy.pem").write_bytes(b"-two-")
+    if cache == "disk":
+        gate = ReviewGate(ReviewStore(tmp_path / "state"))
+    allowed, current = gate.admit(app, max_age=max_age)
+    assert not allowed
+    assert current.signature == original.signature
+    assert any(item.path == "deploy.pem" and item.fingerprint != finding.fingerprint
+               for item in current.blocking)
+
+
+def test_cached_markup_waiver_uses_scanner_text_normalization(tmp_path, monkeypatch):
+    from app_engine import app_review
+
+    markup = b"<!doctype html>\r\n<title>Fixture</title>\r\n" + b"<script src='asset.js'></script>\r\n" * 10
+    app = make_app(tmp_path / "apps", files={"index.html": markup})
+    monkeypatch.setattr(app_review, "MAX_TAG_BUDGET", 32)
+    store = ReviewStore(tmp_path / "state")
+    report = store.report(app)
+    finding = next(item for item in report.blocking if item.title == "Markup too large to review")
+    store.set_waiver("clean", finding.fingerprint, "reviewed markup")
+
+    def unexpected_scan(*args, **kwargs):
+        pytest.fail("unchanged markup should reuse the cached scan")
+
+    with monkeypatch.context() as fresh:
+        fresh.setattr(app_review, "review_app", unexpected_scan)
+        assert store.report(app).passed
+    (app / "index.html").write_bytes(markup.replace(b"Fixture", b"Changed"))
+    assert not store.report(app).passed
+
+
+def test_cached_message_handler_waiver_uses_current_decoded_text(tmp_path):
+    original = b"window.onmessage = () => console.log('before');\r\n"
+    app = make_app(tmp_path / "apps", files={"main.js": original})
+    store = ReviewStore(tmp_path / "state")
+    rule = "ACL-MESSAGE-NO-ORIGIN"
+    finding = next(item for item in store.report(app).findings if item.rule == rule)
+    store.set_waiver("clean", finding.fingerprint, "reviewed message fixture")
+    assert next(item for item in store.report(app).findings if item.rule == rule).waived
+
+    (app / "main.js").write_bytes(original.replace(b"before", b"after!"))
+    current = next(item for item in store.report(app).findings if item.rule == rule)
+    assert current.fingerprint != finding.fingerprint and not current.waived
+
+
+def test_cached_review_without_matching_whole_file_waiver_uses_fast_path(tmp_path, monkeypatch):
+    from app_engine import app_review
+
+    app = make_app(tmp_path / "apps", files={"deploy.pem": b"-one-"})
+    state = tmp_path / "state"
+    store = ReviewStore(state)
+    assert not ReviewGate(store).admit(app)[0]
+
+    def unexpected_digest(*args, **kwargs):
+        pytest.fail("no applicable waiver requires content validation")
+
+    monkeypatch.setattr(app_review, "_file_digest", unexpected_digest)
+    assert not ReviewGate(store).admit(app, max_age=30)[0]
+    store.set_waiver("clean", "unrelated-fingerprint", "unrelated fixture")
+    assert not ReviewGate(ReviewStore(state)).admit(app, max_age=0)[0]
+
+
 def test_skipped_folders_are_exactly_the_unserved_ones():
     from app_engine.app_review import is_unserved
     assert is_unserved("private/token.txt") and is_unserved("Private/x") and is_unserved(".venv/a.py")
